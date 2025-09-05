@@ -36,18 +36,20 @@ async def ws_room(
     settings = get_settings()
     token = websocket.query_params.get("token")
     allow_unauth = settings.APP_ENV in {"dev", "test"}
+    # Принимаем соединение сразу, чтобы при ошибке аутентификации клиент получил корректный close frame,
+    # иначе браузер покажет 1006 (abnormal closure)
+    await websocket.accept()
     if token:
         try:
             tokens.decode_token(token)
         except Exception:
             if not allow_unauth:
-                await websocket.close(code=4401)
+                await websocket.close(code=4401, reason="Unauthorized")
                 return
     else:
         if not allow_unauth:
-            await websocket.close(code=4401)
+            await websocket.close(code=4401, reason="Unauthorized")
             return
-    await websocket.accept()
     # Поддержка человекочитаемых room_id: если не UUID, маппим в стабильный UUID v5
     try:
         room_uuid = UUID(room_id)

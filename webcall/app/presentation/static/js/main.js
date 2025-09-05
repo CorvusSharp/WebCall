@@ -55,7 +55,19 @@ function ensureToken(){
     location.href = `/auth?${params.toString()}`;
     return false;
   }
-  try{ userId = JSON.parse(atob(token.split('.')[1])).sub; }catch{}
+  try{
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    userId = payload.sub;
+    const now = Math.floor(Date.now()/1000);
+    if (payload.exp && now >= payload.exp) {
+      // токен просрочен — очистим и отправим на авторизацию
+      localStorage.removeItem('wc_token');
+      const params = new URLSearchParams({ redirect: '/call' });
+      if (els.roomId.value) params.set('room', els.roomId.value);
+      location.href = `/auth?${params.toString()}`;
+      return false;
+    }
+  }catch{}
   return true;
 }
 
@@ -178,7 +190,20 @@ async function connect(){
   ws.onclose = (ev) => {
     log(`WS closed (${ev?.code||''} ${ev?.reason||''})`);
     setConnectedState(false);
-    
+    // Обработка неавторизованного доступа — не пытаемся переподключаться
+    if (ev?.code === 4401) {
+      log('Сессия авторизации недействительна. Переходим на страницу входа...');
+      // остановим авто-переподключение
+      isManuallyDisconnected = true;
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
+      }
+      const params = new URLSearchParams({ redirect: location.pathname + location.search });
+      location.href = `/auth?${params.toString()}`;
+      return;
+    }
+
     // Автопереподключение, если не было ручного отключения
     if (!isManuallyDisconnected && !reconnectTimeout) {
       log('Попытка переподключения через 2 секунды...');
