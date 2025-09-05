@@ -145,6 +145,19 @@ async function connect(){
   ws.onopen = async () => {
     log('WS connected');
     setConnectedState(true);
+    
+    // ГЛОБАЛЬНАЯ АКТИВАЦИЯ АУДИО КОНТЕКСТА
+    try {
+      const globalAudioCtx = new AudioContext();
+      if (globalAudioCtx.state === 'suspended') {
+        await globalAudioCtx.resume();
+        log('🎧 Глобальный аудио контекст активирован');
+      }
+      // Закрываем сразу, главное - активировать
+      setTimeout(() => { try { globalAudioCtx.close(); } catch {} }, 100);
+    } catch(e) {
+      log(`⚠️ Не удалось активировать глобальный аудио контекст: ${e}`);
+    }
 
     rtc = new WebRTCManager({
       localVideo: els.localVideo,
@@ -363,10 +376,44 @@ function renderPresence(members){
           log(`❌ Нет аудио от ${peer.name || peer.id.slice(0,8)}`);
         }
         
+        // КРИТИЧНО: Настраиваем воспроизведение аудио
+        video.muted = false;
+        video.volume = 1.0;
+        video.autoplay = true;
+        video.playsInline = true;
+        
+        // Устанавливаем аудио устройство вывода, если доступно
+        if (typeof video.setSinkId === 'function' && rtc?.getOutputDeviceId()){
+          try {
+            await video.setSinkId(rtc.getOutputDeviceId());
+            log(`🔊 Аудио устройство установлено для ${peer.name || peer.id.slice(0,8)}`);
+          } catch(e) {
+            log(`⚠️ Не удалось установить аудио устройство: ${e}`);
+          }
+        }
+        
         try{ 
           await video.play(); 
           gate.style.display='none';
           log(`▶️ Поток запущен от ${peer.name || peer.id.slice(0,8)} (аудио: ${hasAudio ? 'да' : 'нет'})`);
+          
+          // Принудительно "разбудим" аудио контекст
+          if (hasAudio) {
+            const tempAudioCtx = new AudioContext();
+            const source = tempAudioCtx.createMediaStreamSource(stream);
+            const gain = tempAudioCtx.createGain();
+            gain.gain.value = 1.0;
+            source.connect(gain);
+            gain.connect(tempAudioCtx.destination);
+            
+            // Закрываем временный контекст через секунду
+            setTimeout(() => {
+              try { tempAudioCtx.close(); } catch {}
+            }, 1000);
+            
+            log(`🎧 Аудио контекст активирован для ${peer.name || peer.id.slice(0,8)}`);
+          }
+          
         } catch(e){ 
           gate.style.display='block';
           log(`❌ Ошибка воспроизведения от ${peer.name || peer.id.slice(0,8)}: ${e}`);
@@ -394,8 +441,42 @@ function renderPresence(members){
     });
     vol.addEventListener('input', ()=>{ video.volume = parseFloat(vol.value || '1'); });
     gate.addEventListener('click', async ()=>{
-      try{ await video.play(); gate.style.display='none'; }
-      catch(e){ log(`play failed: ${e?.name||e}`); }
+      try{ 
+        // Принудительно запускаем аудио
+        video.muted = false;
+        video.volume = 1.0;
+        await video.play(); 
+        gate.style.display='none'; 
+        
+        // Дополнительно активируем аудио контекст
+        if (video.srcObject && video.srcObject.getAudioTracks().length > 0) {
+          try {
+            const audioCtx = new AudioContext();
+            if (audioCtx.state === 'suspended') {
+              await audioCtx.resume();
+            }
+            const source = audioCtx.createMediaStreamSource(video.srcObject);
+            const gain = audioCtx.createGain();
+            gain.gain.value = 1.0;
+            source.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            log(`🎧 Аудио принудительно активировано для ${peer.name || peer.id.slice(0,8)}`);
+            
+            // Закрываем контекст через 2 секунды
+            setTimeout(() => {
+              try { audioCtx.close(); } catch {}
+            }, 2000);
+          } catch(audioErr) {
+            log(`⚠️ Ошибка активации аудио контекста: ${audioErr}`);
+          }
+        }
+        
+        log(`✅ Принудительно запущен поток от ${peer.name || peer.id.slice(0,8)}`);
+      }
+      catch(e){ 
+        log(`❌ Принудительный запуск не удался для ${peer.name || peer.id.slice(0,8)}: ${e?.name||e}`); 
+      }
     });
 
     grid.appendChild(node);
