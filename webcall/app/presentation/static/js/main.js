@@ -334,24 +334,30 @@ function renderPresence(members){
     node.dataset.peer = peer.id;
     node.querySelector('.name').textContent = peer.name || peer.id.slice(0,8);
 
-    const video = node.querySelector('video');
+  const video = node.querySelector('video');
+  const audioEl = node.querySelector('audio.peer-audio');
     const meterBar = node.querySelector('.meter>span');
     const muteBtn = node.querySelector('.mute');
     const vol = node.querySelector('.volume');
 
-    // Принудительная настройка для автоматического воспроизведения
-    video.muted = false;
-    video.volume = 1.0;
+    // Настройки авто-воспроизведения: основной звук выводим через <audio>
+    video.muted = true; // видео оставляем без звука
     video.autoplay = true;
     video.playsInline = true;
-
-    if (typeof video.setSinkId === 'function' && rtc?.getOutputDeviceId()){
-      video.setSinkId(rtc.getOutputDeviceId()).catch(e=> log(`setSinkId: ${e}`));
+    if (audioEl) {
+      audioEl.autoplay = true;
+      audioEl.muted = false;
+      audioEl.volume = 1.0;
+      if (typeof audioEl.setSinkId === 'function' && rtc?.getOutputDeviceId()){
+        audioEl.setSinkId(rtc.getOutputDeviceId()).catch(e=> log(`setSinkId: ${e}`));
+      }
     }
 
     attachPeerMedia(peer.id, {
       onTrack: async (stream)=>{
+        // присвоим и видео, и аудио
         video.srcObject = stream;
+        if (audioEl) audioEl.srcObject = stream;
         node.querySelector('.avatar').style.display='none';
 
         const hasAudio = stream.getAudioTracks().length > 0;
@@ -363,9 +369,12 @@ function renderPresence(members){
 
         // Принудительное воспроизведение аудио без кнопок
         try{
-          // Убираем muted для гарантированного воспроизведения аудио
-          video.muted = false;
-          await video.play();
+          // Запускаем воспроизведение через <audio>, видео может оставаться muted
+          if (audioEl) {
+            await audioEl.play();
+          } else {
+            await video.play();
+          }
           log(`▶️ Поток автоматически запущен от ${peer.name || peer.id.slice(0,8)} (аудио=${hasAudio})`);
         }catch(e){
           // Если autoplay заблокирован, пробуем несколько раз
@@ -375,8 +384,12 @@ function renderPresence(members){
           const retryPlay = async () => {
             for(let i = 0; i < 5; i++) {
               try {
-                video.muted = false; // Убираем muted
-                await video.play();
+                if (audioEl) {
+                  await audioEl.play();
+                } else {
+                  video.muted = false;
+                  await video.play();
+                }
                 log(`✅ Воспроизведение успешно после попытки ${i+1}`);
                 return;
               } catch (err) {
@@ -401,10 +414,11 @@ function renderPresence(members){
     });
 
     muteBtn.addEventListener('click', ()=>{
-      video.muted = !video.muted;
-      muteBtn.textContent = video.muted ? '🔊 Unmute' : '🔇 Mute';
+      const target = audioEl || video;
+      target.muted = !target.muted;
+      muteBtn.textContent = target.muted ? '🔊 Unmute' : '🔇 Mute';
     });
-    vol.addEventListener('input', ()=>{ video.volume = parseFloat(vol.value || '1'); });
+    vol.addEventListener('input', ()=>{ (audioEl || video).volume = parseFloat(vol.value || '1'); });
 
     grid.appendChild(node);
 
