@@ -102,18 +102,21 @@ export class WebRTCManager {
       ignoreOffer: false,
       polite: this._isPolite(this.userId, peerId),
       iceFailTimer: null,
+      audioTransceiver: null,
     };
 
-    // Добавляем все локальные аудио-треки напрямую
-    if (this.localStream) {
-      for (const track of this.localStream.getAudioTracks()) {
-        try {
-          pc.addTrack(track, this.localStream);
-          this._log(`✅ Added audio track (${track.id}) for ${peerId.slice(0,8)}`);
-        } catch(e) {
-          this._log(`❌ addTrack(audio) → ${peerId.slice(0,8)}: ${e}`);
-        }
+    // Создаём аудио-транссивер для симметричного приёма/передачи
+    try {
+      state.audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+      this._log(`Added audio transceiver for ${peerId.slice(0,8)} with direction: sendrecv`);
+      // Если уже есть локальный микрофон — подменим трек отправителя
+      const at = this.localStream?.getAudioTracks?.()[0];
+      if (at) {
+        await state.audioTransceiver.sender.replaceTrack(at);
+        this._log(`✅ Replaced audio track for ${peerId.slice(0,8)}`);
       }
+    } catch (e) {
+      this._log(`transceiver(audio)[${peerId.slice(0,8)}]: ${e?.name||e}`);
     }
 
     pc.addEventListener("icecandidate", (e)=>{
@@ -124,7 +127,7 @@ export class WebRTCManager {
       }
     });
 
-    pc.addEventListener("track", (e)=>{
+  pc.addEventListener("track", (e)=>{
       this._log(`Получен трек от ${peerId.slice(0,8)}: ${e.track.kind} (enabled: ${e.track.enabled})`);
       if (e.track && !state.stream.getTracks().some(t => t.id === e.track.id)) {
         state.stream.addTrack(e.track);
@@ -133,7 +136,11 @@ export class WebRTCManager {
       e.track.addEventListener('unmute', ()=> this._log(`(remote:${peerId.slice(0,8)}) ${e.track.kind} unmuted`));
       e.track.addEventListener('ended', ()=> this._log(`(remote:${peerId.slice(0,8)}) ${e.track.kind} ended`));
 
-      if (state.handlers?.onTrack) state.handlers.onTrack(state.stream);
+      if (state.handlers?.onTrack) {
+        try {
+          state.handlers.onTrack(state.stream);
+        } catch {}
+      }
       if (e.track?.kind === 'audio') this._setupPeerLevel(peerId, state);
     });
 
@@ -356,17 +363,16 @@ async handleSignal(msg, mediaBinder){
       if (!audioTrack) return;
 
       this._log('Обновляю треки для всех пиров...');
-      for (const [peerId, peer] of this.peers) {
-          const sender = peer.pc.getSenders().find(s => s.track?.kind === 'audio');
-          if (sender) {
-              try {
-                  await sender.replaceTrack(audioTrack);
-                  this._log(`✅ Обновлен аудио-трек для ${peerId.slice(0,8)}`);
-              } catch (e) {
-                  this._log(`❌ Ошибка обновления трека для ${peerId.slice(0,8)}: ${e}`);
-              }
-          }
+    for (const [peerId, peer] of this.peers) {
+      const sender = (peer.audioTransceiver?.sender) || peer.pc.getSenders().find(s => s.track?.kind === 'audio');
+      if (!sender) continue;
+      try {
+        await sender.replaceTrack(audioTrack);
+        this._log(`✅ Обновлен аудио-трек для ${peerId.slice(0,8)}`);
+      } catch (e) {
+        this._log(`❌ Ошибка обновления трека для ${peerId.slice(0,8)}: ${e}`);
       }
+    }
   }
 
   _setupPeerLevel(peerId, state){

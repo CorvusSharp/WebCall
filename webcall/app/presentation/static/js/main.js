@@ -16,6 +16,8 @@ let isManuallyDisconnected = false;
 let pingTimer = null;
 let isReconnecting = false;
 let selected = { mic: null, cam: null, spk: null };
+let audioUnlocked = false;
+let globalAudioCtx = null;
 
 const els = {
   roomId: document.getElementById('roomId'),
@@ -262,7 +264,15 @@ function bindPeerMedia(peerId){
       video.srcObject = stream;
       if (audio) {
         audio.srcObject = stream;
-        audio.play().catch(()=>{});
+        audio.muted = false;
+        audio.volume = 1.0;
+        // Try to play and log failures for diagnostics
+        audio.play().catch((e)=>{
+          log(`audio.play() failed for ${peerId.slice(0,6)}: ${e?.name||e}`);
+          // try unlock once
+          unlockAudioPlayback();
+          setTimeout(()=> audio.play().catch(()=>{}), 250);
+        });
       }
     },
     onLevel: (value) => {
@@ -273,6 +283,30 @@ function bindPeerMedia(peerId){
       if (audio && audio.setSinkId) audio.setSinkId(deviceId).catch(e=>log(`sinkAudio(${peerId.slice(0,6)}): ${e.name}`));
     }
   });
+}
+
+// Try to unlock browser audio autoplay policies
+function unlockAudioPlayback(){
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  try{
+    // Create/resume a global AudioContext to satisfy iOS/Safari/Chrome policies
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx){
+      if (!globalAudioCtx) globalAudioCtx = new Ctx();
+      if (globalAudioCtx.state === 'suspended') globalAudioCtx.resume().catch(()=>{});
+      // Play a tiny silent buffer
+      const buffer = globalAudioCtx.createBuffer(1, 1, 22050);
+      const source = globalAudioCtx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(globalAudioCtx.destination);
+      try{ source.start(0); }catch{}
+    }
+    // Attempt to play any existing <audio> elements
+    document.querySelectorAll('audio').forEach(a=>{
+      try{ a.muted = false; a.volume = 1.0; a.play().catch(()=>{}); }catch{}
+    });
+  }catch{}
 }
 
 function leave(){
@@ -289,7 +323,7 @@ function leave(){
 
 // ===== UI
 function setupUI(){
-  bind(els.btnConnect, 'click', connect);
+  bind(els.btnConnect, 'click', ()=>{ unlockAudioPlayback(); connect(); });
   bind(els.btnLeave, 'click', leave);
   bind(els.btnCopyLink, 'click', ()=>{
     const url = new URL(location.href);
@@ -321,6 +355,11 @@ function setupUI(){
     const isDark = document.body.classList.toggle('dark');
     localStorage.setItem('theme', isDark ? 'dark' : 'light');
   });
+
+  // Fallback global unlock on any user gesture (first one only)
+  const gestureUnlock = ()=>{ unlockAudioPlayback(); document.removeEventListener('click', gestureUnlock); document.removeEventListener('touchstart', gestureUnlock); };
+  document.addEventListener('click', gestureUnlock, { once: true, capture: true });
+  document.addEventListener('touchstart', gestureUnlock, { once: true, capture: true });
 
   // Restore theme
   if (localStorage.getItem('theme') === 'dark') document.body.classList.add('dark');
