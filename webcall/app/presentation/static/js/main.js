@@ -24,6 +24,7 @@ const els = {
   btnToggleCam: document.getElementById('btnToggleCam'),
   localVideo: document.getElementById('localVideo'),
   remoteVideo: document.getElementById('remoteVideo'),
+  peersGrid: document.getElementById('peersGrid'),
   remoteMute: document.getElementById('remoteMute'),
   remoteVolume: document.getElementById('remoteVolume'),
   btnToggleTheme: document.getElementById('btnToggleTheme'),
@@ -76,23 +77,19 @@ async function connect(){
     setConnectedState(true);
     rtc = new WebRTCManager({
       localVideo: els.localVideo,
-      remoteVideo: els.remoteVideo,
+      remoteVideo: null, // мультипир — не используем единый remoteVideo
       outputDeviceId,
       onLog: log,
-      onConnected: ()=>log('P2P connected'),
-      onDisconnected: ()=>log('P2P disconnected'),
-      onRemoteAudioLevel: (lvl)=>{
-        const pct = Math.min(1, Math.max(0, lvl)) * 100;
-        const bar = document.querySelector('#remoteLevel>span');
-        if (bar) bar.style.width = `${pct}%`;
-      }
     });
     if (!userId){
       // dev/test: временный случайный id (для работы без логина)
       userId = crypto.randomUUID();
     }
     try {
-      await rtc.start(ws, userId);
+      // мультипир: только инициализация локального PC состояния, без немедленного оффера
+      await rtc.init(ws, userId);
+      // сообщаем о входе для presence
+      ws.send(JSON.stringify({ type: 'join', fromUserId: userId }));
     } catch (e) {
       log(`Ошибка старта WebRTC: ${e?.name || e}`);
     }
@@ -100,10 +97,12 @@ async function connect(){
   ws.onmessage = async (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === 'signal') {
-      await rtc?.handleSignal(msg);
+      await rtc?.handleSignal(msg, attachPeerMedia);
     } else if (msg.type === 'chat') {
       const who = msg.authorName || msg.authorId || 'system';
       appendChat(els.chat, who, msg.content || msg.echo || '');
+    } else if (msg.type === 'presence') {
+      renderPresence(msg.members || []);
     }
   };
   ws.onclose = () => { log('WS closed'); setConnectedState(false); };
@@ -150,6 +149,51 @@ function restoreFromUrl(){
 
 function toggleTheme(){
   document.documentElement.classList.toggle('light');
+}
+
+// Presence rendering and media hookups
+function renderPresence(members){
+  if (!els.peersGrid) return;
+  const my = userId;
+  const others = members.filter(x=>x!==my);
+  const grid = els.peersGrid;
+  const existing = new Set(Array.from(grid.querySelectorAll('.peer-tile')).map(n=>n.dataset.peer));
+  // Remove tiles of peers no longer present
+  for (const peer of existing){
+    if (!others.includes(peer)) grid.querySelector(`.peer-tile[data-peer="${peer}"]`)?.remove();
+  }
+  // Add tiles for new peers
+  const tpl = document.getElementById('tpl-peer-tile');
+  for (const peer of others){
+    if (grid.querySelector(`.peer-tile[data-peer="${peer}"]`)) continue;
+    const node = tpl.content.firstElementChild.cloneNode(true);
+    node.dataset.peer = peer;
+    node.querySelector('.name').textContent = peer.slice(0,8);
+    const v = node.querySelector('video');
+    const bar = node.querySelector('.level-bar>span');
+    const volume = node.querySelector('.volume');
+    const muteBtn = node.querySelector('.mute');
+    // Attach media when first track arrives
+    attachPeerMedia(peer, {
+      onTrack: (stream)=>{ v.srcObject = stream; node.querySelector('.avatar').style.display='none'; },
+      onLevel: (lvl)=>{ if (bar) bar.style.width = `${Math.min(1,Math.max(0,lvl))*100}%`; }
+    });
+    // Local mute/volume controls
+    muteBtn.addEventListener('click', ()=>{ if (v) v.muted = !v.muted; muteBtn.textContent = v.muted? 'Unmute':'Mute'; });
+    volume.addEventListener('input', ()=>{ if (v) v.volume = parseFloat(volume.value||'1'); });
+    grid.appendChild(node);
+
+    // Детерминированное правило: инициатор — у кого id строкой меньше
+    if (my && peer && my < peer) {
+      rtc?.startOffer?.(peer);
+    }
+  }
+}
+
+// Provide hook to WebRTC manager to connect per-peer media events
+function attachPeerMedia(peerId, handlers){
+  // Manager will call this when it has media for peer
+  rtc?.bindPeerMedia?.(peerId, handlers);
 }
 
 // Events

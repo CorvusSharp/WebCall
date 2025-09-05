@@ -78,11 +78,11 @@
         </div>
 
         <div class="card video-card">
-          <div class="video-wrap">
-            <video id="remoteVideo" autoplay playsinline></video>
+          <div class="video-grid" id="peersGrid" aria-live="polite">
+            <!-- динамические плитки участников появятся здесь -->
           </div>
           <div class="controls">
-            <span class="muted">Удалённое видео</span>
+            <span class="muted">Участники комнаты</span>
           </div>
         </div>
 
@@ -104,6 +104,23 @@
 
     <template id="tpl-log-line">
       <div class="log-line"><span class="time"></span><span class="msg"></span></div>
+    </template>
+
+    <template id="tpl-peer-tile">
+      <div class="peer-tile" data-peer="">
+        <div class="media">
+          <video autoplay playsinline></video>
+          <div class="avatar" aria-hidden>👤</div>
+        </div>
+        <div class="hud">
+          <div class="name">Participant</div>
+          <div class="level-bar"><span></span></div>
+          <div class="row">
+            <button class="btn xs mute">Mute</button>
+            <input class="volume" type="range" min="0" max="1" step="0.01" value="1" />
+          </div>
+        </div>
+      </div>
     </template>
 
     <script type="module" src="/static/js/main.js"></script>
