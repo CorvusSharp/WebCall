@@ -231,6 +231,8 @@ async function connect(){
     else if (msg.type === 'chat'){
       // определяем ID отправителя (Redis может присылать authorId)
       const senderId = msg.fromUserId || msg.authorId;
+      // избегаем дублирования: своё уже добавлено локально
+      if (senderId && senderId === getStableConnId()) return;
       const who = msg.authorName || (senderId ? (latestUserNames[senderId] || senderId.slice(0,6)) : 'unknown');
       appendChat(els.chat, who, msg.content);
     }
@@ -272,7 +274,7 @@ function bindPeerMedia(peerId){
   name.textContent = latestUserNames[peerId] || `user-${peerId.slice(0,6)}`;
 
   // включаем безопасное авто-воспроизведение
-  if (video) { video.playsInline = true; video.autoplay = true; }
+  if (video) { video.playsInline = true; video.autoplay = true; video.muted = true; }
   if (audio) { audio.autoplay = true; }
 
   rtc.bindPeerMedia(peerId, {
