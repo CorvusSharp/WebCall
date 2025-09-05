@@ -29,12 +29,12 @@
               <span>ID комнаты</span>
               <input type="text" id="roomId" value="main" />
             </label>
-            <div class="row">
+            <div class="col">
               <button id="btnConnect" class="btn primary">Войти</button>
               <button id="btnLeave" class="btn danger">Выйти</button>
               <button id="btnCopyLink" class="btn">Копия ссылки</button>
             </div>
-            <div class="row">
+            <div class="col">
               <button id="btnToggleMic" class="btn">Выкл.микро</button>
               <button id="btnToggleCam" class="btn">Вкл.камеру</button>
               <button id="btnDiag" class="btn ghost">Диагностика</button>
@@ -55,9 +55,16 @@
                 <select id="spkSel" class="sel" title="Динамики"></select>
               </label>
             </div>
-          <!-- Список участников комнаты -->
-          <div id="membersList" class="members-list"></div>
           <div id="stats" class="logs"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="card video-card" id="localCard" style="display:none">
+          <h2>Вы</h2>
+          <div class="video-wrap">
+            <video id="localVideo" muted playsinline></video>
+          </div>
         </div>
       </section>
 
@@ -67,23 +74,18 @@
         </div>
       </section>
 
-      <section class="panel grid-3">
-        <div class="card video-card" id="localCard" style="display:none">
-          <h2>Вы</h2>
-          <div class="video-wrap">
-            <video id="localVideo" muted playsinline></video>
-          </div>
+      <section class="card panel">
+        <h2>Чат</h2>
+        <div id="chat" class="chat-box"></div>
+        <div class="chat-input">
+          <input type="text" id="chatInput" placeholder="Сообщение..." />
+          <button id="btnSend" class="btn">»</button>
         </div>
+      </section>
 
-        <div class="card chat-card">
-          <h2>Чат</h2>
-          <div id="chat" class="chat-box"></div>
-          <div class="chat-input">
-            <input type="text" id="chatInput" placeholder="Сообщение..." />
-            <button id="btnSend" class="btn">»</button>
-          </div>
-        </div>
-
+      <section class="card panel">
+        <h2>Участники</h2>
+        <div id="membersList" class="members-list"></div>
       </section>
 
       <section class="card panel">
