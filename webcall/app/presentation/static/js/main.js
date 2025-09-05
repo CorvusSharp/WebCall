@@ -1,6 +1,6 @@
 // main.js — вход (исправлено: логируем адрес WS, кнопка диагностики, стабильные presence/инициация)
 import { buildWs } from './api.js';
-import { sendChat, isWsOpen, sendPing } from './signal.js';
+import { sendChat, isWsOpen, sendPing, sendSignal } from './signal.js';
 import { WebRTCManager } from './webrtc.js';
 import { bind, setText, setEnabled, appendLog, appendChat } from './ui.js';
 

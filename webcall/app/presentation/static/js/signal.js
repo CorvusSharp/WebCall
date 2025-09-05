@@ -22,7 +22,7 @@ function _safeSend(ws, obj, maxRetries = 3) {
   }
 }
 
-export function sendPing(ws) {
+function sendPing(ws) {
   _safeSend(ws, { type: "ping" });
 }
 
@@ -33,14 +33,14 @@ export function sendPing(ws) {
  * @param {string} fromUserId
  * @param {string=} targetUserId
  */
-export function sendSignal(ws, type, payload, fromUserId, targetUserId) {
+function sendSignal(ws, type, payload, fromUserId, targetUserId) {
   const body = { type: "signal", signalType: type, fromUserId, ...payload };
   if (targetUserId) body.targetUserId = targetUserId;
   _safeSend(ws, body);
 }
 
-export function sendChat(ws, content, fromUserId) {
+function sendChat(ws, content, fromUserId) {
   _safeSend(ws, { type: "chat", content, fromUserId });
 }
 
-export { isWsOpen, sendPing };
+export { isWsOpen, sendPing, sendSignal, sendChat };
