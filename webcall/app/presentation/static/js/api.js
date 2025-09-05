@@ -1,10 +1,33 @@
 // api.js - REST helpers
 const base = '';
 
+let iceServersCache = null;
+let lastIceFetchTime = 0;
+const ICE_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
 export async function getIceServers() {
-  const res = await fetch(`${base}/api/v1/webrtc/ice-servers`);
-  if (!res.ok) throw new Error('Failed to fetch ICE servers');
-  return res.json();
+  // Return cached version if available and not expired
+  if (iceServersCache && Date.now() - lastIceFetchTime < ICE_CACHE_DURATION) {
+    return iceServersCache;
+  }
+  
+  try {
+    const res = await fetch(`${base}/api/v1/webrtc/ice-servers`);
+    if (!res.ok) throw new Error('Failed to fetch ICE servers');
+    iceServersCache = await res.json();
+    lastIceFetchTime = Date.now();
+    return iceServersCache;
+  } catch (e) {
+    console.warn('Using fallback ICE servers');
+    // Fallback to reliable STUN servers
+    return {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+        { urls: "stun:stun2.l.google.com:19302" }
+      ]
+    };
+  }
 }
 
 export async function login(email, password) {

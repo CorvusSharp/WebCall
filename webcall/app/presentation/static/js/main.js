@@ -8,6 +8,8 @@ let token = null;
 let ws = null;
 let rtc = null;
 let userId = null;
+let reconnectTimeout = null;
+let isManuallyDisconnected = false;
 
 // выбранные устройства
 let selected = { mic: null, cam: null, spk: null };
@@ -38,6 +40,7 @@ function stat(line){ els.stats && appendLog(els.stats, line); }
 
 function setConnectedState(connected){
   setText(els.connStatus, connected ? 'Подключено' : 'Не подключено');
+  setEnabled(els.btnConnect, !connected);
   setEnabled(els.btnSend, connected);
   setEnabled(els.btnLeave, connected);
   setEnabled(els.btnToggleMic, connected);
@@ -68,11 +71,13 @@ async function refreshDevices(){
     sel.innerHTML = '';
     list.forEach(d => {
       const o = document.createElement('option');
-      o.value = d.deviceId; o.textContent = d.label || d.kind;
+      o.value = d.deviceId; 
+      o.textContent = d.label || `Unknown ${d.kind}`;
       if (picked && picked === d.deviceId) o.selected = true;
       sel.appendChild(o);
     });
   };
+  
   fill(els.micSel, mics, selected.mic);
   fill(els.camSel, cams, selected.cam);
   fill(els.spkSel, spks, selected.spk);
@@ -94,12 +99,23 @@ async function connect(){
   if (!roomId){ log('Введите Room ID'); return; }
   if (!ensureToken()) return;
 
+  isManuallyDisconnected = false;
+  
   // Закроем предыдущий сокет
-  try{ if (ws && ws.readyState !== WebSocket.CLOSED) ws.close(); }catch{}
+  try{ 
+    if (ws && ws.readyState !== WebSocket.CLOSED) ws.close(); 
+  } catch{}
+  
+  // Отменяем предыдущие попытки переподключения
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
 
   await refreshDevices();
 
   ws = buildWs(roomId, token);
+  
   ws.onopen = async () => {
     log('WS connected');
     setConnectedState(true);
@@ -111,7 +127,14 @@ async function connect(){
       onPeerState: (peerId, key, val) => {
         const tile = els.peersGrid.querySelector(`.tile[data-peer="${peerId}"]`);
         if (!tile) return;
-        if (key === 'net') tile.querySelector('.badge.net').textContent = val || '•';
+        if (key === 'net') {
+          const badge = tile.querySelector('.badge.net');
+          if (badge) {
+            badge.textContent = val === 'connected' ? '🟢' : 
+                              val === 'connecting' ? '🟡' : '🔴';
+            badge.title = val;
+          }
+        }
       }
     });
 
@@ -122,35 +145,71 @@ async function connect(){
         micId: selected.mic || undefined,
         camId: selected.cam || undefined
       });
+      
       // сообщаем о входе; офферы по парам создадутся через presence/negotiationneeded
-      if (isWsOpen(ws)) ws.send(JSON.stringify({ type: 'join', fromUserId: userId }));
-    }catch(e){
+      if (isWsOpen(ws)) {
+        ws.send(JSON.stringify({ 
+          type: 'join', 
+          fromUserId: userId,
+          username: localStorage.getItem('wc_user') || 'User'
+        }));
+      }
+    } catch(e) {
       log(`Ошибка старта WebRTC: ${e?.name||e}`);
     }
   };
 
   ws.onmessage = async (ev) => {
-    const msg = JSON.parse(ev.data);
-    if (msg.type === 'signal') {
-      await rtc?.handleSignal(msg, attachPeerMedia);
-    } else if (msg.type === 'chat') {
-      const who = msg.authorName || msg.authorId || 'system';
-      appendChat(els.chat, who, msg.content || msg.echo || '');
-    } else if (msg.type === 'presence') {
-      renderPresence(msg.members || []);
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'signal') {
+        await rtc?.handleSignal(msg, attachPeerMedia);
+      } else if (msg.type === 'chat') {
+        const who = msg.authorName || msg.authorId || 'system';
+        appendChat(els.chat, who, msg.content || msg.echo || '');
+      } else if (msg.type === 'presence') {
+        renderPresence(msg.members || []);
+      }
+    } catch (e) {
+      log(`Ошибка обработки сообщения: ${e}`);
     }
   };
 
   ws.onclose = (ev) => {
     log(`WS closed (${ev?.code||''} ${ev?.reason||''})`);
     setConnectedState(false);
+    
+    // Автопереподключение, если не было ручного отключения
+    if (!isManuallyDisconnected && !reconnectTimeout) {
+      log('Попытка переподключения через 2 секунды...');
+      reconnectTimeout = setTimeout(connect, 2000);
+    }
+  };
+
+  ws.onerror = (err) => {
+    log(`WS error: ${err}`);
   };
 }
 
 function leave(){
+  isManuallyDisconnected = true;
+  
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
+  
   rtc?.close();
-  try{ if (isWsOpen(ws)) ws.send(JSON.stringify({ type: 'leave', fromUserId: userId })); }catch{}
-  try{ ws?.close(); }catch{}
+  try{ 
+    if (isWsOpen(ws)) {
+      ws.send(JSON.stringify({ type: 'leave', fromUserId: userId }));
+    }
+  } catch{}
+  
+  try{ 
+    ws?.close(); 
+  } catch{}
+  
   setConnectedState(false);
 }
 
@@ -181,9 +240,15 @@ function toggleCam(){
 function restoreFromUrl(){
   const url = new URL(location.href);
   const rid = url.searchParams.get('room');
-  if (rid) { els.roomId.value = rid; return; }
+  if (rid) { 
+    els.roomId.value = rid; 
+    return; 
+  }
+  
   const parts = location.pathname.split('/').filter(Boolean);
-  if (parts[0] === 'call' && parts[1]) els.roomId.value = decodeURIComponent(parts[1]);
+  if (parts[0] === 'call' && parts[1]) {
+    els.roomId.value = decodeURIComponent(parts[1]);
+  }
 }
 
 function toggleTheme(){
@@ -206,7 +271,9 @@ function renderPresence(members){
 
   // remove ушедших
   for (const pid of existing){
-    if (!others.some(o=>o.id===pid)) grid.querySelector(`.tile[data-peer="${pid}"]`)?.remove();
+    if (!others.some(o=>o.id===pid)) {
+      grid.querySelector(`.tile[data-peer="${pid}"]`)?.remove();
+    }
   }
 
   // add новых
@@ -234,26 +301,44 @@ function renderPresence(members){
         node.querySelector('.avatar').style.display='none';
         try{
           await video.play();
-        }catch{
+          gate.style.display='none';
+        } catch{
           gate.style.display='block';
         }
       },
-      onLevel: (lvl)=>{ meterBar.style.width = `${Math.min(1,Math.max(0,lvl))*100}%`; }
+      onLevel: (lvl)=>{ 
+        if (meterBar) {
+          meterBar.style.width = `${Math.min(1, Math.max(0, lvl)) * 100}%`; 
+        }
+      }
     });
 
     muteBtn.addEventListener('click', ()=>{
       video.muted = !video.muted;
       muteBtn.textContent = video.muted ? '🔊 Unmute' : '🔇 Mute';
     });
-    vol.addEventListener('input', ()=>{ video.volume = parseFloat(vol.value||'1'); });
+    
+    vol.addEventListener('input', ()=>{ 
+      video.volume = parseFloat(vol.value || '1'); 
+    });
+    
     gate.addEventListener('click', async ()=>{
-      try{ await video.play(); gate.style.display='none'; }catch(e){ log(`play failed: ${e?.name||e}`); }
+      try{ 
+        await video.play(); 
+        gate.style.display='none'; 
+      } catch(e) { 
+        log(`play failed: ${e?.name||e}`); 
+      }
     });
 
     grid.appendChild(node);
 
     // детерминированный инициатор пары: у кого строковый id меньше — делает offer
-    if (my && peer?.id && my < peer.id) rtc?.startOffer?.(peer.id);
+    if (my && peer?.id && my < peer.id) {
+      setTimeout(() => {
+        rtc?.startOffer?.(peer.id);
+      }, 1000); // Задержка для стабилизации соединения
+    }
   }
 }
 
@@ -265,7 +350,17 @@ bind(els.btnSend, 'click', send);
 bind(els.btnToggleMic, 'click', toggleMic);
 bind(els.btnToggleCam, 'click', toggleCam);
 bind(els.btnToggleTheme, 'click', toggleTheme);
-window.addEventListener('beforeunload', ()=>{ try{ if (isWsOpen(ws)) ws.close(); }catch{} });
+
+// Enter key for chat
+bind(els.chatInput, 'keypress', (e) => {
+  if (e.key === 'Enter') send();
+});
+
+window.addEventListener('beforeunload', ()=>{ 
+  try{ 
+    if (isWsOpen(ws)) ws.close(); 
+  } catch{} 
+});
 
 // Init
 restoreFromUrl();

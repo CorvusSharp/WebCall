@@ -3,10 +3,24 @@ function isWsOpen(ws) {
   return ws && ws.readyState === WebSocket.OPEN;
 }
 
-function _safeSend(ws, obj) {
-  if (!isWsOpen(ws)) return false;
-  try { ws.send(JSON.stringify(obj)); return true; }
-  catch (e) { console.warn("WS send failed:", e); return false; }
+function _safeSend(ws, obj, maxRetries = 3) {
+  if (!isWsOpen(ws)) {
+    if (maxRetries > 0) {
+      setTimeout(() => _safeSend(ws, obj, maxRetries - 1), 300);
+    }
+    return false;
+  }
+  
+  try { 
+    ws.send(JSON.stringify(obj)); 
+    return true; 
+  } catch (e) { 
+    console.warn("WS send failed:", e);
+    if (maxRetries > 0) {
+      setTimeout(() => _safeSend(ws, obj, maxRetries - 1), 300);
+    }
+    return false; 
+  }
 }
 
 /**

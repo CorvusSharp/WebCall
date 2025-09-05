@@ -20,6 +20,7 @@ export class WebRTCManager {
     this.userId = null;
     this.localStream = null;
     this.preferred = { micId: undefined, camId: undefined };
+    this.iceConfig = null;
 
     // peerId -> {
     //   pc, stream, candidates:[], remoteSet:bool, handlers,
@@ -38,26 +39,37 @@ export class WebRTCManager {
   }
 
   async _getLocalMedia(){
-    const tryGet = async (constraints) => {
-      try { return await navigator.mediaDevices.getUserMedia(constraints); }
-      catch(e){ this._log(`getUserMedia: ${e?.name||e}`); return null; }
-    };
-    // по умолчанию — только аудио
-    const a = await tryGet({
+    const constraints = {
       audio: {
-        echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+        echoCancellation: true, 
+        noiseSuppression: true, 
+        autoGainControl: true,
         deviceId: this.preferred.micId ? { exact: this.preferred.micId } : undefined,
       },
-      video: false
-    });
-    if (a) return a;
+      video: this.preferred.camId ? {
+        deviceId: { exact: this.preferred.camId },
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+        frameRate: { ideal: 24 }
+      } : false
+    };
 
-    // fallback — только видео (если нет микрофона)
-    const v = await tryGet({
-      audio: false,
-      video: { deviceId: this.preferred.camId ? { exact: this.preferred.camId } : undefined }
-    });
-    return v;
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch(e) {
+      this._log(`getUserMedia failed: ${e?.name||e}`);
+      
+      // Fallback - try audio only
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          audio: constraints.audio,
+          video: false
+        });
+      } catch (audioError) {
+        this._log(`Audio-only fallback also failed: ${audioError}`);
+        return null;
+      }
+    }
   }
 
   async init(ws, userId, { micId, camId } = {}){
@@ -66,13 +78,22 @@ export class WebRTCManager {
     if (micId) this.preferred.micId = micId;
     if (camId) this.preferred.camId = camId;
 
-    if (this.localStream) return;
+    // Get ICE config once
+    if (!this.iceConfig) {
+      try {
+        this.iceConfig = await getIceServers();
+      } catch (e) {
+        this._log(`ICE config error: ${e}`);
+        this.iceConfig = {
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" }
+          ]
+        };
+      }
+    }
 
-    // ICE servers
-    const fallback = { iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] };
-    let rtcCfg = fallback;
-    try { const { iceServers } = await getIceServers(); rtcCfg = { iceServers }; }
-    catch { rtcCfg = fallback; }
+    if (this.localStream) return;
 
     // Локальные медиа
     const stream = await this._getLocalMedia();
@@ -91,13 +112,12 @@ export class WebRTCManager {
   async _ensurePeer(peerId){
     if (this.peers.has(peerId)) return this.peers.get(peerId);
 
-    // ICE servers
-    const fallback = { iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] };
-    let rtcCfg = fallback;
-    try { const { iceServers } = await getIceServers(); rtcCfg = { iceServers }; }
-    catch { rtcCfg = fallback; }
-
-    const pc = new RTCPeerConnection({ ...rtcCfg, bundlePolicy:"max-bundle", rtcpMuxPolicy:"require" });
+    const pc = new RTCPeerConnection({ 
+      ...this.iceConfig, 
+      bundlePolicy: "max-bundle", 
+      rtcpMuxPolicy: "require" 
+    });
+    
     const state = {
       pc,
       stream: new MediaStream(),
@@ -111,34 +131,54 @@ export class WebRTCManager {
       iceFailTimer: null,
     };
 
+    // Always add transceivers for receiving
+    try {
+      pc.addTransceiver("audio", { direction: "recvonly" });
+      pc.addTransceiver("video", { direction: "recvonly" });
+    } catch (e) {
+      this._log(`Error adding transceivers: ${e}`);
+    }
+
     // локальные треки
     if (this.localStream){
-      for (const t of this.localStream.getTracks()) pc.addTrack(t, this.localStream);
-    } else {
-      try{ pc.addTransceiver("audio", { direction:"recvonly" }); }catch{}
-      try{ pc.addTransceiver("video", { direction:"recvonly" }); }catch{}
+      for (const t of this.localStream.getTracks()) {
+        try {
+          pc.addTrack(t, this.localStream);
+        } catch (e) {
+          this._log(`Error adding track: ${e}`);
+        }
+      }
     }
 
     pc.addEventListener("icecandidate", (e)=>{
-      if (e.candidate) sendSignal(this.ws, "ice-candidate", { candidate:e.candidate }, this.userId, peerId);
+      if (e.candidate) {
+        sendSignal(this.ws, "ice-candidate", { candidate: e.candidate }, this.userId, peerId);
+      }
     });
 
     pc.addEventListener("track", (e)=>{
-      if (e.track && !state.stream.getTracks().some(t=>t.id===e.track.id)) state.stream.addTrack(e.track);
-      if (state.handlers?.onTrack) state.handlers.onTrack(state.stream);
-      if (e.track?.kind === 'audio') this._setupPeerLevel(peerId, state);
+      if (e.track && !state.stream.getTracks().some(t=>t.id===e.track.id)) {
+        state.stream.addTrack(e.track);
+        if (state.handlers?.onTrack) state.handlers.onTrack(state.stream);
+        if (e.track?.kind === 'audio') this._setupPeerLevel(peerId, state);
+      }
     });
 
     // Perfect Negotiation — инициируем оффер по событию
     pc.addEventListener("negotiationneeded", async ()=>{
       try{
+        if (state.makingOffer) return;
+        
         state.makingOffer = true;
-        const offer = await pc.createOffer({ offerToReceiveAudio:true, offerToReceiveVideo:true });
+        const offer = await pc.createOffer({ 
+          offerToReceiveAudio: true, 
+          offerToReceiveVideo: true 
+        });
         await pc.setLocalDescription(offer);
         sendSignal(this.ws, 'offer', { sdp: offer.sdp }, this.userId, peerId);
-      }catch(e){
+      } catch(e) {
         this._log(`negotiationneeded(${peerId}): ${e?.name||e}`);
-      }finally{
+      } finally {
         state.makingOffer = false;
       }
     });
@@ -148,6 +188,7 @@ export class WebRTCManager {
       const s = pc.connectionState;
       this.onPeerState(peerId, 'net', s);
       this._log(`PC(${peerId})=${s}`);
+      
       if (s === 'failed'){
         // Немедленный ICE-restart
         this._iceRestart(peerId).catch(()=>{});
@@ -155,12 +196,19 @@ export class WebRTCManager {
         // Если "зависло" в disconnected, через 2 сек попробуем ICE-restart
         clearTimeout(state.iceFailTimer);
         state.iceFailTimer = setTimeout(()=>{
-          if (pc.connectionState === 'disconnected') this._iceRestart(peerId).catch(()=>{});
+          if (pc.connectionState === 'disconnected') {
+            this._iceRestart(peerId).catch(()=>{});
+          }
         }, 2000);
       } else if (s === 'connected' || s === 'completed'){
         clearTimeout(state.iceFailTimer);
         state.iceFailTimer = null;
       }
+    });
+
+    // Обработка ICE соединения
+    pc.addEventListener("iceconnectionstatechange", () => {
+      this._log(`ICE(${peerId})=${pc.iceConnectionState}`);
     });
 
     this.peers.set(peerId, state);
@@ -172,14 +220,20 @@ export class WebRTCManager {
     if (!st) return;
     this._log(`ICE-restart → ${peerId}`);
     try{
-      const offer = await st.pc.createOffer({ iceRestart:true });
+      const offer = await st.pc.createOffer({ iceRestart: true });
       await st.pc.setLocalDescription(offer);
       sendSignal(this.ws, 'offer', { sdp: offer.sdp }, this.userId, peerId);
-    }catch(e){ this._log(`ICE-restart(${peerId}): ${e?.name||e}`); }
+    } catch(e) { 
+      this._log(`ICE-restart(${peerId}): ${e?.name||e}`);
+    }
   }
 
   // публичные хуки UI
-  bindPeerMedia(peerId, handlers){ const st = this.peers.get(peerId); if (st) st.handlers = handlers; }
+  bindPeerMedia(peerId, handlers){ 
+    const st = this.peers.get(peerId); 
+    if (st) st.handlers = handlers; 
+  }
+  
   getPeer(peerId){ return this.peers.get(peerId); }
 
   async handleSignal(msg, mediaBinder){
@@ -206,7 +260,9 @@ export class WebRTCManager {
       }
 
       try {
-        if (offerCollision) await pc.setLocalDescription({ type:'rollback' });
+        if (offerCollision) {
+          await pc.setLocalDescription({ type:'rollback' });
+        }
         await pc.setRemoteDescription(desc);
         peer.remoteSet = true;
         await this._flushQueuedCandidates(peerId);
@@ -220,8 +276,10 @@ export class WebRTCManager {
 
     } else if (msg.signalType === 'answer'){
       if (pc.signalingState !== 'have-local-offer'){
-        this._log(`Ignore answer in ${pc.signalingState}`); return;
+        this._log(`Ignore answer in ${pc.signalingState}`); 
+        return;
       }
+      
       try {
         await pc.setRemoteDescription({ type:'answer', sdp: msg.sdp });
         peer.remoteSet = true;
@@ -231,10 +289,14 @@ export class WebRTCManager {
       }
 
     } else if (msg.signalType === 'ice-candidate'){
-      if (!peer.remoteSet) peer.candidates.push(msg.candidate);
-      else {
-        try { await pc.addIceCandidate(msg.candidate); }
-        catch(e){ this._log(`addIce[${peerId}]: ${e?.name||e}`); }
+      if (!peer.remoteSet) {
+        peer.candidates.push(msg.candidate);
+      } else {
+        try { 
+          await pc.addIceCandidate(msg.candidate); 
+        } catch(e) { 
+          this._log(`addIce[${peerId}]: ${e?.name||e}`); 
+        }
       }
     }
   }
@@ -242,10 +304,14 @@ export class WebRTCManager {
   async _flushQueuedCandidates(peerId){
     const peer = this.peers.get(peerId);
     if (!peer?.pc) return;
+    
     while (peer.candidates.length){
       const c = peer.candidates.shift();
-      try { await peer.pc.addIceCandidate(c); }
-      catch(e){ this._log(`flush ICE[${peerId}]: ${e?.name||e}`); }
+      try { 
+        await peer.pc.addIceCandidate(c); 
+      } catch(e) { 
+        this._log(`flush ICE[${peerId}]: ${e?.name||e}`); 
+      }
     }
   }
 
@@ -256,15 +322,23 @@ export class WebRTCManager {
     const st = await this._ensurePeer(peerId);
     if (st.makingOffer) return;
     if (st.pc.signalingState !== 'stable'){
-      this._log(`Skip startOffer(${peerId}) in ${st.pc.signalingState}`); return;
+      this._log(`Skip startOffer(${peerId}) in ${st.pc.signalingState}`); 
+      return;
     }
+    
     try{
       st.makingOffer = true;
-      const offer = await st.pc.createOffer({ offerToReceiveAudio:true, offerToReceiveVideo:true });
+      const offer = await st.pc.createOffer({ 
+        offerToReceiveAudio: true, 
+        offerToReceiveVideo: true 
+      });
       await st.pc.setLocalDescription(offer);
       sendSignal(this.ws, 'offer', { sdp: offer.sdp }, this.userId, peerId);
-    }catch(e){ this._log(`startOffer(${peerId}): ${e?.name||e}`); }
-    finally{ st.makingOffer = false; }
+    } catch(e) { 
+      this._log(`startOffer(${peerId}): ${e?.name||e}`); 
+    } finally { 
+      st.makingOffer = false; 
+    }
   }
 
   toggleMic(){
@@ -280,15 +354,22 @@ export class WebRTCManager {
     let tr = this.localStream.getVideoTracks()[0];
     if (!tr){
       navigator.mediaDevices.getUserMedia({
-        video: { deviceId: this.preferred.camId ? { exact: this.preferred.camId } : undefined },
+        video: { 
+          deviceId: this.preferred.camId ? { exact: this.preferred.camId } : undefined,
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          frameRate: { ideal: 24 }
+        },
         audio: false
       }).then(s=>{
         const [vt] = s.getVideoTracks();
         if (!vt) return;
         this.localStream.addTrack(vt);
         if (this.localVideo){
-          const ms = this.localVideo.srcObject instanceof MediaStream ? this.localVideo.srcObject : new MediaStream();
-          ms.addTrack(vt); this.localVideo.srcObject = ms;
+          const ms = this.localVideo.srcObject instanceof MediaStream ? 
+            this.localVideo.srcObject : new MediaStream();
+          ms.addTrack(vt); 
+          this.localVideo.srcObject = ms;
         }
         // добавили — negotiationneeded сработает сам
       }).catch(e=> this._log(`Camera init: ${e?.name||e}`));
@@ -322,13 +403,19 @@ export class WebRTCManager {
       const data = new Uint8Array(state.level.analyser.frequencyBinCount);
       const loop = ()=>{
         state.level.analyser.getByteTimeDomainData(data);
-        let sum=0; for (let i=0;i<data.length;i++){ const v=(data[i]-128)/128; sum+=v*v; }
+        let sum=0; 
+        for (let i=0;i<data.length;i++){ 
+          const v=(data[i]-128)/128; 
+          sum+=v*v; 
+        }
         const rms = Math.sqrt(sum/data.length);
         if (state.handlers?.onLevel) state.handlers.onLevel(rms);
         state.level.raf = requestAnimationFrame(loop);
       };
       if (state.level.raf) cancelAnimationFrame(state.level.raf);
       state.level.raf = requestAnimationFrame(loop);
-    }catch(e){ this._log(`level[${peerId}]: ${e?.name||e}`); }
+    } catch(e) { 
+      this._log(`level[${peerId}]: ${e?.name||e}`); 
+    }
   }
 }
