@@ -33,7 +33,7 @@ export function buildWs(roomId, token){
 
 // (опционально) login/register, если используются страницы аутентификации
 export async function login(email, password){
-  const r = await fetch(`${base}/api/login`, {
+  const r = await fetch(`${base}/api/v1/auth/login`, {
     method: 'POST', headers:{'content-type':'application/json'},
     body: JSON.stringify({ email, password })
   });
@@ -41,7 +41,7 @@ export async function login(email, password){
   return await r.json();
 }
 export async function register(email, username, password){
-  const r = await fetch(`${base}/api/register`, {
+  const r = await fetch(`${base}/api/v1/auth/register`, {
     method: 'POST', headers:{'content-type':'application/json'},
     body: JSON.stringify({ email, username, password })
   });
