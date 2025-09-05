@@ -30,6 +30,8 @@ class Settings(BaseSettings):
 
     # WebRTC ICE
     STUN_SERVERS: List[str] = Field(default_factory=lambda: ["stun:stun.l.google.com:19302"])  # type: ignore[assignment]
+    # Поддерживаем как одиночный TURN_URL, так и список TURN_URLS для UDP/TCP
+    TURN_URLS: List[str] | None = None  # type: ignore[assignment]
     TURN_URL: str | None = None
     TURN_USERNAME: str | None = None
     TURN_PASSWORD: str | None = None
@@ -43,4 +45,9 @@ def get_settings() -> Settings:
         s.CORS_ORIGINS = [x.strip() for x in s.CORS_ORIGINS.split(",") if x.strip()]  # type: ignore[attr-defined]
     if isinstance(s.STUN_SERVERS, str):  # type: ignore[unreachable]
         s.STUN_SERVERS = [x.strip() for x in s.STUN_SERVERS.split(",") if x.strip()]  # type: ignore[attr-defined]
+    # Нормализуем TURN_URLS / TURN_URL
+    if isinstance(s.TURN_URLS, str):  # type: ignore[unreachable]
+        s.TURN_URLS = [x.strip() for x in s.TURN_URLS.split(",") if x.strip()]  # type: ignore[attr-defined]
+    if not s.TURN_URLS and s.TURN_URL:
+        s.TURN_URLS = [s.TURN_URL]
     return s

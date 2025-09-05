@@ -10,5 +10,4 @@ router = APIRouter(prefix="/api/v1/webrtc", tags=["webrtc"])
 
 @router.get("/ice-servers")
 async def ice_servers(provider: IceConfigProvider = Depends(get_ice_provider)) -> dict:  # type: ignore[override]
-    servers = await provider.get_servers()
-    return {"iceServers": servers}
+    return await provider.get_servers()
