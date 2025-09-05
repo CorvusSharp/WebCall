@@ -171,7 +171,17 @@ export class WebRTCManager {
   }
 
   // публичные хуки UI
-  bindPeerMedia(peerId, handlers){ const st = this.peers.get(peerId); if (st) st.handlers = handlers; }
+  bindPeerMedia(peerId, handlers){
+    const st = this.peers.get(peerId);
+    if (!st) return;
+    st.handlers = handlers;
+    // Если треки уже пришли до установки обработчиков — сразу передадим текущий stream в UI
+    try{
+      if (st.stream && st.stream.getTracks && st.stream.getTracks().length > 0) {
+        handlers?.onTrack?.(st.stream);
+      }
+    }catch{}
+  }
   getPeer(peerId){ return this.peers.get(peerId); }
 
   // Диагностика состояния аудио/SDP/статов
