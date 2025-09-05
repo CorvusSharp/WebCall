@@ -413,3 +413,4 @@ if (ensureToken()) {
   log('Готово. Введите Room ID и нажмите Подключиться.');
   refreshDevices().catch(()=>{});
 }
+}
