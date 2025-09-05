@@ -1,4 +1,4 @@
-// webrtc.js — мультипир без единого remoteVideo
+// webrtc.js — мультипир с Perfect Negotiation и авто-переренегацией
 import { sendSignal } from "./signal.js";
 import { getIceServers } from "./api.js";
 
@@ -15,11 +15,18 @@ export class WebRTCManager {
     this.outputDeviceId = opts.outputDeviceId || null;
     this.onLog = opts.onLog || (()=>{});
     this.onPeerState = opts.onPeerState || (()=>{});
+
     this.ws = null;
     this.userId = null;
     this.localStream = null;
     this.preferred = { micId: undefined, camId: undefined };
-    this.peers = new Map(); // peerId -> { pc, stream, candidates:[], remoteSet:bool, handlers, level:{ctx,analyser,raf} }
+
+    // peerId -> {
+    //   pc, stream, candidates:[], remoteSet:bool, handlers,
+    //   level:{ctx,analyser,raf},
+    //   makingOffer:boolean, ignoreOffer:boolean, polite:boolean, iceFailTimer:number|null
+    // }
+    this.peers = new Map();
   }
 
   _log(m){ try{ this.onLog(m); }catch{} }
@@ -75,6 +82,12 @@ export class WebRTCManager {
     }
   }
 
+  _isPolite(myId, peerId){
+    // Политика: "вежливый" (polite) тот, у кого строковый id БОЛЬШЕ.
+    // Это соответствует нашей логике: оффер начинает тот, у кого id МЕНЬШЕ.
+    return String(myId) > String(peerId);
+  }
+
   async _ensurePeer(peerId){
     if (this.peers.has(peerId)) return this.peers.get(peerId);
 
@@ -85,7 +98,18 @@ export class WebRTCManager {
     catch { rtcCfg = fallback; }
 
     const pc = new RTCPeerConnection({ ...rtcCfg, bundlePolicy:"max-bundle", rtcpMuxPolicy:"require" });
-    const state = { pc, stream:new MediaStream(), candidates:[], remoteSet:false, handlers:null, level:{ctx:null, analyser:null, raf:0} };
+    const state = {
+      pc,
+      stream: new MediaStream(),
+      candidates: [],
+      remoteSet: false,
+      handlers: null,
+      level: { ctx:null, analyser:null, raf:0 },
+      makingOffer: false,
+      ignoreOffer: false,
+      polite: this._isPolite(this.userId, peerId),
+      iceFailTimer: null,
+    };
 
     // локальные треки
     if (this.localStream){
@@ -98,18 +122,60 @@ export class WebRTCManager {
     pc.addEventListener("icecandidate", (e)=>{
       if (e.candidate) sendSignal(this.ws, "ice-candidate", { candidate:e.candidate }, this.userId, peerId);
     });
+
     pc.addEventListener("track", (e)=>{
       if (e.track && !state.stream.getTracks().some(t=>t.id===e.track.id)) state.stream.addTrack(e.track);
       if (state.handlers?.onTrack) state.handlers.onTrack(state.stream);
       if (e.track?.kind === 'audio') this._setupPeerLevel(peerId, state);
     });
+
+    // Perfect Negotiation — инициируем оффер по событию
+    pc.addEventListener("negotiationneeded", async ()=>{
+      try{
+        state.makingOffer = true;
+        const offer = await pc.createOffer({ offerToReceiveAudio:true, offerToReceiveVideo:true });
+        await pc.setLocalDescription(offer);
+        sendSignal(this.ws, 'offer', { sdp: offer.sdp }, this.userId, peerId);
+      }catch(e){
+        this._log(`negotiationneeded(${peerId}): ${e?.name||e}`);
+      }finally{
+        state.makingOffer = false;
+      }
+    });
+
+    // автолечебница ICE
     pc.addEventListener("connectionstatechange", ()=>{
-      this.onPeerState(peerId, 'net', pc.connectionState);
-      this._log(`PC(${peerId})=${pc.connectionState}`);
+      const s = pc.connectionState;
+      this.onPeerState(peerId, 'net', s);
+      this._log(`PC(${peerId})=${s}`);
+      if (s === 'failed'){
+        // Немедленный ICE-restart
+        this._iceRestart(peerId).catch(()=>{});
+      } else if (s === 'disconnected'){
+        // Если "зависло" в disconnected, через 2 сек попробуем ICE-restart
+        clearTimeout(state.iceFailTimer);
+        state.iceFailTimer = setTimeout(()=>{
+          if (pc.connectionState === 'disconnected') this._iceRestart(peerId).catch(()=>{});
+        }, 2000);
+      } else if (s === 'connected' || s === 'completed'){
+        clearTimeout(state.iceFailTimer);
+        state.iceFailTimer = null;
+      }
     });
 
     this.peers.set(peerId, state);
     return state;
+  }
+
+  async _iceRestart(peerId){
+    const st = this.peers.get(peerId);
+    if (!st) return;
+    this._log(`ICE-restart → ${peerId}`);
+    try{
+      const offer = await st.pc.createOffer({ iceRestart:true });
+      await st.pc.setLocalDescription(offer);
+      sendSignal(this.ws, 'offer', { sdp: offer.sdp }, this.userId, peerId);
+    }catch(e){ this._log(`ICE-restart(${peerId}): ${e?.name||e}`); }
   }
 
   // публичные хуки UI
@@ -122,6 +188,7 @@ export class WebRTCManager {
 
     const peerId = msg.fromUserId;
     const peer = await this._ensurePeer(peerId);
+    const pc = peer.pc;
 
     if (mediaBinder && !peer.handlers){
       mediaBinder(peerId, { onTrack:()=>{}, onLevel:()=>{} });
@@ -129,41 +196,44 @@ export class WebRTCManager {
 
     if (msg.signalType === 'offer'){
       await this.init(this.ws, this.userId);
-      const offer = { type:'offer', sdp: msg.sdp };
+      const desc = { type:'offer', sdp: msg.sdp };
 
-      if (peer.pc.signalingState !== 'stable'){
-        try{ await peer.pc.setLocalDescription({ type:'rollback' }); }catch(e){ this._log(`rollback: ${e?.name||e}`); }
+      const offerCollision = peer.makingOffer || pc.signalingState !== "stable";
+      peer.ignoreOffer = !peer.polite && offerCollision;
+      if (peer.ignoreOffer) {
+        this._log(`Ignore offer from ${peerId} (impolite collision)`);
+        return;
       }
-      if (peer.pc.currentRemoteDescription?.sdp === msg.sdp){
-        this._log('Duplicate offer ignored'); return;
+
+      try {
+        if (offerCollision) await pc.setLocalDescription({ type:'rollback' });
+        await pc.setRemoteDescription(desc);
+        peer.remoteSet = true;
+        await this._flushQueuedCandidates(peerId);
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        sendSignal(this.ws, 'answer', { sdp: answer.sdp }, this.userId, peerId);
+      } catch(e) {
+        this._log(`SRD(offer)[${peerId}]: ${e?.name||e}`);
       }
-
-      try { await peer.pc.setRemoteDescription(offer); }
-      catch(e){ this._log(`SRD(offer)[${peerId}]: ${e?.name||e}`); return; }
-
-      peer.remoteSet = true;
-      await this._flushQueuedCandidates(peerId);
-
-      const answer = await peer.pc.createAnswer();
-      await peer.pc.setLocalDescription(answer);
-      sendSignal(this.ws, 'answer', { sdp: answer.sdp }, this.userId, peerId);
 
     } else if (msg.signalType === 'answer'){
-      if (peer.pc.signalingState !== 'have-local-offer'){
-        this._log(`Ignore answer in ${peer.pc.signalingState}`); return;
+      if (pc.signalingState !== 'have-local-offer'){
+        this._log(`Ignore answer in ${pc.signalingState}`); return;
       }
-      if (peer.pc.currentRemoteDescription?.type === 'answer'){
-        this._log('Duplicate answer ignored'); return;
+      try {
+        await pc.setRemoteDescription({ type:'answer', sdp: msg.sdp });
+        peer.remoteSet = true;
+        await this._flushQueuedCandidates(peerId);
+      } catch(e) {
+        this._log(`SRD(answer)[${peerId}]: ${e?.name||e}`);
       }
-      try { await peer.pc.setRemoteDescription({ type:'answer', sdp: msg.sdp }); }
-      catch(e){ this._log(`SRD(answer)[${peerId}]: ${e?.name||e}`); return; }
-      peer.remoteSet = true;
-      await this._flushQueuedCandidates(peerId);
 
     } else if (msg.signalType === 'ice-candidate'){
       if (!peer.remoteSet) peer.candidates.push(msg.candidate);
       else {
-        try { await peer.pc.addIceCandidate(msg.candidate); }
+        try { await pc.addIceCandidate(msg.candidate); }
         catch(e){ this._log(`addIce[${peerId}]: ${e?.name||e}`); }
       }
     }
@@ -180,17 +250,21 @@ export class WebRTCManager {
   }
 
   async startOffer(peerId){
+    // вызывать можно смело — negotiationneeded тоже покроет,
+    // но прямой вызов ускорит старт при появлении нового участника
     await this.init(this.ws, this.userId);
     const st = await this._ensurePeer(peerId);
-    const pc = st.pc;
-    if (pc.signalingState !== 'stable'){
-      this._log(`Skip startOffer(${peerId}) in ${pc.signalingState}`); return;
+    if (st.makingOffer) return;
+    if (st.pc.signalingState !== 'stable'){
+      this._log(`Skip startOffer(${peerId}) in ${st.pc.signalingState}`); return;
     }
     try{
-      const offer = await pc.createOffer({ offerToReceiveAudio:true, offerToReceiveVideo:true });
-      await pc.setLocalDescription(offer);
+      st.makingOffer = true;
+      const offer = await st.pc.createOffer({ offerToReceiveAudio:true, offerToReceiveVideo:true });
+      await st.pc.setLocalDescription(offer);
       sendSignal(this.ws, 'offer', { sdp: offer.sdp }, this.userId, peerId);
     }catch(e){ this._log(`startOffer(${peerId}): ${e?.name||e}`); }
+    finally{ st.makingOffer = false; }
   }
 
   toggleMic(){
@@ -216,9 +290,7 @@ export class WebRTCManager {
           const ms = this.localVideo.srcObject instanceof MediaStream ? this.localVideo.srcObject : new MediaStream();
           ms.addTrack(vt); this.localVideo.srcObject = ms;
         }
-        for (const { pc } of this.peers.values()){
-          try{ pc.addTrack(vt, this.localStream); }catch{}
-        }
+        // добавили — negotiationneeded сработает сам
       }).catch(e=> this._log(`Camera init: ${e?.name||e}`));
       return true;
     }
@@ -232,6 +304,7 @@ export class WebRTCManager {
       try{ st.pc?.close(); }catch{}
       if (st.level?.raf) cancelAnimationFrame(st.level.raf);
       if (st.level?.ctx) try{ st.level.ctx.close(); }catch{}
+      clearTimeout(st.iceFailTimer);
     }
     this.peers.clear();
     if (this.localStream) this.localStream.getTracks().forEach(t=>t.stop());

@@ -1,5 +1,5 @@
 // main.js — вход
-import { buildWs, getIceServers } from './api.js';
+import { buildWs } from './api.js';
 import { sendChat, isWsOpen } from './signal.js';
 import { WebRTCManager } from './webrtc.js';
 import { bind, setText, setEnabled, appendLog, appendChat } from './ui.js';
@@ -122,7 +122,7 @@ async function connect(){
         micId: selected.mic || undefined,
         camId: selected.cam || undefined
       });
-      // presence + детерминированные офферы выполняем после init
+      // сообщаем о входе; офферы по парам создадутся через presence/negotiationneeded
       if (isWsOpen(ws)) ws.send(JSON.stringify({ type: 'join', fromUserId: userId }));
     }catch(e){
       log(`Ошибка старта WebRTC: ${e?.name||e}`);
@@ -195,7 +195,7 @@ function attachPeerMedia(peerId, handlers){
   rtc?.bindPeerMedia?.(peerId, handlers);
 }
 
-// ===== Отрисовка presence и запуск офферов
+// ===== Отрисовка presence и детерминированный запуск офферов
 function renderPresence(members){
   const my = userId;
   const list = members.map(m => (typeof m === 'string' ? {id:m, name:m.slice(0,8)} : m));
@@ -224,7 +224,6 @@ function renderPresence(members){
     const vol = node.querySelector('.volume');
     const gate = node.querySelector('.gate');
 
-    // настраиваем sink (если задан)
     if (typeof video.setSinkId === 'function' && rtc?.getOutputDeviceId()){
       video.setSinkId(rtc.getOutputDeviceId()).catch(()=>{});
     }
@@ -253,7 +252,7 @@ function renderPresence(members){
 
     grid.appendChild(node);
 
-    // детерминированный инициатор пары: у кого строковый id меньше — тот делает offer
+    // детерминированный инициатор пары: у кого строковый id меньше — делает offer
     if (my && peer?.id && my < peer.id) rtc?.startOffer?.(peer.id);
   }
 }
