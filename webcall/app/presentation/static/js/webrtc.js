@@ -33,6 +33,7 @@ export class WebRTCManager {
     this.pc = null;
     this.localStream = null;
     this.remoteStream = null;
+  this.remotePeerId = null; // выбранный удаленный пир (для 1:1 режима)
 
     this._remoteSet = false;
     this._candidateQueue = [];
@@ -251,8 +252,17 @@ export class WebRTCManager {
   async handleSignal(msg) {
     // Никогда не обрабатываем собственные сигналы
     if (msg?.fromUserId && this.userId && msg.fromUserId === this.userId) return;
+    // Если сервер передаёт адресата, а он не совпадает с нами — игнорируем
+    if (msg?.targetUserId && this.userId && msg.targetUserId !== this.userId) return;
+    // Если уже закреплён удалённый пир, игнорируем сообщения от прочих (временный 1:1)
+    if (this.remotePeerId && msg.fromUserId && msg.fromUserId !== this.remotePeerId) {
+      this._log(`Ignore ${msg.signalType} from non-selected peer ${msg.fromUserId}`);
+      return;
+    }
 
     if (msg.signalType === "offer") {
+      // Если ещё не выбрали удалённого пира — закрепляем первого приславшего offer
+      if (!this.remotePeerId && msg.fromUserId) this.remotePeerId = msg.fromUserId;
       await this.init(this.ws, this.userId);
       const offer = { type: "offer", sdp: msg.sdp };
 
@@ -275,7 +285,12 @@ export class WebRTCManager {
         return;
       }
 
-      await this.pc.setRemoteDescription(offer);
+      try {
+        await this.pc.setRemoteDescription(offer);
+      } catch(e) {
+        this._log(`setRemoteDescription(offer) failed in state ${this.pc.signalingState}: ${e?.name||e}`);
+        return;
+      }
       this._remoteSet = true;
       await this._flushQueuedCandidates();
 
@@ -284,6 +299,7 @@ export class WebRTCManager {
       sendSignal(this.ws, "answer", { sdp: answer.sdp }, this.userId);
 
     } else if (msg.signalType === "answer") {
+      if (!this.remotePeerId && msg.fromUserId) this.remotePeerId = msg.fromUserId;
       if (!this.pc) return;
 
       if (this.pc.signalingState !== "have-local-offer") {
@@ -296,11 +312,16 @@ export class WebRTCManager {
         return;
       }
 
-      await this.pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+      try {
+        await this.pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+      } catch(e) {
+        this._log(`setRemoteDescription(answer) failed in state ${this.pc.signalingState}: ${e?.name||e}`);
+        return;
+      }
       this._remoteSet = true;
       await this._flushQueuedCandidates();
 
-    } else if (msg.signalType === "ice-candidate") {
+  } else if (msg.signalType === "ice-candidate") {
       if (!this._remoteSet) {
         this._candidateQueue.push(msg.candidate);
       } else if (this.pc) {

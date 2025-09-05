@@ -60,6 +60,8 @@ async def ws_room(
                     "signalType": signal.type.value,
                     "sdp": signal.sdp,
                     "candidate": signal.candidate,
+                    # передаём target для клиентской фильтрации (если задан)
+                    "targetUserId": str(signal.target_id) if getattr(signal, "target_id", None) else None,
                 }
             )
 
