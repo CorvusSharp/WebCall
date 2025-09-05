@@ -10,23 +10,21 @@ import { getIceServers } from "./api.js";
  * - onPeerState?: (peerId, key, value)=>void
  */
 export class WebRTCManager {
-  constructor(opts){
-    this.localVideo = opts.localVideo || null;
-    this.outputDeviceId = opts.outputDeviceId || null;
-    this.onLog = opts.onLog || (()=>{});
-    this.onPeerState = opts.onPeerState || (()=>{});
+constructor(opts){
+  this.localVideo = opts.localVideo || null;
+  this.outputDeviceId = opts.outputDeviceId || null;
+  this.onLog = opts.onLog || (()=>{});
+  this.onPeerState = opts.onPeerState || (()=>{});
 
-    this.ws = null;
-    this.userId = null;
-    this.localStream = null;
-    this.preferred = { micId: undefined, camId: undefined };
-    this.iceConfig = null;
+  this.ws = null;
+  this.userId = null;
+  this.localStream = null;
+  this.preferred = { micId: undefined, camId: undefined };
+  this.iceConfig = null;
+  this.peers = new Map();
 
-    // peerId -> { pc, stream, candidates:[], remoteSet, handlers,
-    //             makingOffer, ignoreOffer, polite, iceFailTimer }
-    this.peers = new Map();
-  }
-
+  this._offerLocks = new Map(); // <— анти-дубль createOffer() по пиру
+}
   _log(m){ try{ this.onLog(m); }catch{} }
   getOutputDeviceId(){ return this.outputDeviceId; }
   setPreferredDevices({ mic, cam, spk }){
@@ -213,6 +211,7 @@ async _ensurePeer(peerId) {
 
 
 
+
 async handleSignal(msg, mediaBinder) {
   if (msg?.fromUserId && this.userId && msg.fromUserId === this.userId) return;
   if (msg?.targetUserId && this.userId && msg.targetUserId !== this.userId) return;
@@ -222,7 +221,7 @@ async handleSignal(msg, mediaBinder) {
   const pc = peer.pc;
 
   if (mediaBinder && !peer.handlers) {
-    mediaBinder(peerId, { onTrack: () => {}, onLevel: () => {}, onSinkChange: () => {} });
+    mediaBinder(peerId, { onTrack: ()=>{}, onLevel: ()=>{}, onSinkChange: ()=>{} });
   }
 
   if (msg.signalType === 'offer') {
@@ -240,51 +239,36 @@ async handleSignal(msg, mediaBinder) {
       peer.remoteSet = true;
       await this._flushQueuedCandidates(peerId);
 
-      // === КЛЮЧЕВОЙ БЛОК: апгрейд recvonly → sendrecv ПЕРЕД createAnswer ===
+      // === КЛЮЧ: до createAnswer() делаем sendrecv + replaceTrack по МЭППИНГУ транссивера ===
       try {
-        const at = this.localStream?.getAudioTracks?.()[0];
-
-        // 1) найдём ТРЕБУЕМЫЙ аудио-транссивер (тот, что браузер создал под m=audio из офера)
-        const tx = pc.getTransceivers().find(t =>
-          t.receiver?.track?.kind === 'audio' || t.mid === '0' || t.sender?.track?.kind === 'audio'
-        );
-
-        if (tx) {
-          // direction задаёт, ЧТО мы будем предлагать/отвечать (см. MDN)
-          tx.direction = 'sendrecv'; // локальное предпочтение до createAnswer
-          peer.audioTransceiver = tx;
-
-          // 2) Втыкаем локальный микрофон именно в ЭТОТ sender
-          if (at) {
-            await tx.sender.replaceTrack(at);
-            this._log(`🔧 (offer) ensured local audio track on mapped transceiver for ${peerId.slice(0,8)}`);
-          } else {
-            // запасной вариант — если стрима нет, попробуем получить и привязать
-            const s2 = await this._getLocalMedia();
-            if (s2) {
-              this.localStream = s2;
-              const t2 = s2.getAudioTracks()[0];
-              if (t2) { await tx.sender.replaceTrack(t2); }
-            }
-          }
-        } else if (at) {
-          // Если почему-то не нашли подходящий transceiver — классический путь
-          pc.addTrack(at, this.localStream); // addTrack реюзает "recvonly" transceiver (unified-plan)
-          this._log(`🪄 addTrack fallback used for ${peerId.slice(0,8)}`);
+        let at = this.localStream?.getAudioTracks?.()[0];
+        if (!at) {
+          const s = await this._getLocalMedia();
+          if (s) { this.localStream = s; at = s.getAudioTracks()[0]; }
         }
+        // ищем аудио-транссивер, соответствующий m=audio из оффера
+        let tx = pc.getTransceivers().find(t => (t.receiver?.track?.kind === 'audio') || t.mid === '0');
+        if (!tx) {
+          // почти не должно случаться, но подстрахуемся
+          tx = pc.addTransceiver('audio', { direction: 'sendrecv' });
+        }
+        tx.direction = 'sendrecv';
+        if (at) await tx.sender.replaceTrack(at);
+        peer.audioTransceiver = tx;
+        this._log(`🔧 (answer) ensured sendrecv + local track for ${peerId.slice(0,8)}`);
       } catch (e) {
-        this._log(`ensure sendrecv before answer: ${e?.name || e}`);
+        this._log(`ensure sendrecv before answer: ${e?.name||e}`);
       }
-      // === конец ключевого блока ===
+      // ========================================================
 
-      const answer = await pc.createAnswer(); // теперь ответ содержит sendrecv и msid
+      const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       sendSignal(this.ws, 'answer', { sdp: answer.sdp }, this.userId, peerId);
       this._log(`📤 Answered offer from ${peerId.slice(0,8)}\n${answer.sdp}`);
 
       if (this.localStream) { await this.updateAllPeerTracks(); }
     } catch (e) {
-      this._log(`SRD(offer)[${peerId.slice(0,8)}]: ${e?.name || e}`);
+      this._log(`SRD(offer)[${peerId.slice(0,8)}]: ${e?.name||e}`);
     }
 
   } else if (msg.signalType === 'answer') {
@@ -299,7 +283,7 @@ async handleSignal(msg, mediaBinder) {
       if (this.localStream) { await this.updateAllPeerTracks(); }
       this._log(`Processed answer from ${peerId.slice(0,8)}`);
     } catch (e) {
-      this._log(`SRD(answer)[${peerId.slice(0,8)}]: ${e?.name || e}`);
+      this._log(`SRD(answer)[${peerId.slice(0,8)}]: ${e?.name||e}`);
     }
 
   } else if (msg.signalType === 'ice-candidate' || msg.signalType === 'ice_candidate') {
@@ -307,11 +291,10 @@ async handleSignal(msg, mediaBinder) {
     if (!peer.remoteSet) peer.candidates.push(msg.candidate);
     else {
       try { await pc.addIceCandidate(msg.candidate); }
-      catch (e) { this._log(`addIce[${peerId.slice(0,8)}]: ${e?.name || e}`); }
+      catch (e) { this._log(`addIce[${peerId.slice(0,8)}]: ${e?.name||e}`); }
     }
   }
 }
-
 
 
 
@@ -325,24 +308,64 @@ async handleSignal(msg, mediaBinder) {
     }
   }
 
-  async startOffer(peerId){
-    await this.init(this.ws, this.userId);
-    const st = await this._ensurePeer(peerId);
-    if (st.makingOffer) return;
-    if (st.pc.signalingState !== 'stable'){
-      this._log(`Skip startOffer(${peerId.slice(0,8)}) in ${st.pc.signalingState}`); return;
-    }
-    if (st.polite) { this._log(`Not initiator for ${peerId.slice(0,8)}`); return; }
+async startOffer(peerId){
+  await this.init(this.ws, this.userId);
+  const st = await this._ensurePeer(peerId);
+  const pc = st.pc;
 
-    try{
-      st.makingOffer = true;
-      const offer = await st.pc.createOffer();
-      await st.pc.setLocalDescription(offer);
-      sendSignal(this.ws, 'offer', { sdp: offer.sdp }, this.userId, peerId);
-      this._log(`📤 Sent offer → ${peerId.slice(0,8)} (startOffer)\n${offer.sdp}`);
-    }catch(e){ this._log(`startOffer(${peerId.slice(0,8)}): ${e?.name||e}`); }
-    finally{ st.makingOffer = false; }
+  // анти-спам: не запускать параллельные офферы по одному пиру
+  if (this._offerLocks.get(peerId)) {
+    this._log(`startOffer(${peerId.slice(0,8)}): locked`);
+    return;
   }
+
+  // только "невежливый" инициирует
+  if (st.polite) { this._log(`Not initiator for ${peerId.slice(0,8)}`); return; }
+  if (pc.signalingState !== 'stable'){
+    this._log(`Skip startOffer(${peerId.slice(0,8)}) in ${pc.signalingState}`); return;
+  }
+
+  try{
+    this._offerLocks.set(peerId, true);
+    st.makingOffer = true;
+
+    // === КЛЮЧ: перед createOffer() гарантируем аудио-транссивер и локальный трек ===
+    let at = this.localStream?.getAudioTracks?.()[0];
+    if (!at) {
+      const s = await this._getLocalMedia();
+      if (s) { this.localStream = s; at = s.getAudioTracks()[0]; }
+    }
+
+    // найдём существующий аудио-транссивер или создадим
+    let tx = pc.getTransceivers().find(t =>
+      t.sender?.track?.kind === 'audio' || t.receiver?.track?.kind === 'audio'
+    );
+    if (!tx) {
+      tx = pc.addTransceiver('audio', { direction: 'sendrecv' });
+      this._log(`Added offer-side audio transceiver sendrecv for ${peerId.slice(0,8)}`);
+    } else {
+      tx.direction = 'sendrecv';
+    }
+    if (at) { await tx.sender.replaceTrack(at); }
+    st.audioTransceiver = tx;
+    // ============================================================================
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    sendSignal(this.ws, 'offer', { sdp: offer.sdp }, this.userId, peerId);
+    this._log(`📤 Sent offer → ${peerId.slice(0,8)} (startOffer)\n${offer.sdp}`);
+  }catch(e){
+    this._log(`startOffer(${peerId.slice(0,8)}): ${e?.name||e}`);
+    // мягкий одноразовый ретрай через 300мс при OperationError/заминке ресурсов
+    if (String(e?.name||'').includes('OperationError')) {
+      setTimeout(()=>{ this._offerLocks.delete(peerId); this.startOffer(peerId).catch(()=>{}); }, 300);
+    }
+  }finally{
+    st.makingOffer = false;
+    this._offerLocks.delete(peerId);
+  }
+}
+
 
   async toggleMic(){
     if (this.localStream) {
