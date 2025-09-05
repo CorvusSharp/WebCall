@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     TURN_URL: str | None = None
     TURN_USERNAME: str | None = None
     TURN_PASSWORD: str | None = None
+    # TURN доп переменные
+    TURN_PUBLIC_IP: str | None = None
+    TURN_REALM: str | None = None
+
+    # Доп: пароль Postgres (может понадобиться для генерации URL или вспомогательных задач)
+    POSTGRES_PASSWORD: str | None = None
 
 
 @lru_cache()
