@@ -119,24 +119,20 @@ async function connect(){
 
   await refreshDevices();
 
-  // ПРИНУДИТЕЛЬНО запрашиваем разрешения на микрофон ДО подключения WebSocket
+  // Запрашиваем permission до WS, чтобы labels появились и autoplay был «теплее»
   try {
     log('Запрашиваем разрешение на микрофон...');
-    const tempStream = await navigator.mediaDevices.getUserMedia({ 
+    const temp = await navigator.mediaDevices.getUserMedia({ 
       audio: {
-        echoCancellation: true, 
-        noiseSuppression: true, 
-        autoGainControl: true,
+        echoCancellation: true, noiseSuppression: true, autoGainControl: true,
         deviceId: selected.mic ? { exact: selected.mic } : undefined
-      }
+      }, video: false
     });
-    
-    // Сразу останавливаем временный поток - WebRTCManager создаст свой
-    tempStream.getTracks().forEach(track => track.stop());
+    temp.getTracks().forEach(t => t.stop());
     log('Разрешение на микрофон получено');
   } catch(e) {
-    log(`Ошибка получения доступа к микрофону: ${e?.name||e}`);
-    alert('Для работы приложения необходимо разрешение на использование микрофона. Пожалуйста, разрешите доступ и попробуйте снова.');
+    log(`Ошибка доступа к микрофону: ${e?.name||e}`);
+    alert('Нужно разрешение на микрофон.');
     return;
   }
 
@@ -145,45 +141,20 @@ async function connect(){
   ws.onopen = async () => {
     log('WS connected');
     setConnectedState(true);
-    
-    // ГЛОБАЛЬНАЯ АКТИВАЦИЯ АУДИО КОНТЕКСТА - более агрессивно
+
+    // Активация аудио контекста (для autoplay)
     try {
-      // Создаём дополнительный audio элемент для "разблокировки" браузера
-      const dummyAudio = document.createElement('audio');
-      dummyAudio.volume = 0;
-      dummyAudio.muted = false;
-      dummyAudio.autoplay = true;
-      
-      // Создаём короткий аудио-сигнал
-      const audioCtx = new AudioContext();
-      const oscillator = audioCtx.createOscillator();
-      const gainNode = audioCtx.createGain();
-      
-      oscillator.connect(gainNode);
-      gainNode.connect(audioCtx.destination);
-      
-      gainNode.gain.value = 0.001; // Очень тихо
-      oscillator.frequency.value = 440;
-      oscillator.type = 'sine';
-      
-      if (audioCtx.state === 'suspended') {
-        await audioCtx.resume();
-      }
-      
-      oscillator.start();
-      oscillator.stop(audioCtx.currentTime + 0.01); // 10ms
-      
+      const ac = new AudioContext();
+      if (ac.state === 'suspended') await ac.resume();
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      gain.gain.value = 0.0001;
+      osc.connect(gain).connect(ac.destination);
+      osc.start();
+      osc.stop(ac.currentTime + 0.01);
       log('🎧 Глобальный аудио контекст агрессивно активирован');
-      
-      // Закрываем через короткое время
-      setTimeout(() => { 
-        try { audioCtx.close(); } catch {} 
-        try { dummyAudio.remove(); } catch {}
-      }, 100);
-      
-    } catch(e) {
-      log(`⚠️ Не удалось активировать глобальный аудио контекст: ${e}`);
-    }
+      setTimeout(()=>{ try{ ac.close(); }catch{} }, 200);
+    } catch(e){ log(`⚠️ Не удалось активировать аудио контекст: ${e}`); }
 
     rtc = new WebRTCManager({
       localVideo: els.localVideo,
@@ -191,10 +162,11 @@ async function connect(){
       onLog: log,
       onPeerState: (peerId, key, val) => {
         const tile = els.peersGrid.querySelector(`.tile[data-peer="${peerId}"]`);
-        if (tile && key === 'net') {
+        if (!tile) return;
+        if (key === 'net') {
           const badge = tile.querySelector('.badge.net');
           if (badge) {
-            badge.textContent = val === 'connected' ? '🟢' : val === 'connecting' ? '🟡' : '🔴';
+            badge.textContent = val === 'connected' ? '🟢' : (val === 'connecting' ? '🟡' : '🔴');
             badge.title = val;
           }
         }
@@ -204,10 +176,7 @@ async function connect(){
     if (!userId) userId = crypto.randomUUID();
 
     try{
-      await rtc.init(ws, userId, {
-        micId: selected.mic || undefined,
-        camId: selected.cam || undefined
-      });
+      await rtc.init(ws, userId, { micId: selected.mic || undefined, camId: selected.cam || undefined });
       if (isWsOpen(ws)) {
         ws.send(JSON.stringify({
           type: 'join',
@@ -222,7 +191,6 @@ async function connect(){
     try {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'signal') {
-        // НЕ вызываем повторную инициализацию здесь
         await rtc?.handleSignal(msg, attachPeerMedia);
       } else if (msg.type === 'chat') {
         const who = msg.authorName || msg.authorId || 'system';
@@ -296,41 +264,24 @@ function restoreFromUrl(){
 
 function toggleTheme(){ document.documentElement.classList.toggle('theme-light'); }
 
+// Принудительное переподключение ко всем активным
 function forceReconnectAll() {
   if (!rtc) return;
-  
   log('Принудительное переподключение ко всем участникам...');
-  
-  // Получаем всех активных участников
-  const activePeers = Array.from(els.peersGrid.querySelectorAll('.tile')).map(tile => tile.dataset.peer);
-  
+  const activePeers = Array.from(els.peersGrid.querySelectorAll('.tile')).map(t => t.dataset.peer);
   for (const peerId of activePeers) {
     const peer = rtc.getPeer(peerId);
     if (peer) {
       log(`Переподключение к ${peerId.slice(0,8)}...`);
-      
-      // Закрываем существующее соединение
       try { peer.pc?.close(); } catch {}
-      
-      // Удаляем из менеджера
       rtc.peers.delete(peerId);
-      
-      // Если мы инициатор, создаём новое соединение
-      if (userId && peerId && userId < peerId) {
-        setTimeout(() => {
-          rtc.startOffer(peerId);
-        }, 200);
-      }
+      if (userId && peerId && userId < peerId) setTimeout(() => rtc.startOffer(peerId), 200);
     }
   }
 }
 
 function diagnoseAudio() {
-  if (!rtc) {
-    log('WebRTC менеджер не инициализирован');
-    return;
-  }
-  
+  if (!rtc) return log('WebRTC менеджер не инициализирован');
   rtc.diagnoseAudio();
 }
 
@@ -351,13 +302,9 @@ function renderPresence(members){
   for (const pid of existing){
     if (!others.some(o=>o.id===pid)) {
       grid.querySelector(`.tile[data-peer="${pid}"]`)?.remove();
-      // Также очищаем peer из WebRTC менеджера
       if (rtc) {
         const peer = rtc.getPeer(pid);
-        if (peer) {
-          try { peer.pc?.close(); } catch {}
-          rtc.peers.delete(pid);
-        }
+        if (peer) { try { peer.pc?.close(); } catch {} rtc.peers.delete(pid); }
       }
     }
   }
@@ -374,109 +321,47 @@ function renderPresence(members){
     const meterBar = node.querySelector('.meter>span');
     const muteBtn = node.querySelector('.mute');
     const vol = node.querySelector('.volume');
+    const gate = document.createElement('button');
+    gate.className = 'gate';
+    gate.textContent = '▶️ Включить звук';
+    node.querySelector('.media').appendChild(gate);
 
-    // Предварительно настраиваем video элемент для автоматического воспроизведения
     video.muted = false;
     video.volume = 1.0;
     video.autoplay = true;
     video.playsInline = true;
 
     if (typeof video.setSinkId === 'function' && rtc?.getOutputDeviceId()){
-      video.setSinkId(rtc.getOutputDeviceId()).catch(()=>{});
+      video.setSinkId(rtc.getOutputDeviceId()).catch(e=> log(`setSinkId: ${e}`));
     }
 
     attachPeerMedia(peer.id, {
       onTrack: async (stream)=>{
         video.srcObject = stream;
         node.querySelector('.avatar').style.display='none';
-        
-        // Обновляем индикатор аудио
-        const audioBadge = node.querySelector('.badge.audio');
+
         const hasAudio = stream.getAudioTracks().length > 0;
-        const audioTrack = stream.getAudioTracks()[0];
-        
-        if (audioBadge) {
+        const audioBadge = node.querySelector('.badge.audio');
+        if (audioBadge){
           audioBadge.textContent = hasAudio ? '🎵' : '🔇';
           audioBadge.title = hasAudio ? 'Аудио активно' : 'Нет аудио';
         }
-        
-        // Дополнительная диагностика аудио трека
-        if (hasAudio && audioTrack) {
-          log(`🎵 Аудио трек от ${peer.name || peer.id.slice(0,8)}: enabled=${audioTrack.enabled}, readyState=${audioTrack.readyState}, muted=${audioTrack.muted}`);
-        } else {
-          log(`❌ Нет аудио от ${peer.name || peer.id.slice(0,8)}`);
-        }
-        
-        // АВТОМАТИЧЕСКОЕ воспроизведение аудио
-        video.muted = false;
-        video.volume = 1.0;
-        
-        // Устанавливаем аудио устройство вывода, если доступно
-        if (typeof video.setSinkId === 'function' && rtc?.getOutputDeviceId()){
-          try {
-            await video.setSinkId(rtc.getOutputDeviceId());
-            log(`🔊 Аудио устройство установлено для ${peer.name || peer.id.slice(0,8)}`);
-          } catch(e) {
-            log(`⚠️ Не удалось установить аудио устройство: ${e}`);
-          }
-        }
-        
-        // ПРИНУДИТЕЛЬНЫЙ запуск воспроизведения
-        try{ 
-          await video.play(); 
-          log(`▶️ Поток автоматически запущен от ${peer.name || peer.id.slice(0,8)} (аудио: ${hasAudio ? 'да' : 'нет'})`);
-          
-          // Если есть аудио - активируем контекст принудительно
-          if (hasAudio) {
-            try {
-              const audioCtx = new AudioContext();
-              if (audioCtx.state === 'suspended') {
-                await audioCtx.resume();
-              }
-              const source = audioCtx.createMediaStreamSource(stream);
-              const gain = audioCtx.createGain();
-              gain.gain.value = 1.0;
-              source.connect(gain);
-              gain.connect(audioCtx.destination);
-              
-              log(`🎧 Аудио контекст автоматически активирован для ${peer.name || peer.id.slice(0,8)}`);
-              
-              // Закрываем временный контекст через секунду
-              setTimeout(() => {
-                try { audioCtx.close(); } catch {}
-              }, 1000);
-            } catch(audioErr) {
-              log(`⚠️ Не удалось автоматически активировать аудио: ${audioErr}`);
-            }
-          }
-          
-        } catch(e){ 
-          log(`❌ Ошибка автоматического воспроизведения от ${peer.name || peer.id.slice(0,8)}: ${e}`);
-          
-          // Если автоматическое воспроизведение не удалось, пытаемся ещё раз через небольшую задержку
-          setTimeout(async () => {
-            try {
-              video.muted = false;
-              await video.play();
-              log(`✅ Повторная попытка воспроизведения успешна для ${peer.name || peer.id.slice(0,8)}`);
-            } catch(retryErr) {
-              log(`❌ Повторная попытка не удалась для ${peer.name || peer.id.slice(0,8)}: ${retryErr}`);
-            }
-          }, 500);
+
+        try{
+          await video.play();
+          gate.style.display='none';
+          log(`▶️ Поток авто-запущен от ${peer.name || peer.id.slice(0,8)} (аудио=${hasAudio})`);
+        }catch(e){
+          gate.style.display='block';
+          log(`❌ Автовоспроизведение заблокировано для ${peer.name || peer.id.slice(0,8)}: ${e?.name||e}`);
         }
       },
       onLevel: (lvl)=>{ 
         if (meterBar) meterBar.style.width = `${Math.min(1, Math.max(0, lvl)) * 100}%`;
-        
-        // Обновляем индикатор активности звука
         const audioBadge = node.querySelector('.badge.audio');
         if (audioBadge && lvl > 0.01) {
           audioBadge.textContent = '🎤';
-          setTimeout(() => {
-            if (audioBadge.textContent === '🎤') {
-              audioBadge.textContent = '🎵';
-            }
-          }, 200);
+          setTimeout(()=>{ if (audioBadge.textContent === '🎤') audioBadge.textContent = '🎵'; }, 180);
         }
       }
     });
@@ -486,21 +371,21 @@ function renderPresence(members){
       muteBtn.textContent = video.muted ? '🔊 Unmute' : '🔇 Mute';
     });
     vol.addEventListener('input', ()=>{ video.volume = parseFloat(vol.value || '1'); });
+    gate.addEventListener('click', async ()=>{
+      try{ await video.play(); gate.style.display='none'; log('🔊 Воспроизведение принудительно включено пользователем'); }
+      catch(e){ log(`play() failed: ${e?.name||e}`); }
+    });
 
     grid.appendChild(node);
 
-    // инициатор пары: у кого id меньше — делает offer
     if (my && peer?.id && my < peer.id) {
       log(`Инициируем соединение с ${peer.name || peer.id.slice(0,8)}`);
-      // Небольшая задержка для стабильности
-      setTimeout(() => {
-        rtc?.startOffer?.(peer.id);
-      }, 100);
+      setTimeout(() => rtc?.startOffer?.(peer.id), 100);
     } else {
       log(`Ожидаем соединение от ${peer.name || peer.id.slice(0,8)}`);
     }
   }
-  
+
   log(`Участников в комнате: ${others.length + 1} (включая вас)`);
 }
 
@@ -515,7 +400,6 @@ bind(els.btnToggleMic, 'click', toggleMic);
 bind(els.btnToggleCam, 'click', toggleCam);
 bind(els.btnToggleTheme, 'click', toggleTheme);
 
-// Enter для чата
 bind(els.chatInput, 'keypress', (e) => { if (e.key === 'Enter') send(); });
 
 window.addEventListener('beforeunload', ()=>{ try{ if (isWsOpen(ws)) ws.close(); }catch{} });
