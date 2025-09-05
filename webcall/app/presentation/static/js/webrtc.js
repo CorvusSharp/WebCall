@@ -99,13 +99,14 @@ export class WebRTCManager {
     return String(myId) > String(peerId);
   }
 
+
 async _ensurePeer(peerId) {
   if (this.peers.has(peerId)) return this.peers.get(peerId);
 
   const pc = new RTCPeerConnection({
     ...this.iceConfig,
     bundlePolicy: "max-bundle",
-    rtcpMuxPolicy: "require"
+    rtcpMuxPolicy: "require",
   });
 
   const state = {
@@ -118,22 +119,10 @@ async _ensurePeer(peerId) {
     ignoreOffer: false,
     polite: this._isPolite(this.userId, peerId),
     iceFailTimer: null,
+    // ⚠️ Больше НЕ создаём тут свой audio transceiver. Дадим браузеру создать
+    // его при SRD(offer), а потом "апгрейдим" именно его в handleSignal().
     audioTransceiver: null,
   };
-
-  // Аудио-транссивер: сразу фиксируем sendrecv
-  try {
-    state.audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
-    state.audioTransceiver.direction = 'sendrecv';
-    this._log(`Added audio transceiver for ${peerId.slice(0,8)} with direction: sendrecv`);
-    const at = this.localStream?.getAudioTracks?.()[0];
-    if (at) {
-      await state.audioTransceiver.sender.replaceTrack(at);
-      this._log(`✅ Replaced audio track for ${peerId.slice(0,8)}`);
-    }
-  } catch (e) {
-    this._log(`transceiver(audio)[${peerId.slice(0,8)}]: ${e?.name || e}`);
-  }
 
   pc.addEventListener("icecandidate", (e) => {
     if (e.candidate) {
@@ -159,7 +148,7 @@ async _ensurePeer(peerId) {
 
   pc.addEventListener("negotiationneeded", async () => {
     if (state.makingOffer) return;
-    if (!state.polite) { // инициатор — «невежливый»
+    if (!state.polite) {
       try {
         state.makingOffer = true;
         const offer = await pc.createOffer();
@@ -224,7 +213,6 @@ async _ensurePeer(peerId) {
 
 
 
-
 async handleSignal(msg, mediaBinder) {
   if (msg?.fromUserId && this.userId && msg.fromUserId === this.userId) return;
   if (msg?.targetUserId && this.userId && msg.targetUserId !== this.userId) return;
@@ -252,26 +240,48 @@ async handleSignal(msg, mediaBinder) {
       peer.remoteSet = true;
       await this._flushQueuedCandidates(peerId);
 
-      // ⬇️ КРИТИЧЕСКО: фиксируем sendrecv и втыкаем локальный трек ПЕРЕД createAnswer()
+      // === КЛЮЧЕВОЙ БЛОК: апгрейд recvonly → sendrecv ПЕРЕД createAnswer ===
       try {
         const at = this.localStream?.getAudioTracks?.()[0];
-        if (peer.audioTransceiver) {
-          peer.audioTransceiver.direction = 'sendrecv';
+
+        // 1) найдём ТРЕБУЕМЫЙ аудио-транссивер (тот, что браузер создал под m=audio из офера)
+        const tx = pc.getTransceivers().find(t =>
+          t.receiver?.track?.kind === 'audio' || t.mid === '0' || t.sender?.track?.kind === 'audio'
+        );
+
+        if (tx) {
+          // direction задаёт, ЧТО мы будем предлагать/отвечать (см. MDN)
+          tx.direction = 'sendrecv'; // локальное предпочтение до createAnswer
+          peer.audioTransceiver = tx;
+
+          // 2) Втыкаем локальный микрофон именно в ЭТОТ sender
           if (at) {
-            await peer.audioTransceiver.sender.replaceTrack(at);
-            this._log(`🔧 (offer) ensured local audio track for ${peerId.slice(0,8)}`);
+            await tx.sender.replaceTrack(at);
+            this._log(`🔧 (offer) ensured local audio track on mapped transceiver for ${peerId.slice(0,8)}`);
+          } else {
+            // запасной вариант — если стрима нет, попробуем получить и привязать
+            const s2 = await this._getLocalMedia();
+            if (s2) {
+              this.localStream = s2;
+              const t2 = s2.getAudioTracks()[0];
+              if (t2) { await tx.sender.replaceTrack(t2); }
+            }
           }
+        } else if (at) {
+          // Если почему-то не нашли подходящий transceiver — классический путь
+          pc.addTrack(at, this.localStream); // addTrack реюзает "recvonly" transceiver (unified-plan)
+          this._log(`🪄 addTrack fallback used for ${peerId.slice(0,8)}`);
         }
       } catch (e) {
         this._log(`ensure sendrecv before answer: ${e?.name || e}`);
       }
+      // === конец ключевого блока ===
 
-      const answer = await pc.createAnswer();
+      const answer = await pc.createAnswer(); // теперь ответ содержит sendrecv и msid
       await pc.setLocalDescription(answer);
       sendSignal(this.ws, 'answer', { sdp: answer.sdp }, this.userId, peerId);
       this._log(`📤 Answered offer from ${peerId.slice(0,8)}\n${answer.sdp}`);
 
-      // Подстрахуемся: если локальный стрим уже есть — обновим sender’ы
       if (this.localStream) { await this.updateAllPeerTracks(); }
     } catch (e) {
       this._log(`SRD(offer)[${peerId.slice(0,8)}]: ${e?.name || e}`);
@@ -286,7 +296,6 @@ async handleSignal(msg, mediaBinder) {
       await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
       peer.remoteSet = true;
       await this._flushQueuedCandidates(peerId);
-      // На всякий случай обновим треки и после ANSWER
       if (this.localStream) { await this.updateAllPeerTracks(); }
       this._log(`Processed answer from ${peerId.slice(0,8)}`);
     } catch (e) {
@@ -302,6 +311,7 @@ async handleSignal(msg, mediaBinder) {
     }
   }
 }
+
 
 
 
