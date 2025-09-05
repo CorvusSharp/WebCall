@@ -250,9 +250,19 @@ async function connect(){
     else if (msg.type === 'chat'){
       // определяем ID отправителя (Redis может присылать authorId)
       const senderId = msg.fromUserId || msg.authorId;
-  const who = msg.authorName || (senderId ? (latestUserNames[senderId] || senderId.slice(0,6)) : 'unknown');
-  const isSelf = senderId && senderId === getStableConnId();
-  appendChat(els.chat, who, msg.content, { self: !!isSelf });
+      const who = msg.authorName || (senderId ? (latestUserNames[senderId] || senderId.slice(0,6)) : 'unknown');
+      // self-эвристика: по session connId или (если сервер не прислал id) по локальному username
+      let isSelf = false;
+      const myConn = getStableConnId();
+      if (senderId && senderId === myConn) {
+        isSelf = true;
+      } else {
+        try {
+          const storedU = localStorage.getItem('wc_username');
+          if (storedU && storedU === msg.authorName) isSelf = true;
+        } catch {}
+      }
+      appendChat(els.chat, who, msg.content, { self: isSelf });
     }
   };
 
