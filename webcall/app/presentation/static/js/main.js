@@ -184,6 +184,11 @@ async function connect(){
     } catch {}
 
     await rtc.init(ws, userId, { micId: selected.mic, camId: selected.cam });
+    try{
+      const hasVideo = !!(rtc.localStream && rtc.localStream.getVideoTracks()[0] && rtc.localStream.getVideoTracks()[0].enabled);
+      const card = document.getElementById('localCard');
+      if (card) card.style.display = hasVideo ? '' : 'none';
+    }catch{}
   };
 
   ws.onmessage = async (ev) => {
@@ -376,6 +381,11 @@ function setupUI(){
     if (!rtc) return;
     const enabled = rtc.toggleCam();
     els.btnToggleCam.textContent = enabled ? 'Выкл.камеру' : 'Вкл.камеру';
+    try{
+      const hasVideo = !!(rtc.localStream && rtc.localStream.getVideoTracks()[0] && rtc.localStream.getVideoTracks()[0].enabled);
+      const card = document.getElementById('localCard');
+      if (card) card.style.display = hasVideo ? '' : 'none';
+    }catch{}
   });
   bind(els.btnDiag, 'click', ()=> rtc?.diagnoseAudio());
   bind(els.btnToggleTheme, 'click', ()=>{

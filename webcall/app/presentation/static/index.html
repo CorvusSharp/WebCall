@@ -14,9 +14,6 @@
           <span class="title">WebCall</span>
         </div>
         <nav class="actions">
-          <select id="micSel" class="sel" title="Микрофон"></select>
-          <select id="camSel" class="sel" title="Камера"></select>
-          <select id="spkSel" class="sel" title="Динамики"></select>
           <button class="btn ghost" id="btnToggleTheme" title="Тема">🌓</button>
           <a class="btn ghost" href="/docs" target="_blank" rel="noreferrer">Docs</a>
         </nav>
@@ -48,6 +45,16 @@
         <div class="card">
           <h2>Статус</h2>
           <div id="connStatus"></div>
+            <div class="form-grid" style="margin-top: .5rem; gap: .5rem 1rem;">
+              <label class="row">
+                <span>Микрофон</span>
+                <select id="micSel" class="sel" title="Микрофон"></select>
+              </label>
+              <label class="row">
+                <span>Динамики</span>
+                <select id="spkSel" class="sel" title="Динамики"></select>
+              </label>
+            </div>
           <!-- Список участников комнаты -->
           <div id="membersList" class="members-list"></div>
           <div id="stats" class="logs"></div>
@@ -61,7 +68,7 @@
       </section>
 
       <section class="panel grid-3">
-        <div class="card video-card">
+        <div class="card video-card" id="localCard" style="display:none">
           <h2>Вы</h2>
           <div class="video-wrap">
             <video id="localVideo" muted playsinline></video>
@@ -77,11 +84,6 @@
           </div>
         </div>
 
-        <div class="card">
-          <h2>Инфо</h2>
-          <p>Это простое WebRTC демо для голосового чата.</p>
-          <p>ID аккаунта: <code id="accountId"></code></p>
-        </div>
       </section>
 
       <section class="card panel">
