@@ -1,6 +1,6 @@
 // main.js - entry
 import { buildWs } from './api.js';
-import { sendChat } from './signal.js';
+import { sendChat, isWsOpen } from './signal.js';
 import { WebRTCManager } from './webrtc.js';
 import { bind, setText, setEnabled, appendLog, appendChat } from './ui.js';
 
@@ -56,6 +56,8 @@ async function connect(){
   const roomId = els.roomId.value.trim();
   if (!roomId){ log('Введите Room ID'); return; }
   if (!ensureToken()) return;
+  // Закроем предыдущий сокет, если он ещё не закрыт
+  try{ if (ws && ws.readyState !== WebSocket.CLOSED) ws.close(); }catch{}
   // Диагностика устройств перед подключением и выбор аудио-выхода
   if (navigator.mediaDevices?.enumerateDevices) {
     try {
@@ -89,7 +91,9 @@ async function connect(){
       // мультипир: только инициализация локального PC состояния, без немедленного оффера
       await rtc.init(ws, userId);
       // сообщаем о входе для presence
-      ws.send(JSON.stringify({ type: 'join', fromUserId: userId }));
+      try{
+        if (isWsOpen(ws)) ws.send(JSON.stringify({ type: 'join', fromUserId: userId }));
+      }catch(e){ log(`join send failed: ${e?.name||e}`); }
     } catch (e) {
       log(`Ошибка старта WebRTC: ${e?.name || e}`);
     }
@@ -105,11 +109,13 @@ async function connect(){
       renderPresence(msg.members || []);
     }
   };
-  ws.onclose = () => { log('WS closed'); setConnectedState(false); };
+  ws.onclose = (ev) => { log(`WS closed (${ev?.code||''} ${ev?.reason||''})`); setConnectedState(false); };
 }
 
 function leave(){
   rtc?.close();
+  try{ if (isWsOpen(ws)) ws.send(JSON.stringify({ type: 'leave', fromUserId: userId })); }catch{}
+  try{ ws?.close(); }catch{}
   setConnectedState(false);
 }
 
@@ -174,14 +180,26 @@ function renderPresence(members){
     const bar = node.querySelector('.level-bar>span');
     const volume = node.querySelector('.volume');
     const muteBtn = node.querySelector('.mute');
+    const unmuteBtn = node.querySelector('.unmute-btn');
     // Attach media when first track arrives
     attachPeerMedia(peer.id, {
-      onTrack: (stream)=>{ v.srcObject = stream; node.querySelector('.avatar').style.display='none'; },
+      onTrack: async (stream)=>{
+        v.srcObject = stream; node.querySelector('.avatar').style.display='none';
+        // попытка воспроизведения; если заблокировано — показать кнопку
+        try{
+          await v.play();
+        }catch{
+          unmuteBtn.style.display='block';
+        }
+      },
       onLevel: (lvl)=>{ if (bar) bar.style.width = `${Math.min(1,Math.max(0,lvl))*100}%`; }
     });
     // Local mute/volume controls
     muteBtn.addEventListener('click', ()=>{ if (v) v.muted = !v.muted; muteBtn.textContent = v.muted? 'Unmute':'Mute'; });
     volume.addEventListener('input', ()=>{ if (v) v.volume = parseFloat(volume.value||'1'); });
+    unmuteBtn.addEventListener('click', async ()=>{
+      try{ await v.play(); unmuteBtn.style.display='none'; }catch(e){ log(`play failed: ${e?.name||e}`); }
+    });
     grid.appendChild(node);
 
     // Детерминированное правило: инициатор — у кого id строкой меньше
@@ -207,6 +225,7 @@ bind(els.btnToggleCam, 'click', toggleCam);
 bind(els.btnToggleTheme, 'click', toggleTheme);
 els.remoteMute?.addEventListener('change', ()=>{ if (els.remoteVideo) els.remoteVideo.muted = !!els.remoteMute.checked; });
 els.remoteVolume?.addEventListener('input', ()=>{ if (els.remoteVideo) els.remoteVideo.volume = parseFloat(els.remoteVolume.value||'1'); });
+window.addEventListener('beforeunload', ()=>{ try{ if (isWsOpen(ws)) ws.close(); }catch{} });
 
 // Init
 restoreFromUrl();

@@ -64,6 +64,8 @@ video{width:100%;height:100%;object-fit:cover}
 .peer-tile .media{position:relative;aspect-ratio:16/10;background:#0b1220}
 .peer-tile video{width:100%;height:100%;object-fit:cover;display:block}
 .peer-tile .avatar{position:absolute;inset:0;display:grid;place-items:center;font-size:42px;color:#94a3b8;filter:drop-shadow(0 6px 14px rgba(0,0,0,0.4))}
+.peer-tile .unmute-btn{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.6);border:1px solid var(--border);color:#fff;border-radius:999px;padding:8px 12px;backdrop-filter:blur(6px);display:none}
+.peer-tile:hover .unmute-btn{display:block}
 .peer-tile .hud{display:flex;flex-direction:column;gap:6px;padding:8px}
 .peer-tile .name{font-size:13px;color:#e5edff;letter-spacing:0.2px}
 .peer-tile .row{display:flex;gap:8px;align-items:center}

@@ -174,6 +174,12 @@ export class WebRTCManager {
     pc.addEventListener("connectionstatechange", ()=>{
       this._log(`PC(${peerId}) state: ${pc.connectionState}`);
     });
+    pc.addEventListener("iceconnectionstatechange", ()=>{
+      this._log(`ICE(${peerId}) state: ${pc.iceConnectionState}`);
+    });
+    pc.addEventListener("icegatheringstatechange", ()=>{
+      this._log(`ICE(${peerId}) gathering: ${pc.iceGatheringState}`);
+    });
     this.peers.set(peerId, state);
     return state;
   }
