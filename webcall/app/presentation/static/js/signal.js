@@ -1,4 +1,4 @@
-// signal.js — WebSocket helpers
+// signal.js — WebSocket helpers (добавлены повторы и лог)
 function isWsOpen(ws) {
   return ws && ws.readyState === WebSocket.OPEN;
 }
