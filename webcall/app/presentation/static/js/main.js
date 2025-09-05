@@ -1,6 +1,6 @@
 // main.js — вход (исправлено: логируем адрес WS, кнопка диагностики, стабильные presence/инициация)
 import { buildWs } from './api.js';
-import { sendChat, isWsOpen } from './signal.js';
+import { sendChat, isWsOpen, sendPing } from './signal.js';
 import { WebRTCManager } from './webrtc.js';
 import { bind, setText, setEnabled, appendLog, appendChat } from './ui.js';
 
@@ -162,7 +162,7 @@ async function connect(){
     setConnectedState(true);
     if (reconnectTimeout) clearTimeout(reconnectTimeout);
     if (pingTimer) clearInterval(pingTimer);
-    pingTimer = setInterval(()=> _safeSend(ws, {type:'ping'}), 30000);
+    pingTimer = setInterval(()=> sendPing(ws), 30000);
 
     await rtc.init(ws, userId, { micId: selected.mic, camId: selected.cam });
   };
@@ -273,9 +273,9 @@ function setupUI(){
     }
   });
   bind(els.chatInput, 'keydown', (e)=>{ if (e.key==='Enter') els.btnSend.click() });
-  bind(els.btnToggleMic, 'click', ()=>{
+  bind(els.btnToggleMic, 'click', async ()=>{
     if (!rtc) return;
-    const enabled = rtc.toggleMic();
+    const enabled = await rtc.toggleMic();
     els.btnToggleMic.textContent = enabled ? 'Выкл.микро' : 'Вкл.микро';
   });
   bind(els.btnToggleCam, 'click', ()=>{

@@ -300,13 +300,27 @@ async handleSignal(msg, mediaBinder){
     finally{ st.makingOffer = false; }
   }
 
-  toggleMic(){
-    if (!this.localStream) { this._log('Нет локального потока для микрофона'); return false; }
-    const tr = this.localStream.getAudioTracks()[0];
-    if (!tr) { this._log('Нет аудио трека для переключения'); return false; }
-    tr.enabled = !tr.enabled;
-    this._log(`Микрофон ${tr.enabled ? 'включён' : 'выключен'}`);
-    return tr.enabled;
+  async toggleMic(){
+    if (this.localStream) {
+      const tr = this.localStream.getAudioTracks()[0];
+      if (!tr) { this._log('Нет аудио трека для переключения'); return false; }
+      tr.enabled = !tr.enabled;
+      this._log(`Микрофон ${tr.enabled ? 'включён' : 'выключен'}`);
+      return tr.enabled;
+    } else {
+      this._log('Нет локального потока, пытаюсь получить...');
+      const stream = await this._getLocalMedia();
+      if (stream) {
+        this.localStream = stream;
+        if (this.localVideo) this.localVideo.srcObject = stream;
+        await this.updateAllPeerTracks(); // Add this function
+        this._log('Микрофон включён (поток получен)');
+        return true;
+      } else {
+        this._log('Не удалось получить доступ к микрофону');
+        return false;
+      }
+    }
   }
   toggleCam(){
     if (!this.localStream) { this._log('Нет локального потока для камеры'); return false; }
@@ -344,6 +358,25 @@ async handleSignal(msg, mediaBinder){
       if (this.localStream) this.localStream.getTracks().forEach(t=>t.stop());
       this.localStream = null;
       this._log('WebRTC соединения закрыты');
+  }
+
+  async updateAllPeerTracks() {
+      if (!this.localStream) return;
+      const audioTrack = this.localStream.getAudioTracks()[0];
+      if (!audioTrack) return;
+
+      this._log('Обновляю треки для всех пиров...');
+      for (const [peerId, peer] of this.peers) {
+          const sender = peer.pc.getSenders().find(s => s.track?.kind === 'audio');
+          if (sender) {
+              try {
+                  await sender.replaceTrack(audioTrack);
+                  this._log(`✅ Обновлен аудио-трек для ${peerId.slice(0,8)}`);
+              } catch (e) {
+                  this._log(`❌ Ошибка обновления трека для ${peerId.slice(0,8)}: ${e}`);
+              }
+          }
+      }
   }
 
   _setupPeerLevel(peerId, state){

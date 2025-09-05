@@ -22,6 +22,10 @@ function _safeSend(ws, obj, maxRetries = 3) {
   }
 }
 
+export function sendPing(ws) {
+  _safeSend(ws, { type: "ping" });
+}
+
 /**
  * @param {WebSocket} ws
  * @param {"offer"|"answer"|"ice-candidate"} type
