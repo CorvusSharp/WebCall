@@ -69,6 +69,7 @@ async function doRegister(){
   const password = els.regPassword.value;
   try{
     await register(email, username, password);
+  try { localStorage.setItem('wc_username', username); } catch {}
     log('Регистрация успешна. Выполняем вход...');
     const data = await login(email, password);
     applyPostLogin(data.access_token);

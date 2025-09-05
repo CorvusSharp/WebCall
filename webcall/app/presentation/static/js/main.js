@@ -18,6 +18,7 @@ let isReconnecting = false;
 let selected = { mic: null, cam: null, spk: null };
 let audioUnlocked = false;
 let globalAudioCtx = null;
+let latestUserNames = {}; // { connId: displayName }
 
 const els = {
   roomId: document.getElementById('roomId'),
@@ -177,7 +178,10 @@ async function connect(){
     pingTimer = setInterval(()=> sendPingSafe(ws), 30000);
 
     // Сообщаем серверу о подключении (presence)
-    try { ws.send(JSON.stringify({ type: 'join', fromUserId: userId })); } catch {}
+    try {
+      const storedUname = localStorage.getItem('wc_username') || undefined;
+      ws.send(JSON.stringify({ type: 'join', fromUserId: userId, username: storedUname }));
+    } catch {}
 
     await rtc.init(ws, userId, { micId: selected.mic, camId: selected.cam });
   };
@@ -189,16 +193,24 @@ async function connect(){
       await rtc.handleSignal(msg, bindPeerMedia);
     }
     else if (msg.type === 'presence'){
-      log(`В комнате: ${msg.users.join(', ')}`);
+      latestUserNames = msg.userNames || {};
+      const readable = msg.users.map(u => latestUserNames[u] || u.slice(0,6));
+      log(`В комнате: ${readable.join(', ')}`);
       // отображаем список участников
       if (els.membersList) {
         els.membersList.innerHTML = '';
         msg.users.forEach(u => {
           const d = document.createElement('div');
-          d.textContent = u.slice(0,6);
+          d.textContent = latestUserNames[u] || u.slice(0,6);
           els.membersList.appendChild(d);
         });
       }
+      // обновим подписи на уже созданных тайлах
+      document.querySelectorAll('.tile').forEach(tile => {
+        const pid = tile.getAttribute('data-peer');
+        const nm = tile.querySelector('.name');
+        if (pid && nm) nm.textContent = latestUserNames[pid] || `user-${pid.slice(0,6)}`;
+      });
       const myId = getStableConnId();
       for (const peerId of msg.users){
         if (peerId !== myId) {
@@ -219,7 +231,7 @@ async function connect(){
     else if (msg.type === 'chat'){
       // определяем ID отправителя (Redis может присылать authorId)
       const senderId = msg.fromUserId || msg.authorId;
-      const who = msg.authorName || (senderId ? senderId.slice(0,6) : 'unknown');
+      const who = msg.authorName || (senderId ? (latestUserNames[senderId] || senderId.slice(0,6)) : 'unknown');
       appendChat(els.chat, who, msg.content);
     }
   };
@@ -255,8 +267,9 @@ function bindPeerMedia(peerId){
   const video = tile.querySelector('video');
   const audio = tile.querySelector('audio');
   const name = tile.querySelector('.name');
+  const vol = tile.querySelector('input[type="range"][name="volume"]');
   const level = tile.querySelector('.level-bar');
-  name.textContent = `user-${peerId.slice(0,6)}`;
+  name.textContent = latestUserNames[peerId] || `user-${peerId.slice(0,6)}`;
 
   // включаем безопасное авто-воспроизведение
   if (video) { video.playsInline = true; video.autoplay = true; }
@@ -269,7 +282,7 @@ function bindPeerMedia(peerId){
       if (audio) {
         audio.srcObject = stream;
         audio.muted = false;
-        audio.volume = 1.0;
+  audio.volume = vol ? (Math.min(100, Math.max(0, Number(vol.value)||100)) / 100) : 1.0;
         audio.play().catch((e)=>{
           log(`audio.play() failed for ${peerId.slice(0,6)}: ${e?.name||e}`);
           unlockAudioPlayback();
@@ -287,6 +300,13 @@ function bindPeerMedia(peerId){
       }
     }
   });
+
+  if (vol && audio){
+    vol.addEventListener('input', ()=>{
+      const v = Math.min(100, Math.max(0, Number(vol.value)||0));
+      audio.volume = v/100;
+    });
+  }
 }
 
 

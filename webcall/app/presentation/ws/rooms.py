@@ -145,15 +145,29 @@ async def ws_room(
                 except Exception:
                     # if invalid id, skip presence for this socket
                     continue
+
+                # Try to attach real username from token subject
+                real_name: str | None = None
+                if token:
+                    with contextlib.suppress(Exception):
+                        payload = tokens.decode_token(token)
+                        # subject is a UUID of user id
+                        uid = UUID(payload.get("sub")) if payload.get("sub") else None
+                        if uid:
+                            user = await users.get_by_id(uid)
+                            if user:
+                                real_name = user.username
+
                 _ws_conn[websocket] = conn_id
                 _room_members[room_uuid].add(conn_id)
-                uname = data.get("username") or str(conn_id)[:8]
+                uname = (data.get("username") or real_name or str(conn_id)[:8])
                 _display_names[conn_id] = uname
-                # broadcast presence list to room
+                # broadcast presence list to room (with id->name map)
                 members = [str(u) for u in sorted(_room_members[room_uuid], key=str)]
+                names = { str(uid): _display_names.get(uid, str(uid)[:8]) for uid in _room_members[room_uuid] }
                 for ws in list(_room_clients.get(room_uuid, set())):
                     with contextlib.suppress(Exception):
-                        await ws.send_json({"type": "presence", "users": members})
+                        await ws.send_json({"type": "presence", "users": members, "userNames": names})
             elif data.get("type") == "leave":
                 # Graceful close to avoid 1005/1006 on client
                 with contextlib.suppress(Exception):
@@ -212,6 +226,7 @@ async def ws_room(
                     _display_names.pop(uid)
             
             members = [str(u) for u in sorted(_room_members[room_uuid], key=str)]
+            names = { str(mid): _display_names.get(UUID(mid), mid[:8]) if isinstance(mid, str) else _display_names.get(mid, str(mid)[:8]) for mid in _room_members[room_uuid] }
             for ws in list(_room_clients.get(room_uuid, set())):
                 with contextlib.suppress(Exception):
-                    await ws.send_json({"type": "presence", "users": members})
+                    await ws.send_json({"type": "presence", "users": members, "userNames": names})
