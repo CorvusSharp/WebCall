@@ -14,7 +14,8 @@ export function appendLog(container, msg){
 
 export function appendChat(container, who, text){
   const line = document.createElement('div');
-  line.innerHTML = `<strong>${who}:</strong> ${escapeHtml(text)}`;
+  line.classList.add('chat-line');
+  line.innerHTML = `<span class="chat-who">${escapeHtml(who)}:</span> <span class="chat-text">${escapeHtml(text)}</span>`;
   container.appendChild(line);
   container.scrollTop = container.scrollHeight;
 }

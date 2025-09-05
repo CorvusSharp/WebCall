@@ -109,7 +109,7 @@ export class WebRTCManager {
 
     // Создаем трансивер с направлением 'sendrecv' если есть локальный трек, и 'recvonly' если нет.
     const audioTransceiver = pc.addTransceiver('audio', {
-      direction: hasLocalAudio ? 'sendrecv' : 'recvonly'
+      direction: 'sendrecv'
     });
     this._log(`Added audio transceiver for ${peerId.slice(0,8)} with direction: ${audioTransceiver.direction}`);
 

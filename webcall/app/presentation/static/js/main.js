@@ -193,7 +193,8 @@ async function connect(){
       if (tile) tile.remove();
     }
     else if (msg.type === 'chat'){
-      appendChat(els.chat, msg.fromUserId.slice(0,6), msg.content);
+      const who = msg.authorName || (msg.fromUserId ? msg.fromUserId.slice(0,6) : 'unknown');
+      appendChat(els.chat, who, msg.content);
     }
   };
 

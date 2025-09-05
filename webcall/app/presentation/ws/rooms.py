@@ -135,45 +135,32 @@ async def ws_room(
                 uname = data.get("username") or str(conn_id)[:8]
                 _display_names[conn_id] = uname
                 # broadcast presence list to room
-                members = []
-                for u in sorted(_room_members[room_uuid], key=str):
-                    name = _display_names.get(u) or str(u)[:8]
-                    members.append({"id": str(u), "name": name})
+                members = [str(u) for u in sorted(_room_members[room_uuid], key=str)]
                 for ws in list(_room_clients.get(room_uuid, set())):
                     with contextlib.suppress(Exception):
-                        await ws.send_json({"type": "presence", "members": members})
+                        await ws.send_json({"type": "presence", "users": members})
             elif data.get("type") == "leave":
                 break
             elif data.get("type") == "chat":
                 # Broadcast chat to all participants in room (including sender)
                 content = data.get("content")
-                author = data.get("fromUserId")
-                author_name: str | None = None
-                # Попробуем получить имя пользователя по его UUID, если он передан
-                try:
-                    if author:
-                        u = await users.get_by_id(UUID(author))
-                        if u:
-                            author_name = u.username
-                except Exception:
-                    # Не прерываем чат при ошибке, просто не заполним имя
-                    pass
+                author_id = data.get("fromUserId")
+                author_name: str | None = _display_names.get(UUID(author_id)) if author_id else None
+
                 if isinstance(bus, RedisSignalBus):
                     # Publish to Redis channel so all processes deliver the message
                     await bus.redis.publish(chat_channel, json.dumps({
-                        "authorId": author,
+                        "fromUserId": author_id,
                         "authorName": author_name,
                         "content": content
                     }))
                 else:
                     # In-process fallback (dev/test)
-                    payload = {"type": "chat", "authorId": author, "authorName": author_name, "content": content}
-                    # Backward compat for older UIs relying on 'echo'
-                    payload_with_echo = {**payload, "echo": content}
+                    payload = {"type": "chat", "fromUserId": author_id, "authorName": author_name, "content": content}
                     dead: list[WebSocket] = []
                     for ws in list(_room_clients.get(room_uuid, set())):
                         try:
-                            await ws.send_json(payload_with_echo)
+                            await ws.send_json(payload)
                         except Exception:
                             dead.append(ws)
                     # cleanup dead connections
@@ -205,10 +192,8 @@ async def ws_room(
             if uid not in _room_members.get(room_uuid, set()):
                 with contextlib.suppress(KeyError):
                     _display_names.pop(uid)
-            members = []
-            for u in sorted(_room_members[room_uuid], key=str):
-                name = _display_names.get(u) or str(u)[:8]
-                members.append({"id": str(u), "name": name})
+            
+            members = [str(u) for u in sorted(_room_members[room_uuid], key=str)]
             for ws in list(_room_clients.get(room_uuid, set())):
                 with contextlib.suppress(Exception):
-                    await ws.send_json({"type": "presence", "members": members})
+                    await ws.send_json({"type": "presence", "users": members})
