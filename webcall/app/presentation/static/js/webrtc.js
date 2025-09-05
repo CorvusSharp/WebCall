@@ -104,26 +104,15 @@ export class WebRTCManager {
       iceFailTimer: null,
     };
 
-    // Всегда добавляем аудио-трансивер с правильным направлением
-    const hasLocalAudio = this.localStream && this.localStream.getAudioTracks().length > 0;
-
-    // Создаем трансивер с направлением 'sendrecv' если есть локальный трек, и 'recvonly' если нет.
-    const audioTransceiver = pc.addTransceiver('audio', {
-      direction: 'sendrecv'
-    });
-    this._log(`Added audio transceiver for ${peerId.slice(0,8)} with direction: ${audioTransceiver.direction}`);
-
-    // Добавляем локальные треки, если они есть
-    if (hasLocalAudio) {
-      try {
-        const audioTrack = this.localStream.getAudioTracks()[0];
-        // Важно: используем уже созданный трансивер
-        if (audioTransceiver.sender) {
-          await audioTransceiver.sender.replaceTrack(audioTrack);
+    // Добавляем все локальные аудио-треки напрямую
+    if (this.localStream) {
+      for (const track of this.localStream.getAudioTracks()) {
+        try {
+          pc.addTrack(track, this.localStream);
+          this._log(`✅ Added audio track (${track.id}) for ${peerId.slice(0,8)}`);
+        } catch(e) {
+          this._log(`❌ addTrack(audio) → ${peerId.slice(0,8)}: ${e}`);
         }
-        this._log(`✅ Replaced audio track for ${peerId.slice(0,8)}`);
-      } catch (e) {
-        this._log(`❌ replaceTrack(audio) → ${peerId.slice(0,8)}: ${e}`);
       }
     }
 
