@@ -21,8 +21,9 @@ export class WebRTCManager {
     this.localStream = null;
     this.preferred = { micId: undefined, camId: undefined };
     this.iceConfig = null;
+  this.audioCtx = null; // Глобальный аудио контекст для вывода звука
 
-    // peerId -> { pc, stream, candidates:[], remoteSet, handlers, level:{ctx,analyser,raf},
+  // peerId -> { pc, stream, candidates:[], remoteSet, handlers, level:{analyser,raf,gain,volume,muted},
     //             makingOffer, ignoreOffer, polite, iceFailTimer }
     this.peers = new Map();
   }
@@ -83,7 +84,7 @@ export class WebRTCManager {
       candidates: [],
       remoteSet: false,
       handlers: null,
-      level: { ctx:null, analyser:null, raf:0 },
+  level: { analyser:null, raf:0, gain:null, volume:1, muted:false },
       makingOffer: false,
       ignoreOffer: false,
       polite: this._isPolite(this.userId, peerId),
@@ -120,7 +121,7 @@ export class WebRTCManager {
       this._log(`Получен трек от ${peerId.slice(0,8)}: ${e.track.kind} (enabled:${e.track.enabled})`);
       if (e.track && !state.stream.getTracks().some(t=>t.id===e.track.id)) state.stream.addTrack(e.track);
       if (state.handlers?.onTrack) state.handlers.onTrack(state.stream);
-      if (e.track?.kind === 'audio') this._setupPeerLevel(peerId, state);
+  if (e.track?.kind === 'audio') this._setupPeerLevel(peerId, state);
     });
 
     pc.addEventListener("negotiationneeded", async ()=>{
@@ -179,6 +180,10 @@ export class WebRTCManager {
     try{
       if (st.stream && st.stream.getTracks && st.stream.getTracks().length > 0) {
         handlers?.onTrack?.(st.stream);
+      }
+      // Если уже настроен аудио-пайплайн — отдадим контролы
+      if (st.level?.gain && handlers?.onControl) {
+        handlers.onControl(this._makeControlForPeer(st));
       }
     }catch{}
   }
@@ -370,25 +375,32 @@ export class WebRTCManager {
     for (const [, st] of this.peers){
       try{ st.pc?.close(); }catch{}
       if (st.level?.raf) cancelAnimationFrame(st.level.raf);
-      if (st.level?.ctx) try{ st.level.ctx.close(); }catch{}
       clearTimeout(st.iceFailTimer);
     }
     this.peers.clear();
     if (this.localStream) this.localStream.getTracks().forEach(t=>t.stop());
     this.localStream = null;
+  try{ await this.audioCtx?.close(); }catch{}
+  this.audioCtx = null;
     this._log('WebRTC соединения закрыты');
   }
 
   _setupPeerLevel(peerId, state){
     try{
       if (!window.AudioContext || !state.stream?.getAudioTracks().length) return;
-      if (state.level.ctx) { try{ state.level.ctx.close(); }catch{} }
       if (state.level.raf) cancelAnimationFrame(state.level.raf);
-      state.level.ctx = new AudioContext();
-      const src = state.level.ctx.createMediaStreamSource(state.stream);
-      state.level.analyser = state.level.ctx.createAnalyser();
+      if (!this.audioCtx) this.audioCtx = new AudioContext();
+      try { this.audioCtx.resume(); } catch {}
+      const src = this.audioCtx.createMediaStreamSource(state.stream);
+      state.level.analyser = this.audioCtx.createAnalyser();
       state.level.analyser.fftSize = 256;
+      state.level.gain = this.audioCtx.createGain();
+      state.level.volume = 1;
+      state.level.muted = false;
+      // Параллель: в анализатор и в выход с контролем громкости
       src.connect(state.level.analyser);
+      src.connect(state.level.gain);
+      try { state.level.gain.connect(this.audioCtx.destination); } catch {}
       const data = new Uint8Array(state.level.analyser.frequencyBinCount);
       const loop = ()=>{
         if (!state.level.analyser) return;
@@ -399,7 +411,27 @@ export class WebRTCManager {
         state.level.raf = requestAnimationFrame(loop);
       };
       state.level.raf = requestAnimationFrame(loop);
+      // Сообщим UI про контролы громкости/мьюта
+      if (state.handlers?.onControl) {
+        try { state.handlers.onControl(this._makeControlForPeer(state)); } catch {}
+      }
       this._log(`Настроен аудио анализатор для ${peerId.slice(0,8)}`);
     }catch(e){ this._log(`level[${peerId.slice(0,8)}]: ${e?.name||e}`); }
+  }
+
+  _makeControlForPeer(state){
+    const apply = ()=>{
+      if (!state.level?.gain) return;
+      const vol = Math.max(0, Math.min(1, state.level.volume ?? 1));
+      state.level.gain.gain.value = state.level.muted ? 0 : vol;
+    };
+    // Инициализация
+    apply();
+    return {
+      setVolume: (v)=>{ state.level.volume = isFinite(v) ? Math.max(0, Math.min(1, v)) : 1; apply(); },
+      setMuted: (m)=>{ state.level.muted = !!m; apply(); },
+      getVolume: ()=> state.level?.gain?.gain?.value ?? 1,
+      getMuted: ()=> !!state.level?.muted,
+    };
   }
 }

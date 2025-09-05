@@ -346,12 +346,24 @@ function renderPresence(members){
     video.playsInline = true;
     if (audioEl) {
       audioEl.autoplay = true;
-      audioEl.muted = false;
-      audioEl.volume = 1.0;
+      // По умолчанию WebAudio будет выводить звук, поэтому элемент аудио держим беззвучным как фолбэк
+      audioEl.muted = true;
+      audioEl.volume = 0.0;
       if (typeof audioEl.setSinkId === 'function' && rtc?.getOutputDeviceId()){
         audioEl.setSinkId(rtc.getOutputDeviceId()).catch(e=> log(`setSinkId: ${e}`));
       }
     }
+
+    // Фолбэк-контролы для media element; при появлении WebAudio-контролов отключим их
+    let usingCtl = false;
+    const fallbackMute = ()=>{
+      const target = audioEl || video;
+      target.muted = !target.muted;
+      muteBtn.textContent = target.muted ? '🔊 Unmute' : '🔇 Mute';
+    };
+    const fallbackVol = ()=>{ (audioEl || video).volume = parseFloat(vol.value || '1'); };
+    muteBtn.addEventListener('click', fallbackMute);
+    vol.addEventListener('input', fallbackVol);
 
     attachPeerMedia(peer.id, {
       onTrack: async (stream)=>{
@@ -367,35 +379,20 @@ function renderPresence(members){
           audioBadge.title = hasAudio ? 'Аудио активно' : 'Нет аудио';
         }
 
-        // Принудительное воспроизведение аудио без кнопок
+        // Пытаемся запустить воспроизведение фолбэка (на случай, если WebAudio не сработает)
         try{
-          // Запускаем воспроизведение через <audio>, видео может оставаться muted
-          if (audioEl) {
-            await audioEl.play();
-          } else {
-            await video.play();
-          }
+          if (audioEl) { await audioEl.play(); } else { await video.play(); }
           log(`▶️ Поток автоматически запущен от ${peer.name || peer.id.slice(0,8)} (аудио=${hasAudio})`);
         }catch(e){
-          // Если autoplay заблокирован, пробуем несколько раз
-          log(`⚠️ Autoplay заблокирован, пробуем принудительно для ${peer.name || peer.id.slice(0,8)}: ${e?.name||e}`);
-          
-          // Пробуем через промисы и click-эмуляцию
+          log(`⚠️ Autoplay заблокирован, пробуем для ${peer.name || peer.id.slice(0,8)}: ${e?.name||e}`);
           const retryPlay = async () => {
             for(let i = 0; i < 5; i++) {
               try {
-                if (audioEl) {
-                  await audioEl.play();
-                } else {
-                  video.muted = false;
-                  await video.play();
-                }
+                if (audioEl) { await audioEl.play(); } else { await video.play(); }
                 log(`✅ Воспроизведение успешно после попытки ${i+1}`);
                 return;
-              } catch (err) {
-                if (i < 4) {
-                  await new Promise(resolve => setTimeout(resolve, 200));
-                }
+              } catch {
+                if (i < 4) await new Promise(r => setTimeout(r, 200));
               }
             }
             log(`❌ Не удалось запустить автовоспроизведение после 5 попыток`);
@@ -403,22 +400,31 @@ function renderPresence(members){
           retryPlay();
         }
       },
-      onLevel: (lvl)=>{ 
+      onLevel: (lvl)=>{
         if (meterBar) meterBar.style.width = `${Math.min(1, Math.max(0, lvl)) * 100}%`;
         const audioBadge = node.querySelector('.badge.audio');
         if (audioBadge && lvl > 0.01) {
           audioBadge.textContent = '🎤';
           setTimeout(()=>{ if (audioBadge.textContent === '🎤') audioBadge.textContent = '🎵'; }, 180);
         }
+      },
+      onControl: (ctl)=>{
+        if (usingCtl) return;
+        // Отключаем фолбэк и подключаем управление через WebAudio
+        muteBtn.removeEventListener('click', fallbackMute);
+        vol.removeEventListener('input', fallbackVol);
+        usingCtl = true;
+        if (audioEl) { audioEl.muted = true; audioEl.volume = 0.0; }
+        // Инициализируем UI и обработчики
+        muteBtn.textContent = ctl.getMuted?.() ? '🔊 Unmute' : '🔇 Mute';
+        vol.addEventListener('input', ()=> ctl.setVolume(parseFloat(vol.value || '1')));
+        muteBtn.addEventListener('click', ()=>{
+          const nowMuted = !ctl.getMuted?.();
+          ctl.setMuted(nowMuted);
+          muteBtn.textContent = nowMuted ? '🔊 Unmute' : '🔇 Mute';
+        });
       }
     });
-
-    muteBtn.addEventListener('click', ()=>{
-      const target = audioEl || video;
-      target.muted = !target.muted;
-      muteBtn.textContent = target.muted ? '🔊 Unmute' : '🔇 Mute';
-    });
-    vol.addEventListener('input', ()=>{ (audioEl || video).volume = parseFloat(vol.value || '1'); });
 
     grid.appendChild(node);
 
