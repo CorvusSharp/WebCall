@@ -41,7 +41,6 @@ const els = {
   btnDiag: document.getElementById('btnDiag'),
   btnToggleTheme: document.getElementById('btnToggleTheme'),
   membersList: document.getElementById('membersList'), // legacy (removed section)
-  participantsVolumes: document.getElementById('participantsVolumes'),
 };
 
 // Безопасный пинг: используем экспорт из signal.js, либо локальный fallback
@@ -237,7 +236,6 @@ async function connect(){
           await rtc.startOffer(peerId);
         }
       }
-  rebuildParticipantsVolumes();
     }
     else if (msg.type === 'user_joined'){
       log(`Присоединился: ${msg.userId}`);
@@ -247,7 +245,6 @@ async function connect(){
       log(`Отключился: ${msg.userId}`);
       const tile = document.querySelector(`.tile[data-peer="${msg.userId}"]`);
       if (tile) tile.remove();
-  rebuildParticipantsVolumes();
     }
     else if (msg.type === 'chat'){
       // определяем ID отправителя (Redis может присылать authorId)
@@ -330,7 +327,7 @@ function bindPeerMedia(peerId){
     });
   }
 
-  rebuildParticipantsVolumes();
+  // (participants volumes removed)
 }
 
 
@@ -366,48 +363,12 @@ function leave(){
   if (rtc) { rtc.close(); rtc = null; }
   setConnectedState(false);
   els.peersGrid.innerHTML = '';
-  if (els.participantsVolumes) els.participantsVolumes.innerHTML = '';
+  // (participants volumes removed)
   log('Отключено');
 }
 
 // ===== Participants volumes list
-function rebuildParticipantsVolumes(){
-  const wrap = els.participantsVolumes;
-  if (!wrap) return;
-  wrap.innerHTML = '';
-  if (!rtc || !rtc.peers) return;
-  const myId = getStableConnId();
-  for (const [peerId, st] of rtc.peers.entries()){
-    if (peerId === myId) continue;
-    const tile = document.querySelector(`.tile[data-peer="${peerId}"]`);
-    const audioEl = tile?.querySelector('audio');
-    const name = latestUserNames[peerId] || `user-${peerId.slice(0,6)}`;
-    const row = document.createElement('div');
-    row.className = 'participant-volume';
-    const label = document.createElement('div');
-    label.className = 'pv-name';
-    label.textContent = name;
-    const slider = document.createElement('input');
-    slider.type = 'range';
-    slider.min = '0';
-    slider.max = '100';
-    slider.step = '1';
-    slider.value = '100';
-    if (audioEl) {
-      try{ slider.value = Math.round((audioEl.volume||1)*100); }catch{}
-    }
-    slider.addEventListener('input', ()=>{
-      const v = Math.min(100, Math.max(0, Number(slider.value)||0));
-      if (audioEl) audioEl.volume = v/100;
-      // также обновим слайдер в плитке (если есть)
-      const tileSlider = tile?.querySelector('input[type="range"][name="volume"]');
-      if (tileSlider) tileSlider.value = v;
-    });
-    row.appendChild(label);
-    row.appendChild(slider);
-    wrap.appendChild(row);
-  }
-}
+  // (participants volumes feature removed)
 
 // ===== UI
 function setupUI(){
