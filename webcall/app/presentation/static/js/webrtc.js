@@ -23,7 +23,8 @@ export class WebRTCManager {
     this.unmuteButton = opts.unmuteButton || null;
 
     this.onLog = opts.onLog || (() => {});
-    this.onConnected = opts.onConnected || (() => {});
+  this.onConnected = opts.onConnected || (() => {});
+  this.onRemoteAudioLevel = opts.onRemoteAudioLevel || (() => {});
     this.onDisconnected = opts.onDisconnected || (() => {});
 
     // внутренние флаги
@@ -37,6 +38,9 @@ export class WebRTCManager {
     this._candidateQueue = [];
     this._started = false;
     this._playbackArmed = false;
+  this._audioCtx = null;
+  this._analyser = null;
+  this._raf = 0;
 
     // подготовка media-элемента
     if (this.remoteVideo) {
@@ -95,23 +99,15 @@ export class WebRTCManager {
       }
     };
 
-    // 1) audio+video (с голосовыми улучшениями)
-    this._log("Trying getUserMedia: audio+video");
-    let stream = await tryGet({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: true,
-    });
-    if (stream) return stream;
-
-    // 2) только аудио
+  // 1) по умолчанию ТОЛЬКО АУДИО (камера выключена)
     this._log("Trying getUserMedia: audio only");
-    stream = await tryGet({
+  let stream = await tryGet({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       video: false,
     });
     if (stream) return stream;
 
-    // 3) только видео
+  // 2) попытка только видео (если нет микрофона)
     this._log("Trying getUserMedia: video only");
     stream = await tryGet({ audio: false, video: true });
     if (stream) return stream;
@@ -233,6 +229,11 @@ export class WebRTCManager {
         };
         this.remoteVideo.addEventListener("loadedmetadata", once, { once: true });
       }
+
+      // Start measuring remote audio level when audio arrives
+      if (e.track?.kind === 'audio') {
+        this._setupAudioLevelMeter();
+      }
     });
   }
 
@@ -328,8 +329,29 @@ export class WebRTCManager {
 
   toggleCam() {
     if (!this.localStream) return false;
-    const track = this.localStream.getVideoTracks()[0];
-    if (!track) return false;
+    let track = this.localStream.getVideoTracks()[0];
+    if (!track) {
+      // Ленивая инициализация камеры
+      navigator.mediaDevices.getUserMedia({ video: true, audio: false }).then((camStream) => {
+        const [videoTrack] = camStream.getVideoTracks();
+        if (!videoTrack) return false;
+        // добавить в локальный стрим
+        this.localStream.addTrack(videoTrack);
+        if (this.localVideo && this.localVideo.srcObject) {
+          // обновить локальный preview
+          const s = /** @type {MediaStream} */ (this.localVideo.srcObject);
+          s.addTrack(videoTrack);
+        } else if (this.localVideo) {
+          const s2 = new MediaStream([...(this.localStream.getTracks())]);
+          this.localVideo.srcObject = s2;
+        }
+        // добавить sender в PC
+        try { this.pc.addTrack(videoTrack, this.localStream); } catch {}
+      }).catch((e)=>{
+        this._log(`Camera init failed: ${e?.name||e}`);
+      });
+      return true;
+    }
     track.enabled = !track.enabled;
     return track.enabled;
   }
@@ -354,6 +376,11 @@ export class WebRTCManager {
       try { this.remoteVideo.pause(); } catch {}
       this.remoteVideo.srcObject = null;
     }
+  if (this._raf) cancelAnimationFrame(this._raf);
+  this._raf = 0;
+  try{ this._audioCtx?.close(); }catch{}
+  this._audioCtx = null;
+  this._analyser = null;
   }
 
   _armPlaybackOnGesture() {
@@ -391,5 +418,32 @@ export class WebRTCManager {
     window.addEventListener("click", resume, { once: true });
     window.addEventListener("keydown", resume, { once: true });
     window.addEventListener("touchstart", resume, { once: true });
+  }
+
+  _setupAudioLevelMeter(){
+    try{
+      if (!this.remoteStream || !this.remoteStream.getAudioTracks().length) return;
+      if (!window.AudioContext) return;
+      if (!this._audioCtx) this._audioCtx = new AudioContext();
+      const src = this._audioCtx.createMediaStreamSource(this.remoteStream);
+      this._analyser = this._audioCtx.createAnalyser();
+      this._analyser.fftSize = 256;
+      src.connect(this._analyser);
+      const data = new Uint8Array(this._analyser.frequencyBinCount);
+      const loop = ()=>{
+        this._analyser.getByteTimeDomainData(data);
+        // compute rms
+        let sum = 0;
+        for (let i=0;i<data.length;i++){
+          const v = (data[i]-128)/128;
+          sum += v*v;
+        }
+        const rms = Math.sqrt(sum/data.length); // 0..1
+        this.onRemoteAudioLevel(rms);
+        this._raf = requestAnimationFrame(loop);
+      };
+      if (this._raf) cancelAnimationFrame(this._raf);
+      this._raf = requestAnimationFrame(loop);
+    }catch(e){ this._log(`level meter error: ${e?.name||e}`); }
   }
 }

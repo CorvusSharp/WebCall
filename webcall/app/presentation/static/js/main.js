@@ -1,5 +1,5 @@
 // main.js - entry
-import { buildWs, login as loginApi } from './api.js';
+import { buildWs } from './api.js';
 import { sendChat } from './signal.js';
 import { WebRTCManager } from './webrtc.js';
 import { bind, setText, setEnabled, appendLog, appendChat } from './ui.js';
@@ -11,9 +11,6 @@ let outputDeviceId = null;
 let userId = null;
 
 const els = {
-  email: document.getElementById('email'),
-  password: document.getElementById('password'),
-  btnLogin: document.getElementById('btnLogin'),
   roomId: document.getElementById('roomId'),
   btnConnect: document.getElementById('btnConnect'),
   btnLeave: document.getElementById('btnLeave'),
@@ -27,6 +24,8 @@ const els = {
   btnToggleCam: document.getElementById('btnToggleCam'),
   localVideo: document.getElementById('localVideo'),
   remoteVideo: document.getElementById('remoteVideo'),
+  remoteMute: document.getElementById('remoteMute'),
+  remoteVolume: document.getElementById('remoteVolume'),
   btnToggleTheme: document.getElementById('btnToggleTheme'),
 };
 
@@ -40,22 +39,22 @@ function setConnectedState(connected){
   setEnabled(els.btnToggleCam, connected);
 }
 
-async function login(){
-  const email = els.email.value.trim();
-  const password = els.password.value;
-  try{
-    const data = await loginApi(email, password);
-    token = data.access_token;
-  try{ userId = JSON.parse(atob(token.split('.')[1])).sub; }catch{}
-    log('Вход выполнен');
-  }catch(e){
-    log(String(e));
+function ensureToken(){
+  token = localStorage.getItem('wc_token');
+  if (!token){
+    const params = new URLSearchParams({ redirect: '/call' });
+    if (els.roomId.value) params.set('room', els.roomId.value);
+    location.href = `/auth?${params.toString()}`;
+    return false;
   }
+  try{ userId = JSON.parse(atob(token.split('.')[1])).sub; }catch{}
+  return true;
 }
 
 async function connect(){
   const roomId = els.roomId.value.trim();
   if (!roomId){ log('Введите Room ID'); return; }
+  if (!ensureToken()) return;
   // Диагностика устройств перед подключением и выбор аудио-выхода
   if (navigator.mediaDevices?.enumerateDevices) {
     try {
@@ -82,6 +81,11 @@ async function connect(){
       onLog: log,
       onConnected: ()=>log('P2P connected'),
       onDisconnected: ()=>log('P2P disconnected'),
+      onRemoteAudioLevel: (lvl)=>{
+        const pct = Math.min(1, Math.max(0, lvl)) * 100;
+        const bar = document.querySelector('#remoteLevel>span');
+        if (bar) bar.style.width = `${pct}%`;
+      }
     });
     if (!userId){
       // dev/test: временный случайный id (для работы без логина)
@@ -98,8 +102,8 @@ async function connect(){
     if (msg.type === 'signal') {
       await rtc?.handleSignal(msg);
     } else if (msg.type === 'chat') {
-  const who = msg.authorName || msg.authorId || 'system';
-  appendChat(els.chat, who, msg.content || msg.echo || '');
+      const who = msg.authorName || msg.authorId || 'system';
+      appendChat(els.chat, who, msg.content || msg.echo || '');
     }
   };
   ws.onclose = () => { log('WS closed'); setConnectedState(false); };
@@ -111,9 +115,9 @@ function leave(){
 }
 
 function copyLink(){
-  const url = new URL(location.href);
-  url.searchParams.set('room', els.roomId.value.trim());
-  navigator.clipboard.writeText(url.toString());
+  const rid = els.roomId.value.trim();
+  const pretty = `${location.origin}/call/${encodeURIComponent(rid)}`;
+  navigator.clipboard.writeText(pretty);
   log('Ссылка скопирована');
 }
 
@@ -121,7 +125,6 @@ function send(){
   const text = els.chatInput.value.trim();
   if (!text) return;
   sendChat(ws, text, userId);
-  // Не добавляем сразу в чат: сервер пришлёт широковещательное сообщение с authorId
   els.chatInput.value='';
 }
 
@@ -138,7 +141,11 @@ function toggleCam(){
 function restoreFromUrl(){
   const url = new URL(location.href);
   const rid = url.searchParams.get('room');
-  if (rid) els.roomId.value = rid;
+  if (rid) { els.roomId.value = rid; return; }
+  const parts = location.pathname.split('/').filter(Boolean);
+  if (parts[0] === 'call' && parts[1]) {
+    els.roomId.value = decodeURIComponent(parts[1]);
+  }
 }
 
 function toggleTheme(){
@@ -146,7 +153,6 @@ function toggleTheme(){
 }
 
 // Events
-bind(els.btnLogin, 'click', login);
 bind(els.btnConnect, 'click', connect);
 bind(els.btnLeave, 'click', leave);
 bind(els.btnCopyLink, 'click', copyLink);
@@ -154,7 +160,11 @@ bind(els.btnSend, 'click', send);
 bind(els.btnToggleMic, 'click', toggleMic);
 bind(els.btnToggleCam, 'click', toggleCam);
 bind(els.btnToggleTheme, 'click', toggleTheme);
+els.remoteMute?.addEventListener('change', ()=>{ if (els.remoteVideo) els.remoteVideo.muted = !!els.remoteMute.checked; });
+els.remoteVolume?.addEventListener('input', ()=>{ if (els.remoteVideo) els.remoteVideo.volume = parseFloat(els.remoteVolume.value||'1'); });
 
 // Init
 restoreFromUrl();
-log('Готово. Введите Room ID и нажмите Подключиться.');
+if (ensureToken()) {
+  log('Готово. Введите Room ID и нажмите Подключиться.');
+}

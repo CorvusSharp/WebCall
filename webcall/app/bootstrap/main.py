@@ -4,6 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
+from fastapi.responses import RedirectResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -80,6 +81,23 @@ def create_app() -> FastAPI:
 
     # Static demo
     app.mount("/static", StaticFiles(directory="app/presentation/static"), name="static")
+
+    # Friendly entrypoints instead of /static/index.html
+    @app.get("/", include_in_schema=False)
+    async def root_redirect():
+        return RedirectResponse(url="/call", status_code=307)
+
+    @app.get("/call", include_in_schema=False)
+    async def call_page():
+        return FileResponse("app/presentation/static/index.html")
+
+    @app.get("/call/{room_id}", include_in_schema=False)
+    async def call_page_room(room_id: str):  # room_id is used client-side from location
+        return FileResponse("app/presentation/static/index.html")
+
+    @app.get("/auth", include_in_schema=False)
+    async def auth_page():
+        return FileResponse("app/presentation/static/auth.html")
 
     @app.get("/healthz", tags=["health"])
     async def healthz():

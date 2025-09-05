@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Вход | WebCall</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <style>
+      .auth-card { max-width: 520px; margin: 10vh auto; }
+      .tabs { display:flex; gap:8px; margin-bottom:12px }
+      .tab { padding:8px 12px; border-radius:8px; border:1px solid var(--border); cursor:pointer; background:#0b1220 }
+      .tab.active { background: var(--primary); border-color: var(--primary) }
+      .hint { color: var(--muted); font-size: 13px }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <div class="card auth-card">
+        <h2>Добро пожаловать</h2>
+        <div class="tabs">
+          <button class="tab active" id="tabLogin">Вход</button>
+          <button class="tab" id="tabRegister">Регистрация</button>
+        </div>
+        <div id="formLogin" class="form-grid">
+          <label>
+            <span>Email</span>
+            <input id="loginEmail" type="email" placeholder="you@example.com" />
+          </label>
+          <label>
+            <span>Пароль</span>
+            <input id="loginPassword" type="password" placeholder="••••••••" />
+          </label>
+          <button id="btnDoLogin" class="btn primary">Войти</button>
+          <div class="hint">Если у вас нет аккаунта — перейдите на вкладку «Регистрация».</div>
+        </div>
+        <div id="formRegister" class="form-grid" style="display:none">
+          <label>
+            <span>Email</span>
+            <input id="regEmail" type="email" placeholder="you@example.com" />
+          </label>
+          <label>
+            <span>Имя пользователя</span>
+            <input id="regUsername" type="text" placeholder="Ваше имя" />
+          </label>
+          <label>
+            <span>Пароль</span>
+            <input id="regPassword" type="password" placeholder="••••••••" />
+          </label>
+          <button id="btnDoRegister" class="btn success">Зарегистрироваться</button>
+          <div class="hint">После регистрации вы будете перенаправлены в звонок.</div>
+        </div>
+        <div id="authLog" class="logs" style="margin-top:12px;min-height:60px"></div>
+      </div>
+    </main>
+    <template id="tpl-log-line">
+      <div class="log-line"><span class="time"></span><span class="msg"></span></div>
+    </template>
+    <script type="module" src="/static/js/auth.js"></script>
+  </body>
+</html>
