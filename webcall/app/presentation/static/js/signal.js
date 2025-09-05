@@ -5,7 +5,9 @@ function isWsOpen(ws) {
 
 function _safeSend(ws, obj, maxRetries = 3) {
   if (!isWsOpen(ws)) {
-    if (maxRetries > 0) setTimeout(() => _safeSend(ws, obj, maxRetries - 1), 300);
+    if (maxRetries > 0) {
+      setTimeout(() => _safeSend(ws, obj, maxRetries - 1), 300);
+    }
     return false;
   }
   try {
@@ -13,7 +15,9 @@ function _safeSend(ws, obj, maxRetries = 3) {
     return true;
   } catch (e) {
     console.warn("WS send failed:", e);
-    if (maxRetries > 0) setTimeout(() => _safeSend(ws, obj, maxRetries - 1), 300);
+    if (maxRetries > 0) {
+      setTimeout(() => _safeSend(ws, obj, maxRetries - 1), 300);
+    }
     return false;
   }
 }
