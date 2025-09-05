@@ -118,7 +118,8 @@ export class WebRTCManager {
 
     pc.addEventListener("icecandidate", (e)=>{
       if (e.candidate) {
-        sendSignal(this.ws, "ice_candidate", { candidate: e.candidate }, this.userId, peerId);
+        // Use hyphenated type to match backend enum
+        sendSignal(this.ws, "ice-candidate", { candidate: e.candidate }, this.userId, peerId);
         this._log(`🧊 Sent ICE candidate to ${peerId.slice(0,8)}: ${e.candidate.candidate}`);
       }
     });

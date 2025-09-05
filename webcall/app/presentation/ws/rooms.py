@@ -111,18 +111,33 @@ async def ws_room(
                 continue
             if data.get("type") == "signal":
                 raw_t = str(data.get("signalType") or "").strip()
-                norm_t = raw_t.replace("-", "_").replace(" ", "_").lower()
+                # Normalize to hyphen style to match SignalType values
+                norm_t = raw_t.replace(" ", "").replace("_", "-").lower()
                 if norm_t == "icecandidate":
-                    norm_t = "ice_candidate"
-                s = Signal.create(
-                    type=norm_t,
-                    sender_id=UUID(data.get("fromUserId")),
-                    room_id=room_uuid,
-                    sdp=data.get("sdp"),
-                    candidate=data.get("candidate"),
-                    target_id=UUID(data["targetUserId"]) if data.get("targetUserId") else None,
-                )
-                await bus.publish(room_uuid, s)
+                    norm_t = "ice-candidate"
+                try:
+                    s = Signal.create(
+                        type=norm_t,
+                        sender_id=UUID(data.get("fromUserId")),
+                        room_id=room_uuid,
+                        sdp=data.get("sdp"),
+                        candidate=data.get("candidate"),
+                        target_id=UUID(data["targetUserId"]) if data.get("targetUserId") else None,
+                    )
+                except Exception as e:
+                    # Do not drop WS on bad input; report error back
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Invalid signalType '{raw_t}': {e.__class__.__name__}"
+                    })
+                    continue
+                try:
+                    await bus.publish(room_uuid, s)
+                except Exception as e:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Publish error: {e.__class__.__name__}"
+                    })
             elif data.get("type") == "join":
                 # Register user presence
                 try:
@@ -140,6 +155,9 @@ async def ws_room(
                     with contextlib.suppress(Exception):
                         await ws.send_json({"type": "presence", "users": members})
             elif data.get("type") == "leave":
+                # Graceful close to avoid 1005/1006 on client
+                with contextlib.suppress(Exception):
+                    await websocket.close(code=1000, reason="Client left")
                 break
             elif data.get("type") == "chat":
                 # Broadcast chat to all participants in room (including sender)
