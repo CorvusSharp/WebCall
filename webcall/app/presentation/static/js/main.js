@@ -40,6 +40,7 @@ const els = {
   spkSel: document.getElementById('spkSel'),
   btnDiag: document.getElementById('btnDiag'),
   btnToggleTheme: document.getElementById('btnToggleTheme'),
+  btnLogout: document.getElementById('btnLogout'),
   membersList: document.getElementById('membersList'), // legacy (removed section)
 };
 
@@ -409,6 +410,17 @@ function setupUI(){
     const isDark = document.body.classList.toggle('dark');
     localStorage.setItem('theme', isDark ? 'dark' : 'light');
   });
+  if (els.btnLogout){
+    bind(els.btnLogout, 'click', ()=>{
+      try{ localStorage.removeItem('wc_token'); localStorage.removeItem('wc_username'); }catch{}
+      try{ sessionStorage.removeItem('wc_connid'); }catch{}
+      if (ws){ try{ ws.close(); }catch{} }
+      // Перенаправляем на страницу авторизации
+      const params = new URLSearchParams({ redirect: '/call' });
+      if (els.roomId.value) params.set('room', els.roomId.value);
+      location.href = `/auth?${params.toString()}`;
+    });
+  }
 
   // Fallback global unlock on any user gesture (first one only)
   const gestureUnlock = ()=>{ unlockAudioPlayback(); document.removeEventListener('click', gestureUnlock); document.removeEventListener('touchstart', gestureUnlock); };
