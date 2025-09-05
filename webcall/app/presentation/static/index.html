@@ -1,112 +1,135 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" class="theme-dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>WebCall Demo</title>
+    <title>WebCall</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <header class="app-header">
-      <div class="container header-inner">
+    <header class="topbar">
+      <div class="wrap">
         <div class="brand">
           <span class="logo" aria-hidden>●</span>
-          <span class="title">WebCall</span>
+          <span class="brand-name">WebCall</span>
         </div>
-        <nav class="actions">
-          <button class="btn ghost" id="btnToggleTheme" title="Переключить тему">🌓</button>
+        <nav class="top-actions">
+          <button id="btnToggleTheme" class="btn ghost" title="Переключить тему">🌓</button>
           <a class="btn ghost" href="/docs" target="_blank" rel="noreferrer">Docs</a>
         </nav>
       </div>
     </header>
 
-    <main class="container app-main">
-      <section class="panel grid-2">
-        <div class="card">
+    <main class="wrap layout">
+      <!-- ЛЕВАЯ КОЛОНКА -->
+      <aside class="side">
+        <section class="card">
           <h2>Комната</h2>
-          <div class="form-grid">
-            <label>
-              <span>Room ID</span>
+          <div class="grid">
+            <label class="full">
+              <span class="label">Room ID</span>
               <input id="roomId" placeholder="room-123" />
             </label>
             <div class="row">
               <button id="btnConnect" class="btn success">Подключиться</button>
               <button id="btnLeave" class="btn" disabled>Выйти</button>
-              <button id="btnCopyLink" class="btn ghost">Скопировать ссылку</button>
             </div>
+            <button id="btnCopyLink" class="btn ghost full">Скопировать ссылку</button>
             <div class="muted" id="connStatus">Не подключено</div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Устройства</h2>
+          <div class="grid">
+            <label class="full">
+              <span class="label">Микрофон</span>
+              <select id="micSel"></select>
+            </label>
+            <label class="full">
+              <span class="label">Камера</span>
+              <select id="camSel"></select>
+            </label>
+            <label class="full">
+              <span class="label">Вывод звука</span>
+              <select id="spkSel"></select>
+            </label>
+            <div class="row">
+              <button id="btnToggleMic" class="btn" disabled>🎤 Микрофон</button>
+              <button id="btnToggleCam" class="btn" disabled>🎥 Камера</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card compact">
+          <h2>Состояние</h2>
+          <div id="stats" class="stats"></div>
+        </section>
+
+        <section class="card compact">
+          <h2>Логи</h2>
+          <div id="logs" class="logs"></div>
+        </section>
+      </aside>
+
+      <!-- ОСНОВНАЯ ОБЛАСТЬ -->
+      <section class="stage">
+        <div class="grid-2">
+          <div class="card">
+            <h3>Моё превью</h3>
+            <div class="video-surface">
+              <video id="localVideo" autoplay playsinline muted></video>
+              <div class="overlay-tip muted">Камера по умолчанию выключена</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Чат</h3>
+            <div id="chat" class="chat-log" aria-live="polite"></div>
+            <div class="chat-input">
+              <input id="chatInput" placeholder="Напишите сообщение..." />
+              <button id="btnSend" class="btn" disabled>Отправить</button>
+            </div>
           </div>
         </div>
 
         <div class="card">
-          <h2>Участники</h2>
-          <div class="form-grid" style="grid-template-columns:1fr;">
-            <div>
-              <div class="muted">Вы</div>
-              <div class="row">
-                <button id="btnToggleMic" class="btn" disabled>🎤 Вкл/Выкл</button>
-                <button id="btnToggleCam" class="btn" disabled>🎥 Вкл/Выкл</button>
-              </div>
-            </div>
-          </div>
+          <h3>Участники</h3>
+          <div class="tiles" id="peersGrid" aria-live="polite"></div>
         </div>
-      </section>
-
-      <section class="panel grid-3">
-        <div class="card video-card">
-          <div class="video-wrap">
-            <video id="localVideo" autoplay playsinline muted></video>
-          </div>
-          <div class="controls"><span class="muted">Моё превью (камера по умолчанию выключена)</span></div>
-        </div>
-
-        <div class="card video-card">
-          <div class="video-grid" id="peersGrid" aria-live="polite">
-            <!-- динамические плитки участников появятся здесь -->
-          </div>
-          <div class="controls">
-            <span class="muted">Участники комнаты</span>
-          </div>
-        </div>
-
-        <div class="card chat-card">
-          <h2>Чат</h2>
-          <div id="chat" class="chat-log" aria-live="polite"></div>
-          <div class="chat-input">
-            <input id="chatInput" placeholder="Напишите сообщение..." />
-            <button id="btnSend" class="btn" disabled>Отправить</button>
-          </div>
-        </div>
-      </section>
-
-      <section class="card panel">
-        <h2>Логи</h2>
-        <div id="logs" class="logs"></div>
       </section>
     </main>
 
-    <template id="tpl-log-line">
-      <div class="log-line"><span class="time"></span><span class="msg"></span></div>
-    </template>
-
+    <!-- Шаблон плитки участника -->
     <template id="tpl-peer-tile">
-      <div class="peer-tile" data-peer="">
+      <div class="tile" data-peer="">
         <div class="media">
           <video autoplay playsinline></video>
           <div class="avatar" aria-hidden>👤</div>
-          <button class="unmute-btn" title="Включить звук">▶️ Включить звук</button>
+
+          <!-- Кнопка для включения звука (автоплей-гейт) -->
+          <button class="gate" title="Нажмите, чтобы включить звук">▶️ Нажмите, чтобы слушать</button>
         </div>
         <div class="hud">
-          <div class="name">Participant</div>
-          <div class="level-bar"><span></span></div>
+          <div class="row between">
+            <div class="name">participant</div>
+            <div class="badges">
+              <span class="badge net" title="Сеть">•</span>
+            </div>
+          </div>
+          <div class="meter"><span></span></div>
           <div class="row">
-            <button class="btn xs mute">Mute</button>
+            <button class="btn xs mute">🔇 Mute</button>
             <input class="volume" type="range" min="0" max="1" step="0.01" value="1" />
           </div>
         </div>
       </div>
     </template>
 
+    <template id="tpl-log-line">
+      <div class="log-line"><span class="time"></span><span class="msg"></span></div>
+    </template>
+
     <script type="module" src="/static/js/main.js"></script>
   </body>
-  </html>
+</html>

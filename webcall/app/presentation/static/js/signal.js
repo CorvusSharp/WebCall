@@ -1,23 +1,15 @@
-// signal.js — signaling helpers
-
+// signal.js — WebSocket helpers
 function isWsOpen(ws) {
   return ws && ws.readyState === WebSocket.OPEN;
 }
 
 function _safeSend(ws, obj) {
   if (!isWsOpen(ws)) return false;
-  try {
-    ws.send(JSON.stringify(obj));
-    return true;
-  } catch (e) {
-    // eslint-disable-next-line no-console
-    console.warn("WS send failed:", e);
-    return false;
-  }
+  try { ws.send(JSON.stringify(obj)); return true; }
+  catch (e) { console.warn("WS send failed:", e); return false; }
 }
 
 /**
- * Отправка сигнального сообщения
  * @param {WebSocket} ws
  * @param {"offer"|"answer"|"ice-candidate"} type
  * @param {object} payload - { sdp } или { candidate }
@@ -30,12 +22,6 @@ export function sendSignal(ws, type, payload, fromUserId, targetUserId) {
   _safeSend(ws, body);
 }
 
-/**
- * Чат
- * @param {WebSocket} ws
- * @param {string} content
- * @param {string} fromUserId
- */
 export function sendChat(ws, content, fromUserId) {
   _safeSend(ws, { type: "chat", content, fromUserId });
 }

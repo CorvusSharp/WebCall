@@ -1,348 +1,235 @@
-// webrtc.js — RTCPeerConnection handling
-
+// webrtc.js — мультипир без единого remoteVideo
 import { sendSignal } from "./signal.js";
 import { getIceServers } from "./api.js";
 
 /**
- * Опции конструктора:
- * {
- *   localVideo: HTMLVideoElement|null,
- *   remoteVideo: HTMLMediaElement (audio или video),
- *   outputDeviceId?: string|null,       // динамики (setSinkId), опционально
- *   unmuteButton?: HTMLButtonElement,   // опционально (для явного включения звука)
- *   onLog?: (msg:string)=>void,
- *   onConnected?: ()=>void,
- *   onDisconnected?: ()=>void,
- * }
+ * Опции:
+ * - localVideo: HTMLVideoElement|null
+ * - outputDeviceId?: string|null
+ * - onLog?: (msg)=>void
+ * - onPeerState?: (peerId, key, value)=>void
  */
 export class WebRTCManager {
-  constructor(opts) {
-  this.localVideo = opts.localVideo || null;
-  this.remoteVideo = opts.remoteVideo || null; // в мультипире может быть null
+  constructor(opts){
+    this.localVideo = opts.localVideo || null;
     this.outputDeviceId = opts.outputDeviceId || null;
-    this.unmuteButton = opts.unmuteButton || null;
-
-    this.onLog = opts.onLog || (() => {});
-  this.onConnected = opts.onConnected || (() => {});
-  this.onRemoteAudioLevel = opts.onRemoteAudioLevel || (() => {});
-    this.onDisconnected = opts.onDisconnected || (() => {});
-
-    // внутренние флаги
-  this.ws = null;
-  this.userId = null;
-  this.localStream = null;
-  // мультипир: per-peer PC and streams
-  this.peers = new Map(); // peerId -> { pc, stream, candidates:[], remoteSet: bool, level:{ctx,analyser,raf}, handlers }
-
-    this._remoteSet = false;
-    this._candidateQueue = [];
-    this._started = false;
-    this._playbackArmed = false;
-  this._audioCtx = null;
-  this._analyser = null;
-  this._raf = 0;
-
-    // подготовка media-элемента
-  if (this.remoteVideo) {
-      this.remoteVideo.autoplay = true;
-      this.remoteVideo.playsInline = true;
-      this.remoteVideo.muted = false;
-      this.remoteVideo.volume = 1.0;
-    }
-
-    // кнопка "включить звук", если передали
-    if (this.unmuteButton) {
-      this.unmuteButton.hidden = true;
-      this.unmuteButton.disabled = true;
-      this.unmuteButton.addEventListener("click", async () => {
-        try {
-          // Safari/Chrome: иногда нужен user-gesture для AudioContext
-          if (window.AudioContext) {
-            const ac = new AudioContext();
-            if (ac.state === "suspended") await ac.resume();
-          }
-          await this.remoteVideo.play();
-          this.unmuteButton.hidden = true;
-          this.unmuteButton.disabled = true;
-        } catch (e) {
-          this._log(`Manual unmute failed: ${e?.name || e}`);
-        }
-      });
-    }
+    this.onLog = opts.onLog || (()=>{});
+    this.onPeerState = opts.onPeerState || (()=>{});
+    this.ws = null;
+    this.userId = null;
+    this.localStream = null;
+    this.preferred = { micId: undefined, camId: undefined };
+    this.peers = new Map(); // peerId -> { pc, stream, candidates:[], remoteSet:bool, handlers, level:{ctx,analyser,raf} }
   }
 
-  _log(msg) {
-    try { this.onLog(msg); } catch { /* noop */ }
+  _log(m){ try{ this.onLog(m); }catch{} }
+  getOutputDeviceId(){ return this.outputDeviceId; }
+  setPreferredDevices({ mic, cam, spk }){
+    if (mic) this.preferred.micId = mic;
+    if (cam) this.preferred.camId = cam;
+    if (spk) this.outputDeviceId = spk;
   }
 
-  async _setOutputSink(deviceId) {
-    if (!this.remoteVideo) return;
-    if (typeof this.remoteVideo.setSinkId !== "function") {
-      this._log("setSinkId is not supported in this browser");
-      return;
-    }
-    try {
-      await this.remoteVideo.setSinkId(deviceId);
-      this._log(`Using audiooutput: ${deviceId}`);
-    } catch (e) {
-      this._log(`setSinkId error: ${e?.name || e}`);
-    }
-  }
-
-  async getMediaStreamWithFallback() {
+  async _getLocalMedia(){
     const tryGet = async (constraints) => {
-      try {
-        return await navigator.mediaDevices.getUserMedia(constraints);
-      } catch (e) {
-        this._log(`getUserMedia error: ${e?.name || e}`);
-        return null;
-      }
+      try { return await navigator.mediaDevices.getUserMedia(constraints); }
+      catch(e){ this._log(`getUserMedia: ${e?.name||e}`); return null; }
     };
-
-  // 1) по умолчанию ТОЛЬКО АУДИО (камера выключена)
-    this._log("Trying getUserMedia: audio only");
-  let stream = await tryGet({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: false,
+    // по умолчанию — только аудио
+    const a = await tryGet({
+      audio: {
+        echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+        deviceId: this.preferred.micId ? { exact: this.preferred.micId } : undefined,
+      },
+      video: false
     });
-    if (stream) return stream;
+    if (a) return a;
 
-  // 2) попытка только видео (если нет микрофона)
-    this._log("Trying getUserMedia: video only");
-    stream = await tryGet({ audio: false, video: true });
-    if (stream) return stream;
-
-    // 4) ничего не удалось
-    this._log("Нет доступных устройств. Продолжаем без микрофона/камеры.");
-    return null;
+    // fallback — только видео (если нет микрофона)
+    const v = await tryGet({
+      audio: false,
+      video: { deviceId: this.preferred.camId ? { exact: this.preferred.camId } : undefined }
+    });
+    return v;
   }
 
-  async init(ws, userId) {
+  async init(ws, userId, { micId, camId } = {}){
     this.ws = ws;
     this.userId = userId;
-    if (this.localStream) return; // уже инициализировано медиа
+    if (micId) this.preferred.micId = micId;
+    if (camId) this.preferred.camId = camId;
+
+    if (this.localStream) return;
 
     // ICE servers
-    const fallbackIce = { iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] };
-    let rtcCfg = fallbackIce;
-    try {
-      const { iceServers } = await getIceServers();
-      rtcCfg = { iceServers };
-    } catch {
-      rtcCfg = fallbackIce;
-    }
+    const fallback = { iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] };
+    let rtcCfg = fallback;
+    try { const { iceServers } = await getIceServers(); rtcCfg = { iceServers }; }
+    catch { rtcCfg = fallback; }
 
     // Локальные медиа
-    const stream = await this.getMediaStreamWithFallback();
+    const stream = await this._getLocalMedia();
     this.localStream = stream;
-    if (stream) {
-      this._log(
-        `Local tracks: a=${stream.getAudioTracks().length} v=${stream.getVideoTracks().length}`
-      );
-      if (this.localVideo) this.localVideo.srcObject = stream;
+    if (stream && this.localVideo){
+      this.localVideo.srcObject = stream;
     }
   }
-  // Create or get a RTCPeerConnection for peerId
-  async _ensurePeer(peerId) {
+
+  async _ensurePeer(peerId){
     if (this.peers.has(peerId)) return this.peers.get(peerId);
+
     // ICE servers
-    const fallbackIce = { iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] };
-    let rtcCfg = fallbackIce;
-    try {
-      const { iceServers } = await getIceServers();
-      rtcCfg = { iceServers };
-    } catch { rtcCfg = fallbackIce; }
-    const pc = new RTCPeerConnection({ ...rtcCfg, bundlePolicy: "max-bundle", rtcpMuxPolicy: "require" });
-    const state = { pc, stream: new MediaStream(), candidates: [], remoteSet: false, handlers: null, level: { ctx: null, analyser: null, raf: 0 } };
-    // add local tracks (if any)
-    if (this.localStream) {
-      for (const track of this.localStream.getTracks()) pc.addTrack(track, this.localStream);
+    const fallback = { iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] };
+    let rtcCfg = fallback;
+    try { const { iceServers } = await getIceServers(); rtcCfg = { iceServers }; }
+    catch { rtcCfg = fallback; }
+
+    const pc = new RTCPeerConnection({ ...rtcCfg, bundlePolicy:"max-bundle", rtcpMuxPolicy:"require" });
+    const state = { pc, stream:new MediaStream(), candidates:[], remoteSet:false, handlers:null, level:{ctx:null, analyser:null, raf:0} };
+
+    // локальные треки
+    if (this.localStream){
+      for (const t of this.localStream.getTracks()) pc.addTrack(t, this.localStream);
     } else {
-      try { pc.addTransceiver("audio", { direction: "recvonly" }); } catch {}
-      try { pc.addTransceiver("video", { direction: "recvonly" }); } catch {}
+      try{ pc.addTransceiver("audio", { direction:"recvonly" }); }catch{}
+      try{ pc.addTransceiver("video", { direction:"recvonly" }); }catch{}
     }
+
     pc.addEventListener("icecandidate", (e)=>{
-      if (e.candidate) sendSignal(this.ws, "ice-candidate", { candidate: e.candidate }, this.userId, peerId);
+      if (e.candidate) sendSignal(this.ws, "ice-candidate", { candidate:e.candidate }, this.userId, peerId);
     });
     pc.addEventListener("track", (e)=>{
       if (e.track && !state.stream.getTracks().some(t=>t.id===e.track.id)) state.stream.addTrack(e.track);
-      // notify UI to attach media
       if (state.handlers?.onTrack) state.handlers.onTrack(state.stream);
-      // setup level meter for this peer audio
       if (e.track?.kind === 'audio') this._setupPeerLevel(peerId, state);
     });
     pc.addEventListener("connectionstatechange", ()=>{
-      this._log(`PC(${peerId}) state: ${pc.connectionState}`);
+      this.onPeerState(peerId, 'net', pc.connectionState);
+      this._log(`PC(${peerId})=${pc.connectionState}`);
     });
-    pc.addEventListener("iceconnectionstatechange", ()=>{
-      this._log(`ICE(${peerId}) state: ${pc.iceConnectionState}`);
-    });
-    pc.addEventListener("icegatheringstatechange", ()=>{
-      this._log(`ICE(${peerId}) gathering: ${pc.iceGatheringState}`);
-    });
+
     this.peers.set(peerId, state);
     return state;
   }
 
-  async handleSignal(msg, mediaBinder) {
-    // Никогда не обрабатываем собственные сигналы
+  // публичные хуки UI
+  bindPeerMedia(peerId, handlers){ const st = this.peers.get(peerId); if (st) st.handlers = handlers; }
+  getPeer(peerId){ return this.peers.get(peerId); }
+
+  async handleSignal(msg, mediaBinder){
     if (msg?.fromUserId && this.userId && msg.fromUserId === this.userId) return;
-    // Если сервер передаёт адресата, а он не совпадает с нами — игнорируем
     if (msg?.targetUserId && this.userId && msg.targetUserId !== this.userId) return;
+
     const peerId = msg.fromUserId;
     const peer = await this._ensurePeer(peerId);
-    if (mediaBinder && !peer.handlers) {
-      // allow UI to attach media handlers
-      peer.handlers = {};
-      mediaBinder(peerId, {
-        onTrack: (stream)=>{ /* UI will override this via binder; set placeholder */ },
-        onLevel: ()=>{}
-      });
+
+    if (mediaBinder && !peer.handlers){
+      mediaBinder(peerId, { onTrack:()=>{}, onLevel:()=>{} });
     }
 
-    if (msg.signalType === "offer") {
+    if (msg.signalType === 'offer'){
       await this.init(this.ws, this.userId);
-      const offer = { type: "offer", sdp: msg.sdp };
+      const offer = { type:'offer', sdp: msg.sdp };
 
-      // защита от эха собственного оффера (на всякий случай)
-      if (peer.pc.localDescription?.type === "offer" &&
-          peer.pc.localDescription?.sdp === msg.sdp) {
-        this._log("Self-offer echo ignored");
-        return;
+      if (peer.pc.signalingState !== 'stable'){
+        try{ await peer.pc.setLocalDescription({ type:'rollback' }); }catch(e){ this._log(`rollback: ${e?.name||e}`); }
+      }
+      if (peer.pc.currentRemoteDescription?.sdp === msg.sdp){
+        this._log('Duplicate offer ignored'); return;
       }
 
-      // glare-handling: если не stable, откатываем локальный оффер
-      if (peer.pc.signalingState !== "stable") {
-        try { await peer.pc.setLocalDescription({ type: "rollback" }); }
-        catch (e) { this._log(`rollback failed: ${e?.name || e}`); }
-      }
+      try { await peer.pc.setRemoteDescription(offer); }
+      catch(e){ this._log(`SRD(offer)[${peerId}]: ${e?.name||e}`); return; }
 
-      // повторно не применяем тот же самый remote
-      if (peer.pc.currentRemoteDescription?.sdp === msg.sdp) {
-        this._log("Duplicate offer ignored");
-        return;
-      }
-
-      try {
-        await peer.pc.setRemoteDescription(offer);
-      } catch(e) {
-        this._log(`setRemoteDescription(offer)[${peerId}] failed in state ${peer.pc.signalingState}: ${e?.name||e}`);
-        return;
-      }
       peer.remoteSet = true;
       await this._flushQueuedCandidates(peerId);
 
       const answer = await peer.pc.createAnswer();
       await peer.pc.setLocalDescription(answer);
-      sendSignal(this.ws, "answer", { sdp: answer.sdp }, this.userId, peerId);
+      sendSignal(this.ws, 'answer', { sdp: answer.sdp }, this.userId, peerId);
 
-    } else if (msg.signalType === "answer") {
-      if (!peer?.pc) return;
-
-      if (peer.pc.signalingState !== "have-local-offer") {
-        this._log(`Ignore answer[${peerId}] in state ${peer.pc.signalingState}`);
-        return;
+    } else if (msg.signalType === 'answer'){
+      if (peer.pc.signalingState !== 'have-local-offer'){
+        this._log(`Ignore answer in ${peer.pc.signalingState}`); return;
       }
-
-      if (peer.pc.currentRemoteDescription?.type === "answer") {
-        this._log("Duplicate answer ignored");
-        return;
+      if (peer.pc.currentRemoteDescription?.type === 'answer'){
+        this._log('Duplicate answer ignored'); return;
       }
-
-      try {
-        await peer.pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
-      } catch(e) {
-        this._log(`setRemoteDescription(answer)[${peerId}] failed in state ${peer.pc.signalingState}: ${e?.name||e}`);
-        return;
-      }
+      try { await peer.pc.setRemoteDescription({ type:'answer', sdp: msg.sdp }); }
+      catch(e){ this._log(`SRD(answer)[${peerId}]: ${e?.name||e}`); return; }
       peer.remoteSet = true;
       await this._flushQueuedCandidates(peerId);
 
-  } else if (msg.signalType === "ice-candidate") {
-      if (!peer.remoteSet) {
-        peer.candidates.push(msg.candidate);
-      } else if (peer.pc) {
+    } else if (msg.signalType === 'ice-candidate'){
+      if (!peer.remoteSet) peer.candidates.push(msg.candidate);
+      else {
         try { await peer.pc.addIceCandidate(msg.candidate); }
-        catch (e) { this._log(`addIceCandidate[${peerId}] failed: ${e?.name || e}`); }
+        catch(e){ this._log(`addIce[${peerId}]: ${e?.name||e}`); }
       }
     }
   }
 
-  async _flushQueuedCandidates(peerId) {
+  async _flushQueuedCandidates(peerId){
     const peer = this.peers.get(peerId);
     if (!peer?.pc) return;
-    while (peer.candidates.length) {
+    while (peer.candidates.length){
       const c = peer.candidates.shift();
       try { await peer.pc.addIceCandidate(c); }
-      catch (e) { this._log(`flush ICE[${peerId}] failed: ${e?.name || e}`); }
+      catch(e){ this._log(`flush ICE[${peerId}]: ${e?.name||e}`); }
     }
   }
 
-  // Proactively start an offer to a peer
   async startOffer(peerId){
     await this.init(this.ws, this.userId);
     const st = await this._ensurePeer(peerId);
     const pc = st.pc;
-    // idempotent: only if stable and no current local offer
-    if (pc.signalingState !== 'stable') {
-      this._log(`Skip startOffer(${peerId}) in state ${pc.signalingState}`);
-      return;
+    if (pc.signalingState !== 'stable'){
+      this._log(`Skip startOffer(${peerId}) in ${pc.signalingState}`); return;
     }
     try{
-      const offer = await pc.createOffer();
+      const offer = await pc.createOffer({ offerToReceiveAudio:true, offerToReceiveVideo:true });
       await pc.setLocalDescription(offer);
       sendSignal(this.ws, 'offer', { sdp: offer.sdp }, this.userId, peerId);
-    }catch(e){ this._log(`startOffer(${peerId}) failed: ${e?.name||e}`); }
+    }catch(e){ this._log(`startOffer(${peerId}): ${e?.name||e}`); }
   }
 
-  isPeerEstablished(peerId){
-    const st = this.peers.get(peerId);
-    if (!st) return false;
-    const s = st.pc.connectionState;
-    return s === 'connected' || s === 'completed';
-  }
-
-  toggleMic() {
+  toggleMic(){
     if (!this.localStream) return false;
-    const track = this.localStream.getAudioTracks()[0];
-    if (!track) return false;
-    track.enabled = !track.enabled;
-    return track.enabled;
+    const tr = this.localStream.getAudioTracks()[0];
+    if (!tr) return false;
+    tr.enabled = !tr.enabled;
+    return tr.enabled;
   }
 
-  toggleCam() {
+  toggleCam(){
     if (!this.localStream) return false;
-    let track = this.localStream.getVideoTracks()[0];
-    if (!track) {
-      // Ленивая инициализация камеры
-      navigator.mediaDevices.getUserMedia({ video: true, audio: false }).then((camStream) => {
-        const [videoTrack] = camStream.getVideoTracks();
-        if (!videoTrack) return false;
-        // добавить в локальный стрим
-        this.localStream.addTrack(videoTrack);
-        if (this.localVideo) {
-          const s = this.localVideo.srcObject instanceof MediaStream ? this.localVideo.srcObject : new MediaStream();
-          s.addTrack(videoTrack);
-          this.localVideo.srcObject = s;
+    let tr = this.localStream.getVideoTracks()[0];
+    if (!tr){
+      navigator.mediaDevices.getUserMedia({
+        video: { deviceId: this.preferred.camId ? { exact: this.preferred.camId } : undefined },
+        audio: false
+      }).then(s=>{
+        const [vt] = s.getVideoTracks();
+        if (!vt) return;
+        this.localStream.addTrack(vt);
+        if (this.localVideo){
+          const ms = this.localVideo.srcObject instanceof MediaStream ? this.localVideo.srcObject : new MediaStream();
+          ms.addTrack(vt); this.localVideo.srcObject = ms;
         }
-        // добавить sender во все PC
-        for (const { pc } of this.peers.values()) {
-          try { pc.addTrack(videoTrack, this.localStream); } catch {}
+        for (const { pc } of this.peers.values()){
+          try{ pc.addTrack(vt, this.localStream); }catch{}
         }
-      }).catch((e)=>{
-        this._log(`Camera init failed: ${e?.name||e}`);
-      });
+      }).catch(e=> this._log(`Camera init: ${e?.name||e}`));
       return true;
     }
-    track.enabled = !track.enabled;
-    return track.enabled;
+    tr.enabled = !tr.enabled;
+    return tr.enabled;
   }
 
-  async close() {
-    try { this.ws?.close(); } catch {}
-    this.ws = null;
-    for (const [pid, st] of this.peers) {
-      try { st.pc?.close(); } catch {}
+  async close(){
+    try{ this.ws?.close(); }catch{}
+    for (const [pid, st] of this.peers){
+      try{ st.pc?.close(); }catch{}
       if (st.level?.raf) cancelAnimationFrame(st.level.raf);
       if (st.level?.ctx) try{ st.level.ctx.close(); }catch{}
     }
@@ -351,48 +238,10 @@ export class WebRTCManager {
     this.localStream = null;
   }
 
-  _armPlaybackOnGesture() {
-    if (this._playbackArmed) return;
-    this._playbackArmed = true;
-
-    // Подсказка пользователю
-    this._log("Нажмите в окно, чтобы включить звук (браузер блокирует автоплеи).");
-    if (this.unmuteButton) {
-      this.unmuteButton.hidden = false;
-      this.unmuteButton.disabled = false;
-    }
-
-    const resume = async () => {
-      try {
-        if (window.AudioContext) {
-          const ac = new AudioContext();
-          if (ac.state === "suspended") await ac.resume();
-        }
-        await this.remoteVideo.play();
-        if (this.unmuteButton) {
-          this.unmuteButton.hidden = true;
-          this.unmuteButton.disabled = true;
-        }
-      } catch {
-        // пусть кнопка остаётся
-      } finally {
-        window.removeEventListener("click", resume);
-        window.removeEventListener("keydown", resume);
-        window.removeEventListener("touchstart", resume);
-        this._playbackArmed = false;
-      }
-    };
-
-    window.addEventListener("click", resume, { once: true });
-    window.addEventListener("keydown", resume, { once: true });
-    window.addEventListener("touchstart", resume, { once: true });
-  }
-
   _setupPeerLevel(peerId, state){
     try{
-      if (!state.stream || !state.stream.getAudioTracks().length) return;
-      if (!window.AudioContext) return;
-      if (!state.level.ctx) state.level.ctx = new AudioContext();
+      if (!window.AudioContext || !state.stream?.getAudioTracks().length) return;
+      state.level.ctx = new AudioContext();
       const src = state.level.ctx.createMediaStreamSource(state.stream);
       state.level.analyser = state.level.ctx.createAnalyser();
       state.level.analyser.fftSize = 256;
@@ -400,19 +249,13 @@ export class WebRTCManager {
       const data = new Uint8Array(state.level.analyser.frequencyBinCount);
       const loop = ()=>{
         state.level.analyser.getByteTimeDomainData(data);
-        let sum = 0; for (let i=0;i<data.length;i++){ const v=(data[i]-128)/128; sum += v*v; }
+        let sum=0; for (let i=0;i<data.length;i++){ const v=(data[i]-128)/128; sum+=v*v; }
         const rms = Math.sqrt(sum/data.length);
         if (state.handlers?.onLevel) state.handlers.onLevel(rms);
         state.level.raf = requestAnimationFrame(loop);
       };
       if (state.level.raf) cancelAnimationFrame(state.level.raf);
       state.level.raf = requestAnimationFrame(loop);
-    }catch(e){ this._log(`level meter[${peerId}] error: ${e?.name||e}`); }
-  }
-
-  // Allow UI to bind media handlers for a peer
-  bindPeerMedia(peerId, handlers){
-    const st = this.peers.get(peerId);
-    if (st) st.handlers = handlers;
+    }catch(e){ this._log(`level[${peerId}]: ${e?.name||e}`); }
   }
 }
