@@ -242,14 +242,6 @@ async handleSignal(msg, mediaBinder){
         await this._flushQueuedCandidates(peerId);
 
         const answer = await pc.createAnswer();
-        
-        // ИСПРАВЛЕНИЕ: Проверяем наличие локального аудио
-        const hasLocalAudio = this.localStream && this.localStream.getAudioTracks().length > 0;
-        if (hasLocalAudio) {
-            answer.sdp = answer.sdp.replace(/a=recvonly/g, 'a=sendrecv');
-            this._log(`🔄 Изменен SDP ответ с recvonly на sendrecv для ${peerId.slice(0,8)}`);
-        }
-        
         await pc.setLocalDescription(answer);
         sendSignal(this.ws, 'answer', { sdp: answer.sdp }, this.userId, peerId);
         this._log(`📤 Answered offer from ${peerId.slice(0,8)}\n${answer.sdp}`);
@@ -380,7 +372,6 @@ async handleSignal(msg, mediaBinder){
   }
 
   // Быстрая диагностика
-// Добавьте в diagnoseAudio более детальную информацию
   async diagnoseAudio(){
       this._log('=== 🔊 АУДИО ДИАГНОСТИКА ===');
       if (this.localStream){

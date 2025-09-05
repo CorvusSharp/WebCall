@@ -28,52 +28,57 @@
         <div class="card">
           <h2>Комната</h2>
           <div class="form-grid">
-            <label>
-              <span>Room ID</span>
-              <input id="roomId" placeholder="room-123" />
+            <label class="row">
+              <span>ID комнаты</span>
+              <input type="text" id="roomId" value="main" />
             </label>
             <div class="row">
-              <button id="btnConnect" class="btn success">Подключиться</button>
-              <button id="btnLeave" class="btn" disabled>Выйти</button>
-              <button id="btnCopyLink" class="btn ghost">Скопировать ссылку</button>
-              <button id="btnDiag" class="btn ghost" title="Диагностика">📊</button>
+              <button id="btnConnect" class="btn primary">Войти</button>
+              <button id="btnLeave" class="btn danger">Выйти</button>
+              <button id="btnCopyLink" class="btn">Копия ссылки</button>
             </div>
-            <div class="muted" id="connStatus">Не подключено</div>
+            <div class="row">
+              <button id="btnToggleMic" class="btn">Выкл.микро</button>
+              <button id="btnToggleCam" class="btn">Вкл.камеру</button>
+              <button id="btnDiag" class="btn ghost">Диагностика</button>
+            </div>
           </div>
         </div>
 
         <div class="card">
-          <h2>Вы</h2>
-          <div class="form-grid" style="grid-template-columns:1fr;">
-            <div class="row">
-              <button id="btnToggleMic" class="btn" disabled>🎤 Вкл/Выкл</button>
-              <button id="btnToggleCam" class="btn" disabled>🎥 Вкл/Выкл</button>
-            </div>
-            <div class="video-wrap">
-              <video id="localVideo" autoplay playsinline muted></video>
-            </div>
-          </div>
+          <h2>Статус</h2>
+          <div id="connStatus"></div>
+          <div id="stats" class="logs"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div id="peersGrid" class="peers-grid">
+          <!-- Сюда добавляются плитки участников -->
         </div>
       </section>
 
       <section class="panel grid-3">
         <div class="card video-card">
-          <h2>Участники</h2>
-          <div class="video-grid" id="peersGrid" aria-live="polite"></div>
+          <h2>Вы</h2>
+          <div class="video-wrap">
+            <video id="localVideo" muted playsinline></video>
+          </div>
         </div>
 
         <div class="card chat-card">
           <h2>Чат</h2>
-          <div id="chat" class="chat-log" aria-live="polite"></div>
+          <div id="chat" class="chat-box"></div>
           <div class="chat-input">
-            <input id="chatInput" placeholder="Напишите сообщение..." />
-            <button id="btnSend" class="btn" disabled>Отправить</button>
+            <input type="text" id="chatInput" placeholder="Сообщение..." />
+            <button id="btnSend" class="btn">»</button>
           </div>
         </div>
 
         <div class="card">
-          <h2>Статистика</h2>
-          <div id="stats" class="logs"></div>
+          <h2>Инфо</h2>
+          <p>Это простое WebRTC демо для голосового чата.</p>
+          <p>ID аккаунта: <code id="accountId"></code></p>
         </div>
       </section>
 
@@ -90,21 +95,11 @@
     <template id="tpl-peer-tile">
       <div class="tile" data-peer="">
         <div class="media">
-          <video class="video" autoplay playsinline></video>
-          <audio class="audio" autoplay playsinline></audio>
-          <div class="avatar" aria-hidden>👤</div>
-          <button class="gate" title="Включить звук">▶️ Включить звук</button>
+          <video autoplay playsinline></video>
         </div>
         <div class="hud">
-          <div class="row space">
-            <div class="name">Participant</div>
-            <div class="badge net" title="network">⚪</div>
-          </div>
-          <div class="meter"><span></span></div>
-          <div class="row">
-            <button class="btn xs mute">🔇 Mute</button>
-            <input class="volume" type="range" min="0" max="1" step="0.01" value="1" />
-          </div>
+          <span class="name"></span>
+          <div class="level"><div class="level-bar"></div></div>
         </div>
       </div>
     </template>
