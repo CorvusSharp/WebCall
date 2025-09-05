@@ -90,16 +90,26 @@ export class WebRTCManager {
       iceFailTimer: null,
     };
 
-    // **Важно**: Либо addTrack локальных треков, либо recvonly — но не одновременно.
-    if (this.localStream && this.localStream.getTracks().length){
-      for (const t of this.localStream.getTracks()) {
-        try { pc.addTrack(t, this.localStream); this._log(`✅ Добавлен ${t.kind} трек для ${peerId.slice(0,8)}`); }
-        catch(e){ this._log(`addTrack(${t.kind}) error → ${peerId.slice(0,8)}: ${e}`); }
+    // **Важно**: Добавляем треки только один раз и правильно
+    if (this.localStream && this.localStream.getTracks().length > 0){
+      // Добавляем каждый трек только один раз
+      for (const track of this.localStream.getTracks()) {
+        try { 
+          pc.addTrack(track, this.localStream); 
+          this._log(`✅ Добавлен ${track.kind} трек для ${peerId.slice(0,8)}`); 
+        }
+        catch(e){ 
+          this._log(`❌ addTrack(${track.kind}) error → ${peerId.slice(0,8)}: ${e}`); 
+        }
       }
     } else {
-      try{ pc.addTransceiver("audio", { direction:"recvonly" }); }catch{}
-      try{ pc.addTransceiver("video", { direction:"recvonly" }); }catch{}
-      this._log(`Добавлены recvonly трансиверы для ${peerId.slice(0,8)}`);
+      // Если нет локального потока, создаем только recvonly transceivers
+      try{ 
+        pc.addTransceiver("audio", { direction:"recvonly" }); 
+        this._log(`Добавлен recvonly audio transceiver для ${peerId.slice(0,8)}`);
+      }catch(e){
+        this._log(`❌ addTransceiver(audio) error → ${peerId.slice(0,8)}: ${e}`); 
+      }
     }
 
     pc.addEventListener("icecandidate", (e)=>{
@@ -167,6 +177,20 @@ export class WebRTCManager {
   // Диагностика состояния аудио/SDP/статов
   async diagnoseAudio(){
     this._log('=== 🔊 АУДИО ДИАГНОСТИКА ===');
+    
+    // Проверяем глобальный аудио контекст
+    try {
+      const ac = new AudioContext();
+      this._log(`🎧 AudioContext state: ${ac.state}`);
+      if (ac.state === 'suspended') {
+        await ac.resume();
+        this._log(`🎧 AudioContext resumed to: ${ac.state}`);
+      }
+      setTimeout(() => { try { ac.close(); } catch {} }, 100);
+    } catch(e) {
+      this._log(`❌ AudioContext error: ${e}`);
+    }
+    
     if (this.localStream) {
       const audioTracks = this.localStream.getAudioTracks();
       this._log(`📱 Локальный поток: ${audioTracks.length} аудио треков`);
@@ -179,18 +203,33 @@ export class WebRTCManager {
     for (const [peerId, st] of this.peers){
       const pc = st.pc;
       this._log(`--- Peer ${peerId.slice(0,8)} ---`);
-      this._log(`📊 PC=${pc.connectionState} | ICE=${pc.iceConnectionState} | Signal=${pc.signalingState}`);
+      this._log(`📊 Состояние: ${pc.connectionState}`);
+      this._log(`🧊 ICE: ${pc.iceConnectionState}`);
+      this._log(`� Signaling: ${pc.signalingState}`);
 
-      // SDP краткий дамп
-      const ld = pc.localDescription; const rd = pc.currentRemoteDescription;
-      if (ld) this._log(`📝 Local SDP: type=${ld.type}, m-lines=${(ld.sdp.match(/^m=/gm)||[]).length}`);
-      if (rd) this._log(`📝 Remote SDP: type=${rd.type}, m-lines=${(rd.sdp.match(/^m=/gm)||[]).length}`);
-
-      const senders = pc.getSenders(); const receivers = pc.getReceivers();
-      this._log(`📤 Senders: ${senders.length}`); senders.forEach((s,i)=> this._log(`  #${i} ${s.track? s.track.kind:'(no track)'}`));
-      this._log(`📥 Receivers: ${receivers.length}`); receivers.forEach((r,i)=> this._log(`  #${i} ${r.track? r.track.kind:'(no track)'}`));
+      const senders = pc.getSenders(); 
+      const receivers = pc.getReceivers();
+      this._log(`📤 Отправляем треков: ${senders.length}`);
+      senders.forEach((s,i)=> {
+        if (s.track) {
+          this._log(`Sender ${i}: ${s.track.kind}, enabled=${s.track.enabled}, readyState=${s.track.readyState}`);
+        } else {
+          this._log(`Sender ${i}: ❌ НЕТ ТРЕКА`);
+        }
+      });
+      
+      this._log(`📥 Получаем треков: ${receivers.length}`);
+      receivers.forEach((r,i)=> {
+        if (r.track) {
+          this._log(`Receiver ${i}: ${r.track.kind}, enabled=${r.track.enabled}, readyState=${r.track.readyState}`);
+        } else {
+          this._log(`Receiver ${i}: ❌ НЕТ ТРЕКА`);
+        }
+      });
+      
       const tracks = st.stream.getTracks();
-      this._log(`🌊 Stream tracks: ${tracks.length}`); tracks.forEach((t,i)=> this._log(`  ${i}: ${t.kind} enabled=${t.enabled} muted=${t.muted} rs=${t.readyState}`));
+      this._log(`🌊 В потоке треков: ${tracks.length}`);
+      tracks.forEach((t,i)=> this._log(`Stream трек ${i}: ${t.kind}, enabled=${t.enabled}, readyState=${t.readyState}, muted=${t.muted}`));
 
       if (pc.connectionState === 'connected') {
         try{

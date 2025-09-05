@@ -142,19 +142,36 @@ async function connect(){
     log('WS connected');
     setConnectedState(true);
 
-    // Активация аудио контекста (для autoplay)
+    // Максимально агрессивная активация аудио контекста
     try {
-      const ac = new AudioContext();
-      if (ac.state === 'suspended') await ac.resume();
-      const osc = ac.createOscillator();
-      const gain = ac.createGain();
-      gain.gain.value = 0.0001;
-      osc.connect(gain).connect(ac.destination);
-      osc.start();
-      osc.stop(ac.currentTime + 0.01);
-      log('🎧 Глобальный аудио контекст агрессивно активирован');
-      setTimeout(()=>{ try{ ac.close(); }catch{} }, 200);
-    } catch(e){ log(`⚠️ Не удалось активировать аудио контекст: ${e}`); }
+      // Создаем несколько аудио контекстов для надежности
+      for (let i = 0; i < 3; i++) {
+        const ac = new AudioContext();
+        if (ac.state === 'suspended') await ac.resume();
+        
+        // Создаем беззвучный генератор для "пробуждения" браузера
+        const osc = ac.createOscillator();
+        const gain = ac.createGain();
+        gain.gain.value = 0.001; // Очень тихо, но не 0
+        osc.connect(gain).connect(ac.destination);
+        osc.start();
+        osc.stop(ac.currentTime + 0.1);
+        
+        setTimeout(() => { try { ac.close(); } catch {} }, 500);
+      }
+      
+      // Дополнительно эмулируем пользовательское взаимодействие
+      document.addEventListener('click', function enableAudio() {
+        const ac = new AudioContext();
+        if (ac.state === 'suspended') ac.resume();
+        document.removeEventListener('click', enableAudio);
+        try { ac.close(); } catch {}
+      }, { once: true });
+      
+      log('🎧 Аудио контекст агрессивно активирован для автовоспроизведения');
+    } catch(e) { 
+      log(`⚠️ Не удалось активировать аудио контекст: ${e}`); 
+    }
 
     rtc = new WebRTCManager({
       localVideo: els.localVideo,
@@ -321,11 +338,8 @@ function renderPresence(members){
     const meterBar = node.querySelector('.meter>span');
     const muteBtn = node.querySelector('.mute');
     const vol = node.querySelector('.volume');
-    const gate = document.createElement('button');
-    gate.className = 'gate';
-    gate.textContent = '▶️ Включить звук';
-    node.querySelector('.media').appendChild(gate);
 
+    // Принудительная настройка для автоматического воспроизведения
     video.muted = false;
     video.volume = 1.0;
     video.autoplay = true;
@@ -347,13 +361,33 @@ function renderPresence(members){
           audioBadge.title = hasAudio ? 'Аудио активно' : 'Нет аудио';
         }
 
+        // Принудительное воспроизведение аудио без кнопок
         try{
+          // Убираем muted для гарантированного воспроизведения аудио
+          video.muted = false;
           await video.play();
-          gate.style.display='none';
-          log(`▶️ Поток авто-запущен от ${peer.name || peer.id.slice(0,8)} (аудио=${hasAudio})`);
+          log(`▶️ Поток автоматически запущен от ${peer.name || peer.id.slice(0,8)} (аудио=${hasAudio})`);
         }catch(e){
-          gate.style.display='block';
-          log(`❌ Автовоспроизведение заблокировано для ${peer.name || peer.id.slice(0,8)}: ${e?.name||e}`);
+          // Если autoplay заблокирован, пробуем несколько раз
+          log(`⚠️ Autoplay заблокирован, пробуем принудительно для ${peer.name || peer.id.slice(0,8)}: ${e?.name||e}`);
+          
+          // Пробуем через промисы и click-эмуляцию
+          const retryPlay = async () => {
+            for(let i = 0; i < 5; i++) {
+              try {
+                video.muted = false; // Убираем muted
+                await video.play();
+                log(`✅ Воспроизведение успешно после попытки ${i+1}`);
+                return;
+              } catch (err) {
+                if (i < 4) {
+                  await new Promise(resolve => setTimeout(resolve, 200));
+                }
+              }
+            }
+            log(`❌ Не удалось запустить автовоспроизведение после 5 попыток`);
+          };
+          retryPlay();
         }
       },
       onLevel: (lvl)=>{ 
@@ -371,10 +405,6 @@ function renderPresence(members){
       muteBtn.textContent = video.muted ? '🔊 Unmute' : '🔇 Mute';
     });
     vol.addEventListener('input', ()=>{ video.volume = parseFloat(vol.value || '1'); });
-    gate.addEventListener('click', async ()=>{
-      try{ await video.play(); gate.style.display='none'; log('🔊 Воспроизведение принудительно включено пользователем'); }
-      catch(e){ log(`play() failed: ${e?.name||e}`); }
-    });
 
     grid.appendChild(node);
 
@@ -410,3 +440,35 @@ if (ensureToken()) {
   log('Готово. Введите Room ID и нажмите Подключиться.');
   refreshDevices().catch(()=>{});
 }
+
+// Глобальная активация аудио при загрузке страницы
+(() => {
+  // Активируем аудио контекст на первом пользовательском взаимодействии
+  const activateAudio = async () => {
+    try {
+      const ac = new AudioContext();
+      if (ac.state === 'suspended') await ac.resume();
+      
+      // Создаем короткий беззвучный сигнал
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      gain.gain.value = 0.001;
+      osc.connect(gain).connect(ac.destination);
+      osc.start();
+      osc.stop(ac.currentTime + 0.05);
+      
+      console.log('🎧 Аудио контекст активирован глобально');
+      setTimeout(() => { try { ac.close(); } catch {} }, 200);
+    } catch (e) {
+      console.warn('Не удалось активировать аудио:', e);
+    }
+  };
+
+  // Активируем на любое взаимодействие
+  ['click', 'keydown', 'touchstart'].forEach(event => {
+    document.addEventListener(event, activateAudio, { once: true });
+  });
+
+  // Попробуем активировать сразу (на случай если браузер позволяет)
+  setTimeout(activateAudio, 100);
+})();
