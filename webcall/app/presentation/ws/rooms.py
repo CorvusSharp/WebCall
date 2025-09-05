@@ -20,9 +20,9 @@ router = APIRouter()
 
 # In-process registry of room connections for chat broadcast (dev/test)
 _room_clients: dict[UUID, set[WebSocket]] = defaultdict(set)
-_ws_user: dict[WebSocket, UUID] = {}
+_ws_conn: dict[WebSocket, UUID] = {}
 _room_members: dict[UUID, set[UUID]] = defaultdict(set)
-_user_names: dict[UUID, str] = {}
+_display_names: dict[UUID, str] = {}
 
 
 @router.websocket("/ws/rooms/{room_id}")
@@ -118,24 +118,18 @@ async def ws_room(
             elif data.get("type") == "join":
                 # Register user presence
                 try:
-                    uid = UUID(data.get("fromUserId"))
+                    conn_id = UUID(data.get("fromUserId"))
                 except Exception:
                     # if invalid id, skip presence for this socket
                     continue
-                _ws_user[websocket] = uid
-                _room_members[room_uuid].add(uid)
-                # try resolve username (optional)
-                try:
-                    u = await users.get_by_id(uid)
-                    if u:
-                        _user_names[uid] = u.username
-                except Exception:
-                    # fallback leave name unset; will be derived from uuid
-                    pass
+                _ws_conn[websocket] = conn_id
+                _room_members[room_uuid].add(conn_id)
+                uname = data.get("username") or str(conn_id)[:8]
+                _display_names[conn_id] = uname
                 # broadcast presence list to room
                 members = []
                 for u in sorted(_room_members[room_uuid], key=str):
-                    name = _user_names.get(u) or str(u)[:8]
+                    name = _display_names.get(u) or str(u)[:8]
                     members.append({"id": str(u), "name": name})
                 for ws in list(_room_clients.get(room_uuid, set())):
                     with contextlib.suppress(Exception):
@@ -196,17 +190,16 @@ async def ws_room(
         with contextlib.suppress(KeyError):
             _room_clients[room_uuid].remove(websocket)
         # presence cleanup and broadcast
-        uid = _ws_user.pop(websocket, None)
+        uid = _ws_conn.pop(websocket, None)
         if uid is not None:
             with contextlib.suppress(KeyError):
                 _room_members[room_uuid].remove(uid)
-            # cleanup username mapping if user no longer present in any room instance
             if uid not in _room_members.get(room_uuid, set()):
                 with contextlib.suppress(KeyError):
-                    _user_names.pop(uid)
+                    _display_names.pop(uid)
             members = []
             for u in sorted(_room_members[room_uuid], key=str):
-                name = _user_names.get(u) or str(u)[:8]
+                name = _display_names.get(u) or str(u)[:8]
                 members.append({"id": str(u), "name": name})
             for ws in list(_room_clients.get(room_uuid, set())):
                 with contextlib.suppress(Exception):

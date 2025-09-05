@@ -7,7 +7,10 @@ import { bind, setText, setEnabled, appendLog, appendChat } from './ui.js';
 let token = null;
 let ws = null;
 let rtc = null;
+// connId — уникальный идентификатор соединения в комнате (UUID v4)
 let userId = null;
+// accountId — идентификатор аккаунта из JWT (для будущих нужд/отображения)
+let accountId = null;
 let reconnectTimeout = null;
 let isManuallyDisconnected = false;
 
@@ -57,7 +60,8 @@ function ensureToken(){
   }
   try{
     const payload = JSON.parse(atob(token.split('.')[1]));
-    userId = payload.sub;
+  // Используем из токена только идентификатор аккаунта, но не для сигналинга
+  accountId = payload.sub;
     const now = Math.floor(Date.now()/1000);
     if (payload.exp && now >= payload.exp) {
       localStorage.removeItem('wc_token');
@@ -142,7 +146,8 @@ async function connect(){
       }
     });
 
-    if (!userId) userId = crypto.randomUUID();
+  // Всегда создаём новый connId для текущей сессии в комнате
+  userId = crypto.randomUUID();
 
     try{
       await rtc.init(ws, userId, {
@@ -154,7 +159,8 @@ async function connect(){
         ws.send(JSON.stringify({
           type: 'join',
           fromUserId: userId,
-          username: localStorage.getItem('wc_user') || 'User'
+          username: localStorage.getItem('wc_user') || 'User',
+          accountId: accountId || null
         }));
       }
     } catch(e) {
@@ -289,10 +295,7 @@ function renderPresence(members){
       }
     };
     setSink(rtc?.getOutputDeviceId());
-    attachPeerMedia(peer.id, { onSinkChange: setSink });
-
-    attachPeerMedia(peer.id, {
-      onTrack: async (stream)=>{
+    attachPeerMedia(peer.id, { onSinkChange: setSink, onTrack: async (stream)=>{
         const aStream = new MediaStream(stream.getAudioTracks());
         const vStream = new MediaStream(stream.getVideoTracks());
         if (aStream.getTracks().length) {
@@ -304,9 +307,7 @@ function renderPresence(members){
           avatar.style.display='none';
           try { await video.play(); } catch {}
         }
-      },
-      onLevel: (lvl)=>{ meterBar.style.width = `${Math.min(1, Math.max(0, lvl)) * 100}%`; }
-    });
+      }, onLevel: (lvl)=>{ meterBar.style.width = `${Math.min(1, Math.max(0, lvl)) * 100}%`; } });
 
     muteBtn.addEventListener('click', ()=>{
       audio.muted = !audio.muted;

@@ -186,7 +186,18 @@ export class WebRTCManager {
     }catch(e){ this._log(`ICE-restart(${peerId.slice(0,8)}): ${e?.name||e}`); }
   }
 
-  bindPeerMedia(peerId, handlers){ const st = this.peers.get(peerId); if (st) st.handlers = handlers; }
+  bindPeerMedia(peerId, handlers){
+    const st = this.peers.get(peerId);
+    if (!st) { return; }
+    // Объединим обработчики вместо полного перезаписывания
+    st.handlers = Object.assign({}, st.handlers || {}, handlers || {});
+    // Если уже есть треки — сразу пробросим поток
+    if (st.stream && (st.stream.getAudioTracks().length || st.stream.getVideoTracks().length)){
+      try { st.handlers?.onTrack?.(st.stream); } catch {}
+      // И сразу поднимем анализатор уровня для аудио
+      try { if (st.stream.getAudioTracks().length) this._setupPeerLevel(peerId, st); } catch {}
+    }
+  }
   getPeer(peerId){ return this.peers.get(peerId); }
 
   async handleSignal(msg, mediaBinder){
