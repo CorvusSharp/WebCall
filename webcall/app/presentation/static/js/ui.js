@@ -12,10 +12,15 @@ export function appendLog(container, msg){
   container.scrollTop = container.scrollHeight;
 }
 
-export function appendChat(container, who, text){
+export function appendChat(container, who, text, opts={}){
+  const { self=false } = opts;
   const line = document.createElement('div');
-  line.classList.add('chat-line');
-  line.innerHTML = `<span class="chat-who">${escapeHtml(who)}:</span> <span class="chat-text">${escapeHtml(text)}</span>`;
+  line.classList.add('chat-line', self ? 'self' : 'other');
+  if (self) {
+    line.innerHTML = `<span class="bubble">${escapeHtml(text)}</span>`;
+  } else {
+    line.innerHTML = `<span class="bubble"><strong class="nick">${escapeHtml(who)}</strong> ${escapeHtml(text)}</span>`;
+  }
   container.appendChild(line);
   container.scrollTop = container.scrollHeight;
 }

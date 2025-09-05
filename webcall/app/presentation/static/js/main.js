@@ -257,10 +257,9 @@ async function connect(){
     else if (msg.type === 'chat'){
       // определяем ID отправителя (Redis может присылать authorId)
       const senderId = msg.fromUserId || msg.authorId;
-      // избегаем дублирования: своё уже добавлено локально
-      if (senderId && senderId === getStableConnId()) return;
-      const who = msg.authorName || (senderId ? (latestUserNames[senderId] || senderId.slice(0,6)) : 'unknown');
-      appendChat(els.chat, who, msg.content);
+  const who = msg.authorName || (senderId ? (latestUserNames[senderId] || senderId.slice(0,6)) : 'unknown');
+  const isSelf = senderId && senderId === getStableConnId();
+  appendChat(els.chat, who, msg.content, { self: !!isSelf });
     }
   };
 
@@ -388,8 +387,8 @@ function setupUI(){
     const text = els.chatInput.value;
     if (text && ws) {
   (signal.sendChat || (()=>{}))(ws, text, getStableConnId());
-      appendChat(els.chat, 'Вы', text);
-      els.chatInput.value = '';
+  // Не добавляем локально, ждём эхо от сервера, чтобы унифицировать отображение
+  els.chatInput.value = '';
     }
   });
   bind(els.chatInput, 'keydown', (e)=>{ if (e.key==='Enter') els.btnSend.click() });

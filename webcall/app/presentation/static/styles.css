@@ -292,6 +292,20 @@ input[type="range"]::-moz-range-thumb{
 .chat-input input{
   flex:1;
 }
+/* Chat lines (bubbles) */
+.chat-line{display:flex;flex-direction:column;max-width:80%;margin:4px 0;animation:fade-in .18s ease}
+.chat-line .who{font-size:11px;letter-spacing:.3px;opacity:.75;margin:0 4px 3px 4px}
+.chat-line .bubble{padding:10px 12px;border-radius:14px;font-size:14px;line-height:1.35;white-space:pre-wrap;word-break:break-word;position:relative;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.25)}
+.chat-line.self{margin-left:auto;align-items:flex-end}
+.chat-line.self .bubble{background:var(--grad);color:#fff;border-color:transparent;box-shadow:0 4px 18px rgba(124,58,237,.45)}
+.chat-line.other{align-items:flex-start}
+.chat-line.other .bubble{background:linear-gradient(160deg,rgba(255,255,255,.08),rgba(255,255,255,.04));}
+@keyframes fade-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+/* ======= BUTTONS GRID (2x3) ======= */
+.controls-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;align-items:stretch}
+.controls-grid .btn{width:100%}
+@media(max-width:640px){.controls-grid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}}
 
 /* ======= LOGS ======= */
 .logs{
