@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
+import hmac
 
 from ....application.dto.auth import LoginInput, RegisterInput, RegisterOutput, TokenOutput
 from ....core.domain.models import User
@@ -19,6 +20,14 @@ async def register(
     hasher: PasswordHasher = Depends(get_password_hasher),
 ) -> RegisterOutput:  # type: ignore[override]
     from ....application.use_cases.auth import RegisterUser
+    from ....infrastructure.config import get_settings
+
+    settings = get_settings()
+    if settings.REGISTRATION_SECRET:
+        provided = data.secret or ""
+        # constant-time compare
+        if not hmac.compare_digest(provided.encode(), settings.REGISTRATION_SECRET.encode()):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid registration secret")
 
     use = RegisterUser(users, hasher)
     user = await use.execute(email=data.email, username=data.username, password=data.password)

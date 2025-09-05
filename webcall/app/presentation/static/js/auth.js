@@ -11,6 +11,7 @@ const els = {
   regEmail: document.getElementById('regEmail'),
   regUsername: document.getElementById('regUsername'),
   regPassword: document.getElementById('regPassword'),
+  regSecret: document.getElementById('regSecret'),
   btnDoLogin: document.getElementById('btnDoLogin'),
   btnDoRegister: document.getElementById('btnDoRegister'),
   log: document.getElementById('authLog'),
@@ -67,13 +68,20 @@ async function doRegister(){
   const email = els.regEmail.value.trim();
   const username = els.regUsername.value.trim();
   const password = els.regPassword.value;
+  const secret = (els.regSecret?.value || '').trim();
   try{
-    await register(email, username, password);
+    await register(email, username, password, secret || undefined);
   try { localStorage.setItem('wc_username', username); } catch {}
     log('Регистрация успешна. Выполняем вход...');
     const data = await login(email, password);
     applyPostLogin(data.access_token);
-  }catch(e){ log(String(e)); }
+  }catch(e){
+    if (String(e).includes('invalid registration secret')) {
+      log('Неверный секретный код.');
+    } else {
+      log(String(e));
+    }
+  }
 }
 
 // Инициализация

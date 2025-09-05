@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     # Security
     JWT_SECRET: str = "change_me"
     JWT_EXPIRES_MIN: int = 60
+    # Optional registration secret (if set, required for /auth/register)
+    REGISTRATION_SECRET: str | None = None
 
     # Databases
     DATABASE_URL: str

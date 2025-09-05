@@ -1,0 +1,42 @@
+import os
+import pytest
+from httpx import AsyncClient
+from fastapi import status
+
+from ..bootstrap.main import app
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif('DATABASE_URL' not in os.environ, reason='DATABASE_URL not configured')
+async def test_register_forbidden_without_secret(monkeypatch):
+    monkeypatch.setenv('REGISTRATION_SECRET', 'abc123')
+    # reload cached settings
+    from ..infrastructure.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    settings = get_settings()
+    assert settings.REGISTRATION_SECRET == 'abc123'
+
+    async with AsyncClient(app=app, base_url='http://test') as ac:
+        r = await ac.post('/api/v1/auth/register', json={
+            'email': 'user1@example.com', 'username': 'user1', 'password': 'password'
+        })
+        assert r.status_code == status.HTTP_403_FORBIDDEN
+        assert 'secret' in r.text.lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif('DATABASE_URL' not in os.environ, reason='DATABASE_URL not configured')
+async def test_register_success_with_secret(monkeypatch):
+    monkeypatch.setenv('REGISTRATION_SECRET', 'abc123')
+    from ..infrastructure.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    async with AsyncClient(app=app, base_url='http://test') as ac:
+        r = await ac.post('/api/v1/auth/register', json={
+            'email': 'user2@example.com', 'username': 'user2', 'password': 'password', 'secret': 'abc123'
+        })
+        assert r.status_code == status.HTTP_201_CREATED, r.text
+        data = r.json()
+    assert data['username'] == 'user2'
