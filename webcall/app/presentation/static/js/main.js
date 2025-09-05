@@ -1,6 +1,6 @@
 // main.js — вход (исправлено: логируем адрес WS, кнопка диагностики, стабильные presence/инициация)
 import { buildWs } from './api.js';
-import { sendChat, isWsOpen, sendPing, sendSignal } from './signal.js';
+import * as signal from './signal.js';
 import { WebRTCManager } from './webrtc.js';
 import { bind, setText, setEnabled, appendLog, appendChat } from './ui.js';
 
@@ -38,6 +38,15 @@ const els = {
   btnDiag: document.getElementById('btnDiag'),
   btnToggleTheme: document.getElementById('btnToggleTheme'),
 };
+
+// Безопасный пинг: используем экспорт из signal.js, либо локальный fallback
+const sendPingSafe = signal.sendPing ?? ((ws) => {
+  try {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'ping' }));
+    }
+  } catch {}
+});
 
 function log(msg){ appendLog(els.logs, msg); }
 function stat(line){ els.stats && appendLog(els.stats, line); }
@@ -162,7 +171,7 @@ async function connect(){
     setConnectedState(true);
     if (reconnectTimeout) clearTimeout(reconnectTimeout);
     if (pingTimer) clearInterval(pingTimer);
-    pingTimer = setInterval(()=> sendPing(ws), 30000);
+  pingTimer = setInterval(()=> sendPingSafe(ws), 30000);
 
     await rtc.init(ws, userId, { micId: selected.mic, camId: selected.cam });
   };
@@ -267,7 +276,7 @@ function setupUI(){
   bind(els.btnSend, 'click', ()=>{
     const text = els.chatInput.value;
     if (text && ws) {
-      sendChat(ws, text, getStableConnId());
+  (signal.sendChat || (()=>{}))(ws, text, getStableConnId());
       appendChat(els.chat, 'Вы', text);
       els.chatInput.value = '';
     }
