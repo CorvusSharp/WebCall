@@ -22,6 +22,7 @@ router = APIRouter()
 _room_clients: dict[UUID, set[WebSocket]] = defaultdict(set)
 _ws_user: dict[WebSocket, UUID] = {}
 _room_members: dict[UUID, set[UUID]] = defaultdict(set)
+_user_names: dict[UUID, str] = {}
 
 
 @router.websocket("/ws/rooms/{room_id}")
@@ -121,8 +122,19 @@ async def ws_room(
                     continue
                 _ws_user[websocket] = uid
                 _room_members[room_uuid].add(uid)
+                # try resolve username (optional)
+                try:
+                    u = await users.get_by_id(uid)
+                    if u:
+                        _user_names[uid] = u.username
+                except Exception:
+                    # fallback leave name unset; will be derived from uuid
+                    pass
                 # broadcast presence list to room
-                members = [str(u) for u in sorted(_room_members[room_uuid], key=str)]
+                members = []
+                for u in sorted(_room_members[room_uuid], key=str):
+                    name = _user_names.get(u) or str(u)[:8]
+                    members.append({"id": str(u), "name": name})
                 for ws in list(_room_clients.get(room_uuid, set())):
                     with contextlib.suppress(Exception):
                         await ws.send_json({"type": "presence", "members": members})
@@ -186,7 +198,14 @@ async def ws_room(
         if uid is not None:
             with contextlib.suppress(KeyError):
                 _room_members[room_uuid].remove(uid)
-            members = [str(u) for u in sorted(_room_members[room_uuid], key=str)]
+            # cleanup username mapping if user no longer present in any room instance
+            if uid not in _room_members.get(room_uuid, set()):
+                with contextlib.suppress(KeyError):
+                    _user_names.pop(uid)
+            members = []
+            for u in sorted(_room_members[room_uuid], key=str):
+                name = _user_names.get(u) or str(u)[:8]
+                members.append({"id": str(u), "name": name})
             for ws in list(_room_clients.get(room_uuid, set())):
                 with contextlib.suppress(Exception):
                     await ws.send_json({"type": "presence", "members": members})

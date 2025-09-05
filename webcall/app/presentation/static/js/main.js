@@ -155,26 +155,27 @@ function toggleTheme(){
 function renderPresence(members){
   if (!els.peersGrid) return;
   const my = userId;
-  const others = members.filter(x=>x!==my);
+  const list = members.map(m=> (typeof m === 'string'? {id:m, name:m.slice(0,8)} : m));
+  const others = list.filter(x=>x.id!==my);
   const grid = els.peersGrid;
   const existing = new Set(Array.from(grid.querySelectorAll('.peer-tile')).map(n=>n.dataset.peer));
   // Remove tiles of peers no longer present
   for (const peer of existing){
-    if (!others.includes(peer)) grid.querySelector(`.peer-tile[data-peer="${peer}"]`)?.remove();
+    if (!others.some(o=>o.id===peer)) grid.querySelector(`.peer-tile[data-peer="${peer}"]`)?.remove();
   }
   // Add tiles for new peers
   const tpl = document.getElementById('tpl-peer-tile');
   for (const peer of others){
-    if (grid.querySelector(`.peer-tile[data-peer="${peer}"]`)) continue;
+    if (grid.querySelector(`.peer-tile[data-peer="${peer.id}"]`)) continue;
     const node = tpl.content.firstElementChild.cloneNode(true);
-    node.dataset.peer = peer;
-    node.querySelector('.name').textContent = peer.slice(0,8);
+    node.dataset.peer = peer.id;
+    node.querySelector('.name').textContent = peer.name || peer.id.slice(0,8);
     const v = node.querySelector('video');
     const bar = node.querySelector('.level-bar>span');
     const volume = node.querySelector('.volume');
     const muteBtn = node.querySelector('.mute');
     // Attach media when first track arrives
-    attachPeerMedia(peer, {
+    attachPeerMedia(peer.id, {
       onTrack: (stream)=>{ v.srcObject = stream; node.querySelector('.avatar').style.display='none'; },
       onLevel: (lvl)=>{ if (bar) bar.style.width = `${Math.min(1,Math.max(0,lvl))*100}%`; }
     });
@@ -184,8 +185,8 @@ function renderPresence(members){
     grid.appendChild(node);
 
     // Детерминированное правило: инициатор — у кого id строкой меньше
-    if (my && peer && my < peer) {
-      rtc?.startOffer?.(peer);
+    if (my && peer?.id && my < peer.id) {
+      rtc?.startOffer?.(peer.id);
     }
   }
 }
