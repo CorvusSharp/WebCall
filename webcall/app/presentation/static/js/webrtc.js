@@ -211,7 +211,10 @@ export class WebRTCManager {
   }
   getPeer(peerId){ return this.peers.get(peerId); }
 
-  async handleSignal(msg, mediaBinder){
+
+
+
+async handleSignal(msg, mediaBinder){
     if (msg?.fromUserId && this.userId && msg.fromUserId === this.userId) return;
     if (msg?.targetUserId && this.userId && msg.targetUserId !== this.userId) return;
 
@@ -239,6 +242,14 @@ export class WebRTCManager {
         await this._flushQueuedCandidates(peerId);
 
         const answer = await pc.createAnswer();
+        
+        // ИСПРАВЛЕНИЕ: Проверяем наличие локального аудио
+        const hasLocalAudio = this.localStream && this.localStream.getAudioTracks().length > 0;
+        if (hasLocalAudio) {
+            answer.sdp = answer.sdp.replace(/a=recvonly/g, 'a=sendrecv');
+            this._log(`🔄 Изменен SDP ответ с recvonly на sendrecv для ${peerId.slice(0,8)}`);
+        }
+        
         await pc.setLocalDescription(answer);
         sendSignal(this.ws, 'answer', { sdp: answer.sdp }, this.userId, peerId);
         this._log(`📤 Answered offer from ${peerId.slice(0,8)}\n${answer.sdp}`);
@@ -265,6 +276,8 @@ export class WebRTCManager {
       }
     }
   }
+
+
 
   async _flushQueuedCandidates(peerId){
     const peer = this.peers.get(peerId);
@@ -325,16 +338,20 @@ export class WebRTCManager {
   }
 
   async close(){
-    try{ this.ws?.close(); }catch{}
-    for (const [, st] of this.peers){
-      try{ st.pc?.close(); }catch{}
-      if (st.level?.raf) cancelAnimationFrame(st.level.raf);
-      clearTimeout(st.iceFailTimer);
-    }
-    this.peers.clear();
-    if (this.localStream) this.localStream.getTracks().forEach(t=>t.stop());
-    this.localStream = null;
-    this._log('WebRTC соединения закрыты');
+      try{ this.ws?.close(); }catch{}
+      for (const [, st] of this.peers){
+          try{ 
+              // Останавливаем отправку ICE кандидатов при разрыве
+              st.pc.onicecandidate = null;
+              st.pc.close();
+          }catch{}
+          if (st.level?.raf) cancelAnimationFrame(st.level.raf);
+          clearTimeout(st.iceFailTimer);
+      }
+      this.peers.clear();
+      if (this.localStream) this.localStream.getTracks().forEach(t=>t.stop());
+      this.localStream = null;
+      this._log('WebRTC соединения закрыты');
   }
 
   _setupPeerLevel(peerId, state){
@@ -363,32 +380,52 @@ export class WebRTCManager {
   }
 
   // Быстрая диагностика
+// Добавьте в diagnoseAudio более детальную информацию
   async diagnoseAudio(){
-    this._log('=== 🔊 АУДИО ДИАГНОСТИКА ===');
-    if (this.localStream){
-      const ats = this.localStream.getAudioTracks();
-      this._log(`📱 Локальный поток: ${ats.length} аудио треков`);
-      ats.forEach((t,i)=> this._log(`🎤 Трек ${i}: enabled=${t.enabled}, readyState=${t.readyState}, muted=${t.muted}`));
-    } else {
-      this._log('❌ НЕТ локального потока!');
-    }
-    this._log(`🔗 Активных соединений: ${this.peers.size}`);
-    for (const [peerId, st] of this.peers){
-      const pc = st.pc;
-      this._log(`--- Peer ${peerId.slice(0,8)} ---`);
-      this._log(`📊 Состояние: ${pc.connectionState}`);
-      this._log(`🧊 ICE: ${pc.iceConnectionState}`);
-      this._log(`📡 Signaling: ${pc.signalingState}`);
-      try{
-        const stats = await pc.getStats();
-        let inboundAudio = 0, outboundAudio = 0;
-        stats.forEach(r=>{
-          if (r.type === 'inbound-rtp' && r.kind === 'audio') inboundAudio++;
-          if (r.type === 'outbound-rtp' && r.kind === 'audio') outboundAudio++;
-        });
-        this._log(`📈 Inbound audio: ${inboundAudio}, Outbound audio: ${outboundAudio}`);
-      }catch{}
-    }
-    this._log('=== КОНЕЦ ДИАГНОСТИКИ ===');
+      this._log('=== 🔊 АУДИО ДИАГНОСТИКА ===');
+      if (this.localStream){
+          const ats = this.localStream.getAudioTracks();
+          this._log(`📱 Локальный поток: ${ats.length} аудио треков`);
+          ats.forEach((t,i)=> this._log(`🎤 Трек ${i}: enabled=${t.enabled}, readyState=${t.readyState}, muted=${t.muted}`));
+      } else {
+          this._log('❌ НЕТ локального потока!');
+      }
+      this._log(`🔗 Активных соединений: ${this.peers.size}`);
+      
+      for (const [peerId, st] of this.peers){
+          const pc = st.pc;
+          this._log(`--- Peer ${peerId.slice(0,8)} ---`);
+          this._log(`📊 Состояние: ${pc.connectionState}`);
+          this._log(`🧊 ICE: ${pc.iceConnectionState}`);
+          this._log(`📡 Signaling: ${pc.signalingState}`);
+          
+          // Детальная информация о транспорте
+          try{
+              const stats = await pc.getStats();
+              let hasActiveConnection = false;
+              
+              stats.forEach(r=>{
+                  if (r.type === 'transport' && r.selectedCandidatePairId) {
+                      const candidatePair = stats.get(r.selectedCandidatePairId);
+                      if (candidatePair && candidatePair.state === 'succeeded') {
+                          hasActiveConnection = true;
+                          this._log(`🌐 Активное соединение: ${candidatePair.localCandidateId} ↔ ${candidatePair.remoteCandidateId}`);
+                      }
+                  }
+                  if (r.type === 'inbound-rtp' && r.kind === 'audio') {
+                      this._log(`📥 Входящий аудио: ${r.bytesReceived} bytes, ${r.packetsReceived} packets`);
+                  }
+                  if (r.type === 'outbound-rtp' && r.kind === 'audio') {
+                      this._log(`📤 Исходящий аудио: ${r.bytesSent} bytes, ${r.packetsSent} packets`);
+                  }
+              });
+              
+              this._log(`✅ Активное соединение: ${hasActiveConnection ? 'Да' : 'Нет'}`);
+              
+          } catch(e) {
+              this._log(`❌ Ошибка получения статистики: ${e}`);
+          }
+      }
+      this._log('=== КОНЕЦ ДИАГНОСТИКИ ===');
   }
 }

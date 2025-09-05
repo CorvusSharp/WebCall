@@ -14,7 +14,7 @@ let accountId = null;
 let reconnectTimeout = null;
 let isManuallyDisconnected = false;
 let pingTimer = null;
-
+let isReconnecting = false;
 let selected = { mic: null, cam: null, spk: null };
 
 const els = {
@@ -199,22 +199,31 @@ async function connect(){
   };
 
   ws.onclose = (ev) => {
-    log(`WS closed (${ev?.code||''} ${ev?.reason||''})`);
-    setConnectedState(false);
-    if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
-    if (ev?.code === 4401) {
-      log('Сессия авторизации недействительна. Переходим на страницу входа...');
-      isManuallyDisconnected = true;
-      if (reconnectTimeout) { clearTimeout(reconnectTimeout); reconnectTimeout = null; }
-      const params = new URLSearchParams({ redirect: location.pathname + location.search });
-      location.href = `/auth?${params.toString()}`;
-      return;
-    }
-    if (!isManuallyDisconnected && !reconnectTimeout) {
-      log('Попытка переподключения через 2 секунды...');
-      reconnectTimeout = setTimeout(connect, 2000);
-    }
-  };
+      log(`WS closed (${ev?.code||''} ${ev?.reason||''})`);
+      setConnectedState(false);
+      if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+      if (ev?.code === 4401) {
+          log('Сессия авторизации недействительна. Переходим на страницу входа...');
+          isManuallyDisconnected = true;
+          if (reconnectTimeout) { clearTimeout(reconnectTimeout); reconnectTimeout = null; }
+          const params = new URLSearchParams({ redirect: location.pathname + location.search });
+          location.href = `/auth?${params.toString()}`;
+          return;
+      }
+      if (!isManuallyDisconnected && !reconnectTimeout && !isReconnecting) {
+          isReconnecting = true;
+          log('Попытка переподключения через 5 секунд...');
+          reconnectTimeout = setTimeout(() => {
+              isReconnecting = false;
+              connect();
+          }, 5000);
+      }
+
+      // При успешном подключении сбросьте флаг
+      ws.onopen = async () => {
+          isReconnecting = false;
+          // ... остальной код
+      };
 
   ws.onerror = (err) => { log(`WS error: ${err?.message || err}`); };
 }
