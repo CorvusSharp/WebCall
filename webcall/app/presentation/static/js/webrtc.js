@@ -198,9 +198,9 @@ export class WebRTCManager {
       await this.init(this.ws, this.userId);
       const offer = { type: "offer", sdp: msg.sdp };
 
-      // защита от эха собственного оффера
-      if (this.pc.localDescription?.type === "offer" &&
-          this.pc.localDescription?.sdp === msg.sdp) {
+      // защита от эха собственного оффера (на всякий случай)
+      if (peer.pc.localDescription?.type === "offer" &&
+          peer.pc.localDescription?.sdp === msg.sdp) {
         this._log("Self-offer echo ignored");
         return;
       }
