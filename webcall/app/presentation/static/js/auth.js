@@ -69,8 +69,12 @@ async function doRegister(){
   const username = els.regUsername.value.trim();
   const password = els.regPassword.value;
   const secret = (els.regSecret?.value || '').trim();
+  if (!secret){
+    log('Введите секретный код.');
+    return;
+  }
   try{
-    await register(email, username, password, secret || undefined);
+    await register(email, username, password, secret);
   try { localStorage.setItem('wc_username', username); } catch {}
     log('Регистрация успешна. Выполняем вход...');
     const data = await login(email, password);

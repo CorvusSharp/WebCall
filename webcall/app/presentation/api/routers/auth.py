@@ -23,11 +23,9 @@ async def register(
     from ....infrastructure.config import get_settings
 
     settings = get_settings()
-    if settings.REGISTRATION_SECRET:
-        provided = data.secret or ""
-        # constant-time compare
-        if not hmac.compare_digest(provided.encode(), settings.REGISTRATION_SECRET.encode()):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid registration secret")
+    provided = data.secret
+    if not hmac.compare_digest(provided.encode(), settings.REGISTRATION_SECRET.encode()):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid registration secret")
 
     use = RegisterUser(users, hasher)
     user = await use.execute(email=data.email, username=data.username, password=data.password)

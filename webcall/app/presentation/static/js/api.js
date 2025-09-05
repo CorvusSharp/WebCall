@@ -41,8 +41,7 @@ export async function login(email, password){
   return await r.json();
 }
 export async function register(email, username, password, secret){
-  const payload = { email, username, password };
-  if (secret) payload.secret = secret;
+  const payload = { email, username, password, secret };
   const r = await fetch(`${base}/api/v1/auth/register`, {
     method: 'POST', headers:{'content-type':'application/json'},
     body: JSON.stringify(payload)
