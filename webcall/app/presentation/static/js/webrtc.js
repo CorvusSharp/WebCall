@@ -118,27 +118,45 @@ export class WebRTCManager {
       iceFailTimer: null,
     };
 
-    // ВСЕГДА добавляем аудио transceiver для двусторонней связи
-    try {
-      pc.addTransceiver("audio", { direction: "sendrecv" });
-    } catch(e) {
-      this._log(`Failed to add audio transceiver: ${e}`);
-    }
-
-    // Добавляем локальные треки, если есть
+    // КРИТИЧНО: Сначала добавляем transceivers, ПОТОМ треки
+    // Это гарантирует правильную последовательность SDP negotiation
+    
+    // 1. Создаём transceiver для аудио
+    const audioTransceiver = pc.addTransceiver("audio", { 
+      direction: "sendrecv"
+    });
+    
+    // 2. Добавляем локальный аудио трек, если есть
     if (this.localStream) {
-      for (const track of this.localStream.getTracks()) {
+      const audioTrack = this.localStream.getAudioTracks()[0];
+      if (audioTrack) {
         try {
-          const sender = pc.getSenders().find(s => s.track?.kind === track.kind);
-          if (sender) {
-            await sender.replaceTrack(track);
-          } else {
-            pc.addTrack(track, this.localStream);
-          }
+          await audioTransceiver.sender.replaceTrack(audioTrack);
+          this._log(`Добавлен аудио трек для ${peerId.slice(0,8)}`);
         } catch(e) {
-          this._log(`addTrack error: ${e}`);
+          this._log(`Ошибка добавления аудио трека для ${peerId}: ${e}`);
+          // Fallback: добавляем через addTrack
+          try {
+            pc.addTrack(audioTrack, this.localStream);
+          } catch(e2) {
+            this._log(`Fallback addTrack тоже не сработал: ${e2}`);
+          }
+        }
+      } else {
+        this._log(`ВНИМАНИЕ: Нет локального аудио трека для отправки ${peerId.slice(0,8)}`);
+      }
+      
+      // Добавляем видео трек, если есть
+      const videoTrack = this.localStream.getVideoTracks()[0];
+      if (videoTrack) {
+        try {
+          pc.addTrack(videoTrack, this.localStream);
+        } catch(e) {
+          this._log(`Ошибка добавления видео трека: ${e}`);
         }
       }
+    } else {
+      this._log(`КРИТИЧНО: Нет локального потока при создании peer ${peerId.slice(0,8)}`);
     }
 
     pc.addEventListener("icecandidate", (e) => {
@@ -148,14 +166,20 @@ export class WebRTCManager {
     });
 
     pc.addEventListener("track", (e) => {
+      this._log(`Получен трек от ${peerId.slice(0,8)}: ${e.track.kind} (enabled: ${e.track.enabled})`);
+      
       if (e.track && !state.stream.getTracks().some(t => t.id === e.track.id)) {
         state.stream.addTrack(e.track);
+        this._log(`Трек ${e.track.kind} добавлен в поток ${peerId.slice(0,8)}`);
       }
+      
       if (state.handlers?.onTrack) {
         state.handlers.onTrack(state.stream);
       }
+      
       if (e.track?.kind === 'audio') {
         this._setupPeerLevel(peerId, state);
+        this._log(`Настроен аудио анализатор для ${peerId.slice(0,8)}`);
       }
     });
 
@@ -204,15 +228,27 @@ export class WebRTCManager {
 
   async _createAndSendOffer(peerId, state) {
     try {
+      // Убеждаемся, что у нас есть локальные треки перед созданием offer
+      if (this.localStream) {
+        const audioTrack = this.localStream.getAudioTracks()[0];
+        if (audioTrack) {
+          const audioSender = state.pc.getSenders().find(s => s.track?.kind === 'audio');
+          if (audioSender && !audioSender.track) {
+            await audioSender.replaceTrack(audioTrack);
+            this._log(`Обновлен аудио трек перед offer для ${peerId.slice(0,8)}`);
+          }
+        }
+      }
+      
       const offer = await state.pc.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: true
       });
       await state.pc.setLocalDescription(offer);
       sendSignal(this.ws, 'offer', { sdp: offer.sdp }, this.userId, peerId);
-      this._log(`Sent offer to ${peerId}`);
+      this._log(`Sent offer to ${peerId.slice(0,8)}`);
     } catch(e) {
-      this._log(`Failed to create/send offer to ${peerId}: ${e}`);
+      this._log(`Failed to create/send offer to ${peerId.slice(0,8)}: ${e}`);
     }
   }
 
@@ -239,6 +275,62 @@ export class WebRTCManager {
     return this.peers.get(peerId); 
   }
 
+  // Диагностика состояния аудио
+  diagnoseAudio() {
+    this._log('=== АУДИО ДИАГНОСТИКА ===');
+    
+    // Локальный поток
+    if (this.localStream) {
+      const audioTracks = this.localStream.getAudioTracks();
+      this._log(`Локальный поток: ${audioTracks.length} аудио треков`);
+      audioTracks.forEach((track, i) => {
+        this._log(`  Трек ${i}: enabled=${track.enabled}, readyState=${track.readyState}, muted=${track.muted}`);
+      });
+    } else {
+      this._log('❌ НЕТ локального потока!');
+    }
+    
+    // Peer connections
+    this._log(`Активных соединений: ${this.peers.size}`);
+    for (const [peerId, state] of this.peers) {
+      this._log(`--- Peer ${peerId.slice(0,8)} ---`);
+      this._log(`  Состояние: ${state.pc.connectionState}`);
+      this._log(`  ICE: ${state.pc.iceConnectionState}`);
+      this._log(`  Signaling: ${state.pc.signalingState}`);
+      
+      // Исходящие треки
+      const senders = state.pc.getSenders();
+      this._log(`  Отправляем треков: ${senders.length}`);
+      senders.forEach((sender, i) => {
+        if (sender.track) {
+          this._log(`    Sender ${i}: ${sender.track.kind}, enabled=${sender.track.enabled}`);
+        } else {
+          this._log(`    Sender ${i}: НЕТ ТРЕКА`);
+        }
+      });
+      
+      // Входящие треки
+      const receivers = state.pc.getReceivers();
+      this._log(`  Получаем треков: ${receivers.length}`);
+      receivers.forEach((receiver, i) => {
+        if (receiver.track) {
+          this._log(`    Receiver ${i}: ${receiver.track.kind}, enabled=${receiver.track.enabled}`);
+        } else {
+          this._log(`    Receiver ${i}: НЕТ ТРЕКА`);
+        }
+      });
+      
+      // Stream состояние
+      const streamTracks = state.stream.getTracks();
+      this._log(`  В потоке треков: ${streamTracks.length}`);
+      streamTracks.forEach((track, i) => {
+        this._log(`    Stream трек ${i}: ${track.kind}, enabled=${track.enabled}`);
+      });
+    }
+    
+    this._log('=== КОНЕЦ ДИАГНОСТИКИ ===');
+  }
+
   async handleSignal(msg, mediaBinder){
     if (msg?.fromUserId && this.userId && msg.fromUserId === this.userId) return;
     if (msg?.targetUserId && this.userId && msg.targetUserId !== this.userId) return;
@@ -246,8 +338,12 @@ export class WebRTCManager {
     const peerId = msg.fromUserId;
     if (!peerId) return;
 
+    // НЕ вызываем повторную инициализацию здесь!
     // Убеждаемся, что у нас есть локальный поток
-    await this.init(this.ws, this.userId);
+    if (!this.localStream) {
+      this._log('КРИТИЧНО: Нет локального потока при обработке сигнала!');
+      return;
+    }
     
     const peer = await this._ensurePeer(peerId);
     const pc = peer.pc;
@@ -263,12 +359,24 @@ export class WebRTCManager {
         peer.remoteSet = true;
         await this._flushQueuedCandidates(peerId);
 
+        // Убеждаемся, что у нас есть аудио треки перед созданием ответа
+        if (this.localStream) {
+          const audioTrack = this.localStream.getAudioTracks()[0];
+          if (audioTrack) {
+            const audioSender = pc.getSenders().find(s => s.track?.kind === 'audio');
+            if (audioSender && !audioSender.track) {
+              await audioSender.replaceTrack(audioTrack);
+              this._log(`Обновлен аудио трек перед answer для ${peerId.slice(0,8)}`);
+            }
+          }
+        }
+
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         sendSignal(this.ws, 'answer', { sdp: answer.sdp }, this.userId, peerId);
-        this._log(`Answered offer from ${peerId}`);
+        this._log(`Answered offer from ${peerId.slice(0,8)}`);
       } catch(e) {
-        this._log(`Failed to handle offer from ${peerId}: ${e}`);
+        this._log(`Failed to handle offer from ${peerId.slice(0,8)}: ${e}`);
       }
 
     } else if (msg.signalType === 'answer'){
@@ -314,21 +422,26 @@ export class WebRTCManager {
   }
 
   async startOffer(peerId){
-    await this.init(this.ws, this.userId);
+    // НЕ вызываем повторную инициализацию
+    if (!this.localStream) {
+      this._log('КРИТИЧНО: Нет локального потока для startOffer!');
+      return;
+    }
+    
     const state = await this._ensurePeer(peerId);
     
     if (!state.isInitiator) {
-      this._log(`Not initiator for ${peerId}, skipping offer`);
+      this._log(`Not initiator for ${peerId.slice(0,8)}, skipping offer`);
       return;
     }
     
     if (state.negotiationInProgress) {
-      this._log(`Negotiation already in progress for ${peerId}`);
+      this._log(`Negotiation already in progress for ${peerId.slice(0,8)}`);
       return;
     }
     
     if (state.pc.signalingState !== 'stable'){
-      this._log(`Cannot start offer for ${peerId} - signaling state: ${state.pc.signalingState}`);
+      this._log(`Cannot start offer for ${peerId.slice(0,8)} - signaling state: ${state.pc.signalingState}`);
       return;
     }
     
@@ -336,7 +449,7 @@ export class WebRTCManager {
       state.negotiationInProgress = true;
       await this._createAndSendOffer(peerId, state);
     } catch(e) {
-      this._log(`Failed to start offer for ${peerId}: ${e}`);
+      this._log(`Failed to start offer for ${peerId.slice(0,8)}: ${e}`);
     } finally {
       state.negotiationInProgress = false;
     }

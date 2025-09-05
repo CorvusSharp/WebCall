@@ -20,6 +20,7 @@ const els = {
   btnLeave: document.getElementById('btnLeave'),
   btnCopyLink: document.getElementById('btnCopyLink'),
   btnForceConnect: document.getElementById('btnForceConnect'),
+  btnDiagnose: document.getElementById('btnDiagnose'),
   btnSend: document.getElementById('btnSend'),
   chatInput: document.getElementById('chatInput'),
   connStatus: document.getElementById('connStatus'),
@@ -47,6 +48,7 @@ function setConnectedState(connected){
   setEnabled(els.btnToggleMic, connected);
   setEnabled(els.btnToggleCam, connected);
   setEnabled(els.btnForceConnect, connected);
+  setEnabled(els.btnDiagnose, connected);
 }
 
 function ensureToken(){
@@ -181,6 +183,7 @@ async function connect(){
     try {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'signal') {
+        // НЕ вызываем повторную инициализацию здесь
         await rtc?.handleSignal(msg, attachPeerMedia);
       } else if (msg.type === 'chat') {
         const who = msg.authorName || msg.authorId || 'system';
@@ -283,6 +286,15 @@ function forceReconnectAll() {
   }
 }
 
+function diagnoseAudio() {
+  if (!rtc) {
+    log('WebRTC менеджер не инициализирован');
+    return;
+  }
+  
+  rtc.diagnoseAudio();
+}
+
 // ===== Привязка плеера к peer
 function attachPeerMedia(peerId, handlers){
   rtc?.bindPeerMedia?.(peerId, handlers);
@@ -337,17 +349,27 @@ function renderPresence(members){
         // Обновляем индикатор аудио
         const audioBadge = node.querySelector('.badge.audio');
         const hasAudio = stream.getAudioTracks().length > 0;
+        const audioTrack = stream.getAudioTracks()[0];
+        
         if (audioBadge) {
           audioBadge.textContent = hasAudio ? '🎵' : '🔇';
           audioBadge.title = hasAudio ? 'Аудио активно' : 'Нет аудио';
         }
         
+        // Дополнительная диагностика аудио трека
+        if (hasAudio && audioTrack) {
+          log(`🎵 Аудио трек от ${peer.name || peer.id.slice(0,8)}: enabled=${audioTrack.enabled}, readyState=${audioTrack.readyState}, muted=${audioTrack.muted}`);
+        } else {
+          log(`❌ Нет аудио от ${peer.name || peer.id.slice(0,8)}`);
+        }
+        
         try{ 
           await video.play(); 
-          gate.style.display='none'; 
-          log(`Получен поток от ${peer.name || peer.id.slice(0,8)} (аудио: ${hasAudio ? 'да' : 'нет'})`);
-        } catch{ 
-          gate.style.display='block'; 
+          gate.style.display='none';
+          log(`▶️ Поток запущен от ${peer.name || peer.id.slice(0,8)} (аудио: ${hasAudio ? 'да' : 'нет'})`);
+        } catch(e){ 
+          gate.style.display='block';
+          log(`❌ Ошибка воспроизведения от ${peer.name || peer.id.slice(0,8)}: ${e}`);
         }
       },
       onLevel: (lvl)=>{ 
@@ -398,6 +420,7 @@ bind(els.btnConnect, 'click', connect);
 bind(els.btnLeave, 'click', leave);
 bind(els.btnCopyLink, 'click', copyLink);
 bind(els.btnForceConnect, 'click', forceReconnectAll);
+bind(els.btnDiagnose, 'click', diagnoseAudio);
 bind(els.btnSend, 'click', send);
 bind(els.btnToggleMic, 'click', toggleMic);
 bind(els.btnToggleCam, 'click', toggleCam);
