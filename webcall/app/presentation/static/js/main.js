@@ -37,6 +37,7 @@ const els = {
   spkSel: document.getElementById('spkSel'),
   btnDiag: document.getElementById('btnDiag'),
   btnToggleTheme: document.getElementById('btnToggleTheme'),
+  membersList: document.getElementById('membersList'),
 };
 
 // Безопасный пинг: используем экспорт из signal.js, либо локальный fallback
@@ -171,7 +172,10 @@ async function connect(){
     setConnectedState(true);
     if (reconnectTimeout) clearTimeout(reconnectTimeout);
     if (pingTimer) clearInterval(pingTimer);
-  pingTimer = setInterval(()=> sendPingSafe(ws), 30000);
+    pingTimer = setInterval(()=> sendPingSafe(ws), 30000);
+
+    // Сообщаем серверу о подключении (presence)
+    try { ws.send(JSON.stringify({ type: 'join', fromUserId: userId })); } catch {}
 
     await rtc.init(ws, userId, { micId: selected.mic, camId: selected.cam });
   };
@@ -184,6 +188,15 @@ async function connect(){
     }
     else if (msg.type === 'presence'){
       log(`В комнате: ${msg.users.join(', ')}`);
+      // отображаем список участников
+      if (els.membersList) {
+        els.membersList.innerHTML = '';
+        msg.users.forEach(u => {
+          const d = document.createElement('div');
+          d.textContent = u.slice(0,6);
+          els.membersList.appendChild(d);
+        });
+      }
       const myId = getStableConnId();
       for (const peerId of msg.users){
         if (peerId !== myId) {
@@ -202,7 +215,9 @@ async function connect(){
       if (tile) tile.remove();
     }
     else if (msg.type === 'chat'){
-      const who = msg.authorName || (msg.fromUserId ? msg.fromUserId.slice(0,6) : 'unknown');
+      // определяем ID отправителя (Redis может присылать authorId)
+      const senderId = msg.fromUserId || msg.authorId;
+      const who = msg.authorName || (senderId ? senderId.slice(0,6) : 'unknown');
       appendChat(els.chat, who, msg.content);
     }
   };
@@ -256,10 +271,13 @@ function bindPeerMedia(peerId){
 
 function leave(){
   isManuallyDisconnected = true;
+  // Сообщаем серверу о выходе
+  try { ws.send(JSON.stringify({ type: 'leave', fromUserId: userId })); } catch {}
   if (ws) ws.close();
   if (rtc) { rtc.close(); rtc = null; }
   setConnectedState(false);
   els.peersGrid.innerHTML = '';
+  if (els.membersList) els.membersList.innerHTML = '';
   log('Отключено');
 }
 
