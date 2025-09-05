@@ -1,5 +1,37 @@
 // main.js — вход (исправлено: логируем адрес WS, кнопка диагностики, стабильные presence/инициация)
 import { buildWs } from './api.js';
+
+// ===== RUNTIME AUTH GUARD =====
+// Если пользователь не авторизован (нет валидного JWT в localStorage) —
+// сразу редиректим на страницу авторизации, прокидывая redirect обратно на текущий путь.
+// Это предотвращает «первый заход без регистрации» в интерфейс звонка.
+try {
+  const rawToken = localStorage.getItem('wc_token');
+  let needAuth = !rawToken;
+  if (rawToken) {
+    try {
+      const payload = JSON.parse(atob(rawToken.split('.')[1]));
+      const now = Math.floor(Date.now() / 1000);
+      if (payload.exp && now >= payload.exp) needAuth = true;
+    } catch { needAuth = true; }
+  }
+  if (needAuth) {
+    const redirectTarget = location.pathname + location.search;
+    const params = new URLSearchParams({ redirect: redirectTarget.startsWith('/') ? redirectTarget : '/call' });
+    // Если есть параметр room в URL — передадим его отдельно, чтобы после логина сразу войти
+    try {
+      const url = new URL(location.href);
+      const room = url.searchParams.get('room');
+      if (room) params.set('room', room);
+    } catch {}
+    location.replace(`/auth?${params.toString()}`);
+    // Прерываем дальнейшее выполнение скрипта
+    throw new Error('__halt_main_init');
+  }
+} catch (e) {
+  if (e && e.message === '__halt_main_init') { /* silent stop */ }
+  else { /* не блокируем работу если что-то пошло совсем не так */ }
+}
 import * as signal from './signal.js';
 import { WebRTCManager } from './webrtc.js';
 import { bind, setText, setEnabled, appendLog, appendChat } from './ui.js';
