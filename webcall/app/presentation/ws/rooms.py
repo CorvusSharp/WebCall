@@ -105,6 +105,10 @@ async def ws_room(
         while True:
             msg = await websocket.receive_text()
             data: dict[str, Any] = json.loads(msg)
+            if data.get("type") == "ping":
+                # heartbeat
+                await websocket.send_json({"type": "pong"})
+                continue
             if data.get("type") == "signal":
                 s = Signal.create(
                     type=data.get("signalType"),

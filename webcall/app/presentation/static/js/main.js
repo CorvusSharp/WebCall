@@ -13,6 +13,7 @@ let userId = null;
 let accountId = null;
 let reconnectTimeout = null;
 let isManuallyDisconnected = false;
+let pingTimer = null;
 
 let selected = { mic: null, cam: null, spk: null };
 
@@ -72,6 +73,14 @@ function ensureToken(){
     }
   }catch{}
   return true;
+}
+
+function getStableConnId(){
+  try{
+    let id = sessionStorage.getItem('wc_connid');
+    if (!id){ id = crypto.randomUUID(); sessionStorage.setItem('wc_connid', id); }
+    return id;
+  }catch{ return crypto.randomUUID(); }
 }
 
 // ===== Устройства
@@ -146,8 +155,8 @@ async function connect(){
       }
     });
 
-  // Всегда создаём новый connId для текущей сессии в комнате
-  userId = crypto.randomUUID();
+  // Стабильный connId в рамках вкладки, чтобы не ломать адресацию targetUserId при реконнектах WS
+  userId = getStableConnId();
 
     try{
       await rtc.init(ws, userId, {
@@ -166,6 +175,10 @@ async function connect(){
     } catch(e) {
       log(`Ошибка старта WebRTC: ${e?.name||e}`);
     }
+
+  // Heartbeat
+  if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+  pingTimer = setInterval(()=>{ try{ if (isWsOpen(ws)) ws.send(JSON.stringify({ type: 'ping' })); }catch{} }, 30000);
   };
 
   ws.onmessage = async (ev) => {
@@ -188,6 +201,7 @@ async function connect(){
   ws.onclose = (ev) => {
     log(`WS closed (${ev?.code||''} ${ev?.reason||''})`);
     setConnectedState(false);
+  if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
     if (ev?.code === 4401) {
       log('Сессия авторизации недействительна. Переходим на страницу входа...');
       isManuallyDisconnected = true;
@@ -208,6 +222,7 @@ async function connect(){
 function leave(){
   isManuallyDisconnected = true;
   if (reconnectTimeout) { clearTimeout(reconnectTimeout); reconnectTimeout = null; }
+  if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
   rtc?.close();
   try{ if (isWsOpen(ws)) ws.send(JSON.stringify({ type: 'leave', fromUserId: userId })); }catch{}
   try{ ws?.close(); }catch{}
@@ -269,10 +284,52 @@ function renderPresence(members){
     if (!others.some(o=>o.id===pid)) grid.querySelector(`.tile[data-peer="${pid}"]`)?.remove();
   }
 
-  // Добавляем новых
+  // Добавляем новых и лечим существующих без активного PC
   const tpl = document.getElementById('tpl-peer-tile');
   for (const peer of others){
-    if (grid.querySelector(`.tile[data-peer="${peer.id}"]`)) continue;
+    const already = grid.querySelector(`.tile[data-peer="${peer.id}"]`);
+    if (already){
+      // Плитка есть, но мог не быть активный RTCPeerConnection (после реконнекта)
+      const node = already;
+      const video = node.querySelector('.video');
+      const audio = node.querySelector('.audio');
+      const meterBar = node.querySelector('.meter>span');
+      const muteBtn = node.querySelector('.mute');
+      const vol = node.querySelector('.volume');
+      const gate = node.querySelector('.gate');
+      const avatar = node.querySelector('.avatar');
+
+      const setSink = async (deviceId)=>{
+        if (!deviceId) return;
+        for (const el of [audio, video]){
+          if (typeof el.setSinkId === 'function'){
+            try{ await el.setSinkId(deviceId); }catch{}
+          }
+        }
+      };
+      setSink(rtc?.getOutputDeviceId());
+      attachPeerMedia(peer.id, { onSinkChange: setSink, onTrack: async (stream)=>{
+        const aStream = new MediaStream(stream.getAudioTracks());
+        const vStream = new MediaStream(stream.getVideoTracks());
+        if (aStream.getTracks().length) {
+          audio.srcObject = aStream;
+          try { await audio.play(); gate.style.display='none'; } catch { gate.style.display='block'; }
+        }
+        if (vStream.getTracks().length) {
+          video.srcObject = vStream;
+          avatar.style.display='none';
+          try { await video.play(); } catch {}
+        }
+      }, onLevel: (lvl)=>{ meterBar.style.width = `${Math.min(1, Math.max(0, lvl)) * 100}%`; } });
+
+      // Если у нас ещё нет PC для этого peer — инициатор повторно пошлёт offer
+      const st = rtc?.getPeer?.(peer.id);
+      const pcState = st?.pc?.connectionState;
+      if ((!st || pcState === 'closed' || pcState === 'failed' || pcState === 'disconnected') && my && my < peer.id){
+        setTimeout(()=> rtc?.startOffer?.(peer.id), 200);
+      }
+      continue;
+    }
 
     const node = tpl.content.firstElementChild.cloneNode(true);
     node.dataset.peer = peer.id;
@@ -322,7 +379,7 @@ function renderPresence(members){
     grid.appendChild(node);
 
     // инициатор — у кого id меньше
-    if (my && peer?.id && my < peer.id) {
+  if (my && peer?.id && my < peer.id) {
       setTimeout(() => rtc?.startOffer?.(peer.id), 400);
     }
   }
