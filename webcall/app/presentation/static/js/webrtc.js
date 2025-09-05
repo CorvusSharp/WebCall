@@ -118,33 +118,17 @@ export class WebRTCManager {
       iceFailTimer: null,
     };
 
-    // УПРОЩЁННЫЙ ПОДХОД: Используем только addTrack вместо transceivers
-    // Это более надёжно для аудио связи
-    
+    // ПРОСТОЕ И ПРЯМОЕ добавление треков
     if (this.localStream) {
-      // Добавляем аудио трек (приоритет)
-      const audioTrack = this.localStream.getAudioTracks()[0];
-      if (audioTrack) {
+      // Добавляем ВСЕ треки из локального потока
+      this.localStream.getTracks().forEach(track => {
         try {
-          pc.addTrack(audioTrack, this.localStream);
-          this._log(`✅ Добавлен аудио трек для ${peerId.slice(0,8)}`);
+          pc.addTrack(track, this.localStream);
+          this._log(`✅ Добавлен ${track.kind} трек для ${peerId.slice(0,8)}`);
         } catch(e) {
-          this._log(`❌ Ошибка добавления аудио трека для ${peerId}: ${e}`);
+          this._log(`❌ Ошибка добавления ${track.kind} трека для ${peerId}: ${e}`);
         }
-      } else {
-        this._log(`⚠️ ВНИМАНИЕ: Нет локального аудио трека для отправки ${peerId.slice(0,8)}`);
-      }
-      
-      // Добавляем видео трек, если есть
-      const videoTrack = this.localStream.getVideoTracks()[0];
-      if (videoTrack) {
-        try {
-          pc.addTrack(videoTrack, this.localStream);
-          this._log(`✅ Добавлен видео трек для ${peerId.slice(0,8)}`);
-        } catch(e) {
-          this._log(`❌ Ошибка добавления видео трека: ${e}`);
-        }
-      }
+      });
     } else {
       this._log(`🚨 КРИТИЧНО: Нет локального потока при создании peer ${peerId.slice(0,8)}`);
     }
@@ -163,6 +147,7 @@ export class WebRTCManager {
         this._log(`Трек ${e.track.kind} добавлен в поток ${peerId.slice(0,8)}`);
       }
       
+      // Вызываем onTrack сразу при получении каждого трека
       if (state.handlers?.onTrack) {
         state.handlers.onTrack(state.stream);
       }
@@ -218,23 +203,6 @@ export class WebRTCManager {
 
   async _createAndSendOffer(peerId, state) {
     try {
-      // Убеждаемся, что все локальные треки добавлены
-      if (this.localStream) {
-        const localAudioTrack = this.localStream.getAudioTracks()[0];
-        const localVideoTrack = this.localStream.getVideoTracks()[0];
-        
-        // Проверяем, что аудио трек добавлен в PC
-        const audioSender = state.pc.getSenders().find(s => s.track?.kind === 'audio');
-        if (localAudioTrack && (!audioSender || !audioSender.track)) {
-          try {
-            state.pc.addTrack(localAudioTrack, this.localStream);
-            this._log(`🔄 Добавлен аудио трек при создании offer для ${peerId.slice(0,8)}`);
-          } catch(e) {
-            this._log(`❌ Ошибка добавления аудио трека при offer: ${e}`);
-          }
-        }
-      }
-      
       const offer = await state.pc.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: true,
@@ -380,23 +348,6 @@ export class WebRTCManager {
         await pc.setRemoteDescription(desc);
         peer.remoteSet = true;
         await this._flushQueuedCandidates(peerId);
-
-        // Убеждаемся, что все локальные треки добавлены перед созданием ответа
-        if (this.localStream) {
-          const localAudioTrack = this.localStream.getAudioTracks()[0];
-          const localVideoTrack = this.localStream.getVideoTracks()[0];
-          
-          // Проверяем аудио трек
-          const audioSender = pc.getSenders().find(s => s.track?.kind === 'audio');
-          if (localAudioTrack && (!audioSender || !audioSender.track)) {
-            try {
-              pc.addTrack(localAudioTrack, this.localStream);
-              this._log(`🔄 Добавлен аудио трек при создании answer для ${peerId.slice(0,8)}`);
-            } catch(e) {
-              this._log(`❌ Ошибка добавления аудио трека при answer: ${e}`);
-            }
-          }
-        }
 
         const answer = await pc.createAnswer({
           offerToReceiveAudio: true,

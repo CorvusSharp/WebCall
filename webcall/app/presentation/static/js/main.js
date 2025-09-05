@@ -146,15 +146,41 @@ async function connect(){
     log('WS connected');
     setConnectedState(true);
     
-    // ГЛОБАЛЬНАЯ АКТИВАЦИЯ АУДИО КОНТЕКСТА
+    // ГЛОБАЛЬНАЯ АКТИВАЦИЯ АУДИО КОНТЕКСТА - более агрессивно
     try {
-      const globalAudioCtx = new AudioContext();
-      if (globalAudioCtx.state === 'suspended') {
-        await globalAudioCtx.resume();
-        log('🎧 Глобальный аудио контекст активирован');
+      // Создаём дополнительный audio элемент для "разблокировки" браузера
+      const dummyAudio = document.createElement('audio');
+      dummyAudio.volume = 0;
+      dummyAudio.muted = false;
+      dummyAudio.autoplay = true;
+      
+      // Создаём короткий аудио-сигнал
+      const audioCtx = new AudioContext();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      
+      gainNode.gain.value = 0.001; // Очень тихо
+      oscillator.frequency.value = 440;
+      oscillator.type = 'sine';
+      
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
       }
-      // Закрываем сразу, главное - активировать
-      setTimeout(() => { try { globalAudioCtx.close(); } catch {} }, 100);
+      
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.01); // 10ms
+      
+      log('🎧 Глобальный аудио контекст агрессивно активирован');
+      
+      // Закрываем через короткое время
+      setTimeout(() => { 
+        try { audioCtx.close(); } catch {} 
+        try { dummyAudio.remove(); } catch {}
+      }, 100);
+      
     } catch(e) {
       log(`⚠️ Не удалось активировать глобальный аудио контекст: ${e}`);
     }
@@ -348,7 +374,12 @@ function renderPresence(members){
     const meterBar = node.querySelector('.meter>span');
     const muteBtn = node.querySelector('.mute');
     const vol = node.querySelector('.volume');
-    const gate = node.querySelector('.gate');
+
+    // Предварительно настраиваем video элемент для автоматического воспроизведения
+    video.muted = false;
+    video.volume = 1.0;
+    video.autoplay = true;
+    video.playsInline = true;
 
     if (typeof video.setSinkId === 'function' && rtc?.getOutputDeviceId()){
       video.setSinkId(rtc.getOutputDeviceId()).catch(()=>{});
@@ -376,11 +407,9 @@ function renderPresence(members){
           log(`❌ Нет аудио от ${peer.name || peer.id.slice(0,8)}`);
         }
         
-        // КРИТИЧНО: Настраиваем воспроизведение аудио
+        // АВТОМАТИЧЕСКОЕ воспроизведение аудио
         video.muted = false;
         video.volume = 1.0;
-        video.autoplay = true;
-        video.playsInline = true;
         
         // Устанавливаем аудио устройство вывода, если доступно
         if (typeof video.setSinkId === 'function' && rtc?.getOutputDeviceId()){
@@ -392,31 +421,48 @@ function renderPresence(members){
           }
         }
         
+        // ПРИНУДИТЕЛЬНЫЙ запуск воспроизведения
         try{ 
           await video.play(); 
-          gate.style.display='none';
-          log(`▶️ Поток запущен от ${peer.name || peer.id.slice(0,8)} (аудио: ${hasAudio ? 'да' : 'нет'})`);
+          log(`▶️ Поток автоматически запущен от ${peer.name || peer.id.slice(0,8)} (аудио: ${hasAudio ? 'да' : 'нет'})`);
           
-          // Принудительно "разбудим" аудио контекст
+          // Если есть аудио - активируем контекст принудительно
           if (hasAudio) {
-            const tempAudioCtx = new AudioContext();
-            const source = tempAudioCtx.createMediaStreamSource(stream);
-            const gain = tempAudioCtx.createGain();
-            gain.gain.value = 1.0;
-            source.connect(gain);
-            gain.connect(tempAudioCtx.destination);
-            
-            // Закрываем временный контекст через секунду
-            setTimeout(() => {
-              try { tempAudioCtx.close(); } catch {}
-            }, 1000);
-            
-            log(`🎧 Аудио контекст активирован для ${peer.name || peer.id.slice(0,8)}`);
+            try {
+              const audioCtx = new AudioContext();
+              if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+              }
+              const source = audioCtx.createMediaStreamSource(stream);
+              const gain = audioCtx.createGain();
+              gain.gain.value = 1.0;
+              source.connect(gain);
+              gain.connect(audioCtx.destination);
+              
+              log(`🎧 Аудио контекст автоматически активирован для ${peer.name || peer.id.slice(0,8)}`);
+              
+              // Закрываем временный контекст через секунду
+              setTimeout(() => {
+                try { audioCtx.close(); } catch {}
+              }, 1000);
+            } catch(audioErr) {
+              log(`⚠️ Не удалось автоматически активировать аудио: ${audioErr}`);
+            }
           }
           
         } catch(e){ 
-          gate.style.display='block';
-          log(`❌ Ошибка воспроизведения от ${peer.name || peer.id.slice(0,8)}: ${e}`);
+          log(`❌ Ошибка автоматического воспроизведения от ${peer.name || peer.id.slice(0,8)}: ${e}`);
+          
+          // Если автоматическое воспроизведение не удалось, пытаемся ещё раз через небольшую задержку
+          setTimeout(async () => {
+            try {
+              video.muted = false;
+              await video.play();
+              log(`✅ Повторная попытка воспроизведения успешна для ${peer.name || peer.id.slice(0,8)}`);
+            } catch(retryErr) {
+              log(`❌ Повторная попытка не удалась для ${peer.name || peer.id.slice(0,8)}: ${retryErr}`);
+            }
+          }, 500);
         }
       },
       onLevel: (lvl)=>{ 
@@ -440,44 +486,6 @@ function renderPresence(members){
       muteBtn.textContent = video.muted ? '🔊 Unmute' : '🔇 Mute';
     });
     vol.addEventListener('input', ()=>{ video.volume = parseFloat(vol.value || '1'); });
-    gate.addEventListener('click', async ()=>{
-      try{ 
-        // Принудительно запускаем аудио
-        video.muted = false;
-        video.volume = 1.0;
-        await video.play(); 
-        gate.style.display='none'; 
-        
-        // Дополнительно активируем аудио контекст
-        if (video.srcObject && video.srcObject.getAudioTracks().length > 0) {
-          try {
-            const audioCtx = new AudioContext();
-            if (audioCtx.state === 'suspended') {
-              await audioCtx.resume();
-            }
-            const source = audioCtx.createMediaStreamSource(video.srcObject);
-            const gain = audioCtx.createGain();
-            gain.gain.value = 1.0;
-            source.connect(gain);
-            gain.connect(audioCtx.destination);
-            
-            log(`🎧 Аудио принудительно активировано для ${peer.name || peer.id.slice(0,8)}`);
-            
-            // Закрываем контекст через 2 секунды
-            setTimeout(() => {
-              try { audioCtx.close(); } catch {}
-            }, 2000);
-          } catch(audioErr) {
-            log(`⚠️ Ошибка активации аудио контекста: ${audioErr}`);
-          }
-        }
-        
-        log(`✅ Принудительно запущен поток от ${peer.name || peer.id.slice(0,8)}`);
-      }
-      catch(e){ 
-        log(`❌ Принудительный запуск не удался для ${peer.name || peer.id.slice(0,8)}: ${e?.name||e}`); 
-      }
-    });
 
     grid.appendChild(node);
 
