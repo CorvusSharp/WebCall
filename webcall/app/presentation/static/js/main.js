@@ -258,18 +258,20 @@ function bindPeerMedia(peerId){
   const level = tile.querySelector('.level-bar');
   name.textContent = `user-${peerId.slice(0,6)}`;
 
+  // включаем безопасное авто-воспроизведение
+  if (video) { video.playsInline = true; video.autoplay = true; }
+  if (audio) { audio.autoplay = true; }
+
   rtc.bindPeerMedia(peerId, {
     onTrack: (stream) => {
       log(`Получен медиа-поток от ${peerId.slice(0,6)}`);
-      video.srcObject = stream;
+      if (video) video.srcObject = stream;
       if (audio) {
         audio.srcObject = stream;
         audio.muted = false;
         audio.volume = 1.0;
-        // Try to play and log failures for diagnostics
         audio.play().catch((e)=>{
           log(`audio.play() failed for ${peerId.slice(0,6)}: ${e?.name||e}`);
-          // try unlock once
           unlockAudioPlayback();
           setTimeout(()=> audio.play().catch(()=>{}), 250);
         });
@@ -279,11 +281,14 @@ function bindPeerMedia(peerId){
       level.style.transform = `scaleX(${value})`;
     },
     onSinkChange: (deviceId) => {
-      if (video.setSinkId) video.setSinkId(deviceId).catch(e=>log(`sink(${peerId.slice(0,6)}): ${e.name}`));
-      if (audio && audio.setSinkId) audio.setSinkId(deviceId).catch(e=>log(`sinkAudio(${peerId.slice(0,6)}): ${e.name}`));
+      // setSinkId поддерживается только для аудио
+      if (audio && audio.setSinkId) {
+        audio.setSinkId(deviceId).catch(e=>log(`sinkAudio(${peerId.slice(0,6)}): ${e.name}`));
+      }
     }
   });
 }
+
 
 // Try to unlock browser audio autoplay policies
 function unlockAudioPlayback(){
