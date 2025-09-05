@@ -251,6 +251,7 @@ function bindPeerMedia(peerId){
   els.peersGrid.appendChild(tile);
 
   const video = tile.querySelector('video');
+  const audio = tile.querySelector('audio');
   const name = tile.querySelector('.name');
   const level = tile.querySelector('.level-bar');
   name.textContent = `user-${peerId.slice(0,6)}`;
@@ -259,12 +260,17 @@ function bindPeerMedia(peerId){
     onTrack: (stream) => {
       log(`Получен медиа-поток от ${peerId.slice(0,6)}`);
       video.srcObject = stream;
+      if (audio) {
+        audio.srcObject = stream;
+        audio.play().catch(()=>{});
+      }
     },
     onLevel: (value) => {
       level.style.transform = `scaleX(${value})`;
     },
     onSinkChange: (deviceId) => {
       if (video.setSinkId) video.setSinkId(deviceId).catch(e=>log(`sink(${peerId.slice(0,6)}): ${e.name}`));
+      if (audio && audio.setSinkId) audio.setSinkId(deviceId).catch(e=>log(`sinkAudio(${peerId.slice(0,6)}): ${e.name}`));
     }
   });
 }
