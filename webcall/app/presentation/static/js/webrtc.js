@@ -104,23 +104,34 @@ export class WebRTCManager {
       iceFailTimer: null,
     };
 
-    // Добавляем локальные треки (без лишних recvonly, если треков нет — добавим один recvonly audio)
-    if (this.localStream && this.localStream.getTracks().length){
-      for (const track of this.localStream.getTracks()){
-        try {
-          pc.addTrack(track, this.localStream);
-          this._log(`✅ Добавлен ${track.kind} трек для ${peerId.slice(0,8)}`);
-        } catch(e) {
-          this._log(`❌ addTrack(${track.kind}) → ${peerId.slice(0,8)}: ${e}`);
+    // Всегда добавляем аудио-трансивер с правильным направлением
+    const hasLocalAudio = this.localStream && this.localStream.getAudioTracks().length > 0;
+
+    // Создаем трансивер с направлением 'sendrecv' если есть локальный трек, и 'recvonly' если нет.
+    const audioTransceiver = pc.addTransceiver('audio', {
+      direction: hasLocalAudio ? 'sendrecv' : 'recvonly'
+    });
+    this._log(`Added audio transceiver for ${peerId.slice(0,8)} with direction: ${audioTransceiver.direction}`);
+
+    // Добавляем локальные треки, если они есть
+    if (hasLocalAudio) {
+      try {
+        const audioTrack = this.localStream.getAudioTracks()[0];
+        // Важно: используем уже созданный трансивер
+        if (audioTransceiver.sender) {
+          await audioTransceiver.sender.replaceTrack(audioTrack);
         }
+        this._log(`✅ Replaced audio track for ${peerId.slice(0,8)}`);
+      } catch (e) {
+        this._log(`❌ replaceTrack(audio) → ${peerId.slice(0,8)}: ${e}`);
       }
-    } else {
-      try { pc.addTransceiver("audio", { direction: "recvonly" }); this._log(`Добавлен recvonly audio transceiver для ${peerId.slice(0,8)}`); }
-      catch(e){ this._log(`❌ addTransceiver(audio) error → ${peerId.slice(0,8)}: ${e}`); }
     }
 
     pc.addEventListener("icecandidate", (e)=>{
-      if (e.candidate) sendSignal(this.ws, "ice-candidate", { candidate: e.candidate }, this.userId, peerId);
+      if (e.candidate) {
+        sendSignal(this.ws, "ice_candidate", { candidate: e.candidate }, this.userId, peerId);
+        this._log(`🧊 Sent ICE candidate to ${peerId.slice(0,8)}: ${e.candidate.candidate}`);
+      }
     });
 
     pc.addEventListener("track", (e)=>{
@@ -141,10 +152,10 @@ export class WebRTCManager {
       if (!state.polite) { // инициатор — невежливый
         try {
           state.makingOffer = true;
-          const offer = await pc.createOffer(); // без offerToReceive*
+          const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
           sendSignal(this.ws, 'offer', { sdp: offer.sdp }, this.userId, peerId);
-          this._log(`📤 Sent offer → ${peerId.slice(0,8)} (negotiationneeded)`);
+          this._log(`📤 Sent offer → ${peerId.slice(0,8)} (negotiationneeded)\n${offer.sdp}`);
         } catch(e){
           this._log(`negotiationneeded(${peerId.slice(0,8)}): ${e?.name||e}`);
         } finally { state.makingOffer = false; }
@@ -215,6 +226,7 @@ export class WebRTCManager {
     if (msg.signalType === 'offer'){
       await this.init(this.ws, this.userId);
       const desc = { type:'offer', sdp: msg.sdp };
+      this._log(`📥 Received OFFER from ${peerId.slice(0,8)}:\n${msg.sdp}`);
 
       const offerCollision = peer.makingOffer || pc.signalingState !== "stable";
       peer.ignoreOffer = !peer.polite && offerCollision;
@@ -224,38 +236,12 @@ export class WebRTCManager {
         if (offerCollision) await pc.setLocalDescription({ type:'rollback' });
         await pc.setRemoteDescription(desc);
         peer.remoteSet = true;
-        // Гарантируем, что у нас есть sendrecv для аудио с локальным треком
-        try {
-          const at = this.localStream?.getAudioTracks?.()[0];
-          if (at) {
-            // Найдём аудио sender
-            let aSender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
-            if (!aSender) {
-              // Возможно sender есть, но без трека
-              aSender = pc.getSenders().find(s => s.track == null && s?.sender?.track?.kind === 'audio');
-            }
-            if (!aSender) {
-              try { aSender = pc.addTrack(at, this.localStream); } catch {}
-            } else if (!aSender.track) {
-              try { await aSender.replaceTrack(at); } catch {}
-            }
-            // Выставим transceiver на sendrecv
-            try {
-              const tx = pc.getTransceivers().find(t => (t.sender && t.sender === aSender) || (t.receiver?.track?.kind === 'audio'));
-              if (tx && tx.direction !== 'sendrecv') tx.direction = 'sendrecv';
-            } catch {}
-          } else {
-            // Если локального аудио нет — хотя бы приём
-            const tx = pc.getTransceivers().find(t => t.receiver?.track?.kind === 'audio');
-            if (!tx) { try { pc.addTransceiver('audio', { direction: 'recvonly' }); } catch {} }
-          }
-        } catch {}
         await this._flushQueuedCandidates(peerId);
 
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         sendSignal(this.ws, 'answer', { sdp: answer.sdp }, this.userId, peerId);
-        this._log(`📤 Answered offer from ${peerId.slice(0,8)}`);
+        this._log(`📤 Answered offer from ${peerId.slice(0,8)}\n${answer.sdp}`);
       }catch(e){ this._log(`SRD(offer)[${peerId.slice(0,8)}]: ${e?.name||e}`); }
 
     } else if (msg.signalType === 'answer'){
@@ -263,13 +249,15 @@ export class WebRTCManager {
         this._log(`Ignore answer in ${pc.signalingState}`); return;
       }
       try{
+        this._log(`📥 Received ANSWER from ${peerId.slice(0,8)}:\n${msg.sdp}`);
         await pc.setRemoteDescription({ type:'answer', sdp: msg.sdp });
         peer.remoteSet = true;
         await this._flushQueuedCandidates(peerId);
         this._log(`Processed answer from ${peerId.slice(0,8)}`);
       }catch(e){ this._log(`SRD(answer)[${peerId.slice(0,8)}]: ${e?.name||e}`); }
 
-    } else if (msg.signalType === 'ice-candidate'){
+    } else if (msg.signalType === 'ice-candidate' || msg.signalType === 'ice_candidate'){
+      this._log(`🧊 Received ICE candidate from ${peerId.slice(0,8)}: ${msg.candidate ? msg.candidate.candidate : '(null)'}`);
       if (!peer.remoteSet) peer.candidates.push(msg.candidate);
       else {
         try { await pc.addIceCandidate(msg.candidate); }
@@ -302,7 +290,7 @@ export class WebRTCManager {
       const offer = await st.pc.createOffer();
       await st.pc.setLocalDescription(offer);
       sendSignal(this.ws, 'offer', { sdp: offer.sdp }, this.userId, peerId);
-      this._log(`📤 Sent offer → ${peerId.slice(0,8)} (startOffer)`);
+      this._log(`📤 Sent offer → ${peerId.slice(0,8)} (startOffer)\n${offer.sdp}`);
     }catch(e){ this._log(`startOffer(${peerId.slice(0,8)}): ${e?.name||e}`); }
     finally{ st.makingOffer = false; }
   }

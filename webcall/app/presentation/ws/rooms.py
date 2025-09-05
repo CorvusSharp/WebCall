@@ -110,8 +110,12 @@ async def ws_room(
                 await websocket.send_json({"type": "pong"})
                 continue
             if data.get("type") == "signal":
+                raw_t = str(data.get("signalType") or "").strip()
+                norm_t = raw_t.replace("-", "_").replace(" ", "_").lower()
+                if norm_t == "icecandidate":
+                    norm_t = "ice_candidate"
                 s = Signal.create(
-                    type=data.get("signalType"),
+                    type=norm_t,
                     sender_id=UUID(data.get("fromUserId")),
                     room_id=room_uuid,
                     sdp=data.get("sdp"),

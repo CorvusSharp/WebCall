@@ -61,8 +61,8 @@ function ensureToken(){
   }
   try{
     const payload = JSON.parse(atob(token.split('.')[1]));
-  // Используем из токена только идентификатор аккаунта, но не для сигналинга
-  accountId = payload.sub;
+    // Используем из токена только идентификатор аккаунта, но не для сигналинга
+    accountId = payload.sub;
     const now = Math.floor(Date.now()/1000);
     if (payload.exp && now >= payload.exp) {
       localStorage.removeItem('wc_token');
@@ -155,8 +155,8 @@ async function connect(){
       }
     });
 
-  // Стабильный connId в рамках вкладки, чтобы не ломать адресацию targetUserId при реконнектах WS
-  userId = getStableConnId();
+    // Стабильный connId в рамках вкладки, чтобы не ломать адресацию targetUserId при реконнектах WS
+    userId = getStableConnId();
 
     try{
       await rtc.init(ws, userId, {
@@ -176,9 +176,9 @@ async function connect(){
       log(`Ошибка старта WebRTC: ${e?.name||e}`);
     }
 
-  // Heartbeat
-  if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
-  pingTimer = setInterval(()=>{ try{ if (isWsOpen(ws)) ws.send(JSON.stringify({ type: 'ping' })); }catch{} }, 30000);
+    // Heartbeat
+    if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+    pingTimer = setInterval(()=>{ try{ if (isWsOpen(ws)) ws.send(JSON.stringify({ type: 'ping' })); }catch{} }, 30000);
   };
 
   ws.onmessage = async (ev) => {
@@ -201,7 +201,7 @@ async function connect(){
   ws.onclose = (ev) => {
     log(`WS closed (${ev?.code||''} ${ev?.reason||''})`);
     setConnectedState(false);
-  if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+    if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
     if (ev?.code === 4401) {
       log('Сессия авторизации недействительна. Переходим на страницу входа...');
       isManuallyDisconnected = true;
@@ -379,7 +379,7 @@ function renderPresence(members){
     grid.appendChild(node);
 
     // инициатор — у кого id меньше
-  if (my && peer?.id && my < peer.id) {
+    if (my && peer?.id && my < peer.id) {
       setTimeout(() => rtc?.startOffer?.(peer.id), 400);
     }
   }
