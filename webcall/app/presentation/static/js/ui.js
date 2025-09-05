@@ -1,6 +1,5 @@
 // ui.js - UI helpers
 export function bind(el, event, fn){ el?.addEventListener(event, fn); }
-
 export function setText(el, text){ if (el) el.textContent = text; }
 export function setEnabled(el, enabled){ if (el) el.disabled = !enabled; }
 
