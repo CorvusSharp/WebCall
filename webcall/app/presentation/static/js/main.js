@@ -259,7 +259,11 @@ async function connect(){
       } else {
         try {
           const storedU = localStorage.getItem('wc_username');
-          if (storedU && storedU === msg.authorName) isSelf = true;
+          if (!senderId && storedU && storedU === msg.authorName) isSelf = true;
+          // Дополнительный fallback: если authorName совпадает и сообщение пришло почти мгновенно после отправки
+          if (!isSelf && storedU && storedU === msg.authorName && Date.now() - (window.__lastChatSendTs||0) < 1500){
+            isSelf = true;
+          }
         } catch {}
       }
       appendChat(els.chat, who, msg.content, { self: isSelf });
@@ -395,6 +399,7 @@ function setupUI(){
     const text = els.chatInput.value;
     if (text && ws) {
   (signal.sendChat || (()=>{}))(ws, text, getStableConnId());
+  try{ window.__lastChatSendTs = Date.now(); }catch{}
   // Не добавляем локально, ждём эхо от сервера, чтобы унифицировать отображение
   els.chatInput.value = '';
     }
