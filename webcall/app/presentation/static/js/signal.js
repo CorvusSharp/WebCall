@@ -43,4 +43,4 @@ export function sendChat(ws, content, fromUserId) {
   _safeSend(ws, { type: "chat", content, fromUserId });
 }
 
-export { isWsOpen };
+export { isWsOpen, sendPing };
