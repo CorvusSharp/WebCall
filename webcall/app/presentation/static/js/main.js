@@ -217,6 +217,27 @@ async function connect(){
         if (pid && nm) nm.textContent = latestUserNames[pid] || `user-${pid.slice(0,6)}`;
       });
       const myId = getStableConnId();
+      // Удаляем пиров, которых больше нет в комнате (по presence)
+      const allowed = new Set(msg.users.filter(u => u !== myId));
+      // 1) чистим плитки
+      document.querySelectorAll('.tile').forEach(tile => {
+        const pid = tile.getAttribute('data-peer');
+        if (pid && !allowed.has(pid)){
+          try{ const a = tile.querySelector('audio'); if (a){ a.pause?.(); a.srcObject = null; } }catch{}
+          try{ const v = tile.querySelector('video'); if (v){ v.srcObject = null; } }catch{}
+          tile.remove();
+        }
+      });
+      // 2) закрываем RTCPeerConnection и удаляем из RTC
+      if (rtc && rtc.peers){
+        for (const [pid, st] of Array.from(rtc.peers.entries())){
+          if (!allowed.has(pid)){
+            try{ st.pc.onicecandidate = null; st.pc.close(); }catch{}
+            try{ if (st.level?.raf) cancelAnimationFrame(st.level.raf); }catch{}
+            rtc.peers.delete(pid);
+          }
+        }
+      }
       for (const peerId of msg.users){
         if (peerId !== myId) {
           log(`Обнаружен пир ${peerId}, инициирую звонок...`);
