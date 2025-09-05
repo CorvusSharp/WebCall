@@ -348,3 +348,7 @@ input[type="range"]::-moz-range-thumb{
   box-shadow: 0 0 0 .22rem var(--ring), 0 0 0 .44rem var(--ring-2);
   border-radius: 12px;
 }
+
+/* ======= AUTH FIELD ERRORS ======= */
+.input-error { border-color: var(--danger) !important; outline:1px solid var(--danger); }
+.input-error:focus { box-shadow: 0 0 0 .22rem rgba(239,68,68,0.35), 0 0 0 .44rem rgba(239,68,68,0.18) !important; }

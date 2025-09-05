@@ -17,6 +17,18 @@ const els = {
   log: document.getElementById('authLog'),
 };
 
+function clearFieldErrors(){
+  [els.regEmail, els.regUsername, els.regPassword, els.regSecret, els.loginEmail, els.loginPassword].forEach(i=>{
+    if (!i) return;
+    i.classList.remove('input-error');
+  });
+}
+
+function fieldError(el, msg){
+  if (el) el.classList.add('input-error');
+  log(msg);
+}
+
 function log(msg){
   const tpl = document.getElementById('tpl-log-line');
   const node = tpl.content.firstElementChild.cloneNode(true);
@@ -65,14 +77,23 @@ async function doLogin(){
 }
 
 async function doRegister(){
+  clearFieldErrors();
   const email = els.regEmail.value.trim();
   const username = els.regUsername.value.trim();
   const password = els.regPassword.value;
   const secret = (els.regSecret?.value || '').trim();
-  if (!secret){
-    log('Введите секретный код.');
-    return;
-  }
+
+  // Клиентская валидация
+  if (!email) return fieldError(els.regEmail, 'Укажите email.');
+  // Простая email-проверка
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fieldError(els.regEmail, 'Некорректный email.');
+  if (!username) return fieldError(els.regUsername, 'Укажите имя пользователя.');
+  if (username.length < 3) return fieldError(els.regUsername, 'Имя пользователя слишком короткое (мин 3).');
+  if (!password) return fieldError(els.regPassword, 'Введите пароль.');
+  if (password.length < 6) return fieldError(els.regPassword, 'Пароль слишком короткий (мин 6).');
+  if (!secret) return fieldError(els.regSecret, 'Введите секретный код.');
+
+  log('Отправка запроса регистрации...');
   try{
     await register(email, username, password, secret);
   try { localStorage.setItem('wc_username', username); } catch {}
@@ -80,10 +101,29 @@ async function doRegister(){
     const data = await login(email, password);
     applyPostLogin(data.access_token);
   }catch(e){
-    if (String(e).includes('invalid registration secret')) {
-      log('Неверный секретный код.');
+    // Парсим возможный JSON от сервера
+    let raw = String(e);
+    try {
+      if (raw.startsWith('{')) {
+        const j = JSON.parse(raw);
+        if (j.detail) {
+          if (Array.isArray(j.detail)) {
+            j.detail.forEach(d => log(`Ошибка: ${d.loc?.slice(-1)[0]||''} - ${d.msg}`));
+            return;
+          } else if (typeof j.detail === 'string') {
+            raw = j.detail;
+          }
+        }
+      }
+    } catch {}
+    if (/invalid registration secret/i.test(raw)) {
+      fieldError(els.regSecret, 'Неверный секретный код.');
+    } else if (/username/i.test(raw) && /exists|already/i.test(raw)) {
+      fieldError(els.regUsername, 'Имя уже занято.');
+    } else if (/email/i.test(raw) && /exists|already/i.test(raw)) {
+      fieldError(els.regEmail, 'Email уже зарегистрирован.');
     } else {
-      log(String(e));
+      log(raw);
     }
   }
 }
