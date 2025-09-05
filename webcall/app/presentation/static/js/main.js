@@ -42,6 +42,15 @@ const els = {
 function log(msg){ appendLog(els.logs, msg); }
 function stat(line){ els.stats && appendLog(els.stats, line); }
 
+function setConnectingState(isConnecting) {
+  setText(els.connStatus, isConnecting ? 'Подключение...' : 'Не подключено');
+  setEnabled(els.btnConnect, !isConnecting);
+  setEnabled(els.btnLeave, false);
+  setEnabled(els.btnSend, false);
+  setEnabled(els.btnToggleMic, false);
+  setEnabled(els.btnToggleCam, false);
+}
+
 function setConnectedState(connected){
   setText(els.connStatus, connected ? 'Подключено' : 'Не подключено');
   setEnabled(els.btnConnect, !connected);
@@ -248,34 +257,45 @@ function leave(){
 function setupUI(){
   bind(els.btnConnect, 'click', connect);
   bind(els.btnLeave, 'click', leave);
-  bind(els.btnCopyLink, 'click', ()=>{ els.roomId.select(); document.execCommand('copy'); log('Скопировано в буфер обмена'); });
-  bind(els.btnToggleMic, 'click', async () => {
-    const on = !els.btnToggleMic.classList.toggle('active');
-    setText(els.btnToggleMic, on ? 'Микрофон выкл' : 'Микрофон вкл');
-    if (rtc) rtc.setMicEnabled(on);
+  bind(els.btnCopyLink, 'click', ()=>{
+    const url = new URL(location.href);
+    url.searchParams.set('room', els.roomId.value);
+    navigator.clipboard.writeText(url.toString());
+    log('Ссылка скопирована');
   });
-  bind(els.btnToggleCam, 'click', async () => {
-    const on = !els.btnToggleCam.classList.toggle('active');
-    setText(els.btnToggleCam, on ? 'Камера выкл' : 'Камера вкл');
-    if (rtc) rtc.setCamEnabled(on);
+  bind(els.btnSend, 'click', ()=>{
+    const text = els.chatInput.value;
+    if (text && ws) {
+      sendChat(ws, text, getStableConnId());
+      appendChat(els.chat, 'Вы', text);
+      els.chatInput.value = '';
+    }
   });
-  bind(els.btnSend, 'click', () => {
-    const text = els.chatInput.value.trim();
-    if (!text) return;
-    appendChat(els.chat, 'me', text);
-    sendChat(ws, text);
-    els.chatInput.value = '';
+  bind(els.chatInput, 'keydown', (e)=>{ if (e.key==='Enter') els.btnSend.click() });
+  bind(els.btnToggleMic, 'click', ()=>{
+    if (!rtc) return;
+    const enabled = rtc.toggleMic();
+    els.btnToggleMic.textContent = enabled ? 'Выкл.микро' : 'Вкл.микро';
+  });
+  bind(els.btnToggleCam, 'click', ()=>{
+    if (!rtc) return;
+    const enabled = rtc.toggleCam();
+    els.btnToggleCam.textContent = enabled ? 'Выкл.камеру' : 'Вкл.камеру';
   });
   bind(els.btnDiag, 'click', ()=> rtc?.diagnoseAudio());
   bind(els.btnToggleTheme, 'click', ()=>{
     const isDark = document.body.classList.toggle('dark');
     localStorage.setItem('theme', isDark ? 'dark' : 'light');
-    setText(els.btnToggleTheme, isDark ? 'Светлая тема' : 'Тёмная тема');
   });
 
-  // Выбор комнаты из URL
-  const params = new URLSearchParams(location.search);
-  if (params.has('room')) els.roomId.value = params.get('room');
+  // Restore theme
+  if (localStorage.getItem('theme') === 'dark') document.body.classList.add('dark');
+
+  // Restore room from URL
+  const u = new URL(location.href);
+  if (u.searchParams.has('room')) {
+    els.roomId.value = u.searchParams.get('room');
+  }
 }
 
 // ===== Init
