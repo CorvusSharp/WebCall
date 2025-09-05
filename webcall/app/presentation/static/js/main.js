@@ -1,4 +1,4 @@
-// main.js — вход
+// main.js — вход (исправлено: логируем адрес WS, кнопка диагностики, стабильные presence/инициация)
 import { buildWs } from './api.js';
 import { sendChat, isWsOpen } from './signal.js';
 import { WebRTCManager } from './webrtc.js';
@@ -113,12 +113,12 @@ async function connect(){
 
   isManuallyDisconnected = false;
   try{ if (ws && ws.readyState !== WebSocket.CLOSED) ws.close(); }catch{}
-
   if (reconnectTimeout) { clearTimeout(reconnectTimeout); reconnectTimeout = null; }
 
   await refreshDevices();
 
   ws = buildWs(roomId, token);
+  log(`WS connecting to: ${ws.__debug_url || '(unknown url)'}`);
 
   ws.onopen = async () => {
     log('WS connected');
@@ -171,6 +171,7 @@ async function connect(){
         const who = msg.authorName || msg.authorId || 'system';
         appendChat(els.chat, who, msg.content || msg.echo || '');
       } else if (msg.type === 'presence') {
+        log(`Участников в комнате: ${Array.isArray(msg.members) ? msg.members.length : '?'}`);
         renderPresence(msg.members || []);
       }
     } catch (e) {
@@ -195,7 +196,7 @@ async function connect(){
     }
   };
 
-  ws.onerror = (err) => { log(`WS error: ${err}`); };
+  ws.onerror = (err) => { log(`WS error: ${err?.message || err}`); };
 }
 
 function leave(){
@@ -229,9 +230,7 @@ function toggleCam(){
   const on = rtc?.toggleCam();
   log(`Камера: ${on ? 'вкл' : 'выкл'}`);
 }
-async function runDiag(){
-  await rtc?.diagnoseAudio();
-}
+async function runDiag(){ await rtc?.diagnoseAudio(); }
 
 function restoreFromUrl(){
   const url = new URL(location.href);
@@ -283,20 +282,17 @@ function renderPresence(members){
 
     const setSink = async (deviceId)=>{
       if (!deviceId) return;
-      const sinkTargets = [audio, video];
-      for (const el of sinkTargets){
+      for (const el of [audio, video]){
         if (typeof el.setSinkId === 'function'){
           try{ await el.setSinkId(deviceId); }catch{}
         }
       }
     };
     setSink(rtc?.getOutputDeviceId());
-    // позволим менеджеру менять sink id динамически
     attachPeerMedia(peer.id, { onSinkChange: setSink });
 
     attachPeerMedia(peer.id, {
       onTrack: async (stream)=>{
-        // Разводим дорожки: аудио в <audio>, видео в <video>
         const aStream = new MediaStream(stream.getAudioTracks());
         const vStream = new MediaStream(stream.getVideoTracks());
         if (aStream.getTracks().length) {
@@ -306,7 +302,7 @@ function renderPresence(members){
         if (vStream.getTracks().length) {
           video.srcObject = vStream;
           avatar.style.display='none';
-          try { await video.play(); } catch {/* ничего */ }
+          try { await video.play(); } catch {}
         }
       },
       onLevel: (lvl)=>{ meterBar.style.width = `${Math.min(1, Math.max(0, lvl)) * 100}%`; }

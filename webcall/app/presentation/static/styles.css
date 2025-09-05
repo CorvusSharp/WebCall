@@ -56,7 +56,7 @@ input:focus{border-color:var(--primary);box-shadow:0 0 0 4px var(--ring)}
 
 .media{position:relative;aspect-ratio:16/10;background:#0b1220}
 .media .video{width:100%;height:100%;object-fit:cover;display:block}
-.media .audio{display:none} /* скрыт, но играет звук */
+.media .audio{display:none}
 .media .avatar{position:absolute;inset:0;display:grid;place-items:center;font-size:42px;color:#94a3b8;filter:drop-shadow(0 6px 14px rgba(0,0,0,0.4))}
 .media .gate{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.6);border:1px solid var(--border);color:#fff;border-radius:999px;padding:8px 12px;backdrop-filter:blur(6px);display:none}
 

@@ -1,4 +1,4 @@
-// webrtc.js — мультипир WebRTC c аккуратной переговоркой и гарантированным аудио
+// webrtc.js — мультипир WebRTC с аккуратной переговоркой и детальными логами
 import { sendSignal } from "./signal.js";
 import { getIceServers } from "./api.js";
 
@@ -33,11 +33,8 @@ export class WebRTCManager {
     if (mic) this.preferred.micId = mic;
     if (cam) this.preferred.camId = cam;
     if (spk) this.outputDeviceId = spk;
-    // при смене аудио-выхода перенацелим sinkId на уже созданные элементы
     for (const [,st] of this.peers){
-      try {
-        st.handlers?.onSinkChange?.(this.outputDeviceId);
-      } catch {}
+      try { st.handlers?.onSinkChange?.(this.outputDeviceId); } catch {}
     }
   }
 
@@ -107,7 +104,7 @@ export class WebRTCManager {
       iceFailTimer: null,
     };
 
-    // Добавляем локальные треки один раз
+    // Добавляем локальные треки (без лишних recvonly, если треков нет — добавим один recvonly audio)
     if (this.localStream && this.localStream.getTracks().length){
       for (const track of this.localStream.getTracks()){
         try {
@@ -118,13 +115,8 @@ export class WebRTCManager {
         }
       }
     } else {
-      // Нет локальных треков — добавим recvonly только для аудио
-      try {
-        pc.addTransceiver("audio", { direction: "recvonly" });
-        this._log(`Добавлен recvonly audio transceiver для ${peerId.slice(0,8)}`);
-      } catch(e) {
-        this._log(`❌ addTransceiver(audio) error → ${peerId.slice(0,8)}: ${e}`);
-      }
+      try { pc.addTransceiver("audio", { direction: "recvonly" }); this._log(`Добавлен recvonly audio transceiver для ${peerId.slice(0,8)}`); }
+      catch(e){ this._log(`❌ addTransceiver(audio) error → ${peerId.slice(0,8)}: ${e}`); }
     }
 
     pc.addEventListener("icecandidate", (e)=>{
@@ -133,25 +125,20 @@ export class WebRTCManager {
 
     pc.addEventListener("track", (e)=>{
       this._log(`Получен трек от ${peerId.slice(0,8)}: ${e.track.kind} (enabled: ${e.track.enabled})`);
-      // складываем в общий MediaStream (для совместимости)
       if (e.track && !state.stream.getTracks().some(t => t.id === e.track.id)) {
         state.stream.addTrack(e.track);
       }
-      // события трека — в логи
       e.track.addEventListener('mute', ()=> this._log(`(remote:${peerId.slice(0,8)}) ${e.track.kind} muted`));
       e.track.addEventListener('unmute', ()=> this._log(`(remote:${peerId.slice(0,8)}) ${e.track.kind} unmuted`));
       e.track.addEventListener('ended', ()=> this._log(`(remote:${peerId.slice(0,8)}) ${e.track.kind} ended`));
 
-      // привяжем к UI
       if (state.handlers?.onTrack) state.handlers.onTrack(state.stream);
-      // уровень для аудио
       if (e.track?.kind === 'audio') this._setupPeerLevel(peerId, state);
     });
 
-    // Только детерминированный инициатор стартует оффер по событию
     pc.addEventListener("negotiationneeded", async ()=>{
       if (state.makingOffer) return;
-      if (!state.polite) { // мы «невежливый» => инициатор
+      if (!state.polite) { // инициатор — невежливый
         try {
           state.makingOffer = true;
           const offer = await pc.createOffer(); // без offerToReceive*
@@ -160,9 +147,7 @@ export class WebRTCManager {
           this._log(`📤 Sent offer → ${peerId.slice(0,8)} (negotiationneeded)`);
         } catch(e){
           this._log(`negotiationneeded(${peerId.slice(0,8)}): ${e?.name||e}`);
-        } finally {
-          state.makingOffer = false;
-        }
+        } finally { state.makingOffer = false; }
       }
     });
 
@@ -201,11 +186,7 @@ export class WebRTCManager {
     }catch(e){ this._log(`ICE-restart(${peerId.slice(0,8)}): ${e?.name||e}`); }
   }
 
-  // публичные хуки UI
-  bindPeerMedia(peerId, handlers){
-    const st = this.peers.get(peerId);
-    if (st) st.handlers = handlers;
-  }
+  bindPeerMedia(peerId, handlers){ const st = this.peers.get(peerId); if (st) st.handlers = handlers; }
   getPeer(peerId){ return this.peers.get(peerId); }
 
   async handleSignal(msg, mediaBinder){
@@ -234,7 +215,7 @@ export class WebRTCManager {
         peer.remoteSet = true;
         await this._flushQueuedCandidates(peerId);
 
-        const answer = await pc.createAnswer(); // без offerToReceive*
+        const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         sendSignal(this.ws, 'answer', { sdp: answer.sdp }, this.userId, peerId);
         this._log(`📤 Answered offer from ${peerId.slice(0,8)}`);
@@ -277,7 +258,6 @@ export class WebRTCManager {
     if (st.pc.signalingState !== 'stable'){
       this._log(`Skip startOffer(${peerId.slice(0,8)}) in ${st.pc.signalingState}`); return;
     }
-    // только инициатор
     if (st.polite) { this._log(`Not initiator for ${peerId.slice(0,8)}`); return; }
 
     try{
@@ -290,7 +270,6 @@ export class WebRTCManager {
     finally{ st.makingOffer = false; }
   }
 
-  // Переключатели устройств
   toggleMic(){
     if (!this.localStream) { this._log('Нет локального потока для микрофона'); return false; }
     const tr = this.localStream.getAudioTracks()[0];
@@ -310,7 +289,7 @@ export class WebRTCManager {
         const [vt] = s.getVideoTracks();
         if (!vt) return;
         this.localStream.addTrack(vt);
-        if (this.localVideo) this.localVideo.srcObject = this.localStream; // negotiationneeded сработает сам
+        if (this.localVideo) this.localVideo.srcObject = this.localStream;
         this._log('Камера включена');
       }).catch(e=> this._log(`Camera init: ${e?.name||e}`));
       return true;
@@ -358,7 +337,7 @@ export class WebRTCManager {
     }
   }
 
-  // Диагностика
+  // Быстрая диагностика
   async diagnoseAudio(){
     this._log('=== 🔊 АУДИО ДИАГНОСТИКА ===');
     if (this.localStream){
