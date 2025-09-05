@@ -324,10 +324,25 @@ function renderPresence(members){
       onTrack: async (stream)=>{
         video.srcObject = stream;
         node.querySelector('.avatar').style.display='none';
+        
+        // Устанавливаем громкость по умолчанию
+        video.volume = parseFloat(vol.value || '1');
+        
+        // Логируем информацию о треках
+        const audioTracks = stream.getAudioTracks();
+        const videoTracks = stream.getVideoTracks();
+        log(`Получен поток от ${peer.id}: аудио=${audioTracks.length}, видео=${videoTracks.length}`);
+        
+        // Попытка автовоспроизведения
         try{
+          // Для аудио треков принудительно включаем автовоспроизведение
+          video.autoplay = true;
+          video.playsInline = true;
           await video.play();
           gate.style.display='none';
-        } catch{
+          log(`Автовоспроизведение для ${peer.id} успешно`);
+        } catch(e) {
+          log(`Автовоспроизведение заблокировано для ${peer.id}: ${e?.name||e}`);
           gate.style.display='block';
         }
       },

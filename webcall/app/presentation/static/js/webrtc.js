@@ -101,6 +101,15 @@ export class WebRTCManager {
     if (stream && this.localVideo){
       this.localVideo.srcObject = stream;
     }
+    
+    // Диагностическая информация
+    if (stream) {
+      const audioTracks = stream.getAudioTracks();
+      const videoTracks = stream.getVideoTracks();
+      this._log(`Локальный поток: аудио=${audioTracks.length} (enabled=${audioTracks[0]?.enabled}), видео=${videoTracks.length} (enabled=${videoTracks[0]?.enabled})`);
+    } else {
+      this._log('Не удалось получить локальный медиапоток');
+    }
   }
 
   _isPolite(myId, peerId){
@@ -131,15 +140,7 @@ export class WebRTCManager {
       iceFailTimer: null,
     };
 
-    // Always add transceivers for receiving
-    try {
-      pc.addTransceiver("audio", { direction: "recvonly" });
-      pc.addTransceiver("video", { direction: "recvonly" });
-    } catch (e) {
-      this._log(`Error adding transceivers: ${e}`);
-    }
-
-    // локальные треки
+    // локальные треки - добавляем сначала, это создаст правильные трансиверы
     if (this.localStream){
       for (const t of this.localStream.getTracks()) {
         try {
@@ -150,6 +151,22 @@ export class WebRTCManager {
       }
     }
 
+    // Добавляем трансиверы для получения медиа, если их еще нет
+    const existingTransceivers = pc.getTransceivers();
+    const hasAudio = existingTransceivers.some(t => t.receiver?.track?.kind === 'audio');
+    const hasVideo = existingTransceivers.some(t => t.receiver?.track?.kind === 'video');
+    
+    try {
+      if (!hasAudio) {
+        pc.addTransceiver("audio", { direction: "recvonly" });
+      }
+      if (!hasVideo) {
+        pc.addTransceiver("video", { direction: "recvonly" });
+      }
+    } catch (e) {
+      this._log(`Error adding transceivers: ${e}`);
+    }
+
     pc.addEventListener("icecandidate", (e)=>{
       if (e.candidate) {
         sendSignal(this.ws, "ice-candidate", { candidate: e.candidate }, this.userId, peerId);
@@ -157,10 +174,14 @@ export class WebRTCManager {
     });
 
     pc.addEventListener("track", (e)=>{
+      this._log(`Получен трек от пира: kind=${e.track?.kind}, id=${e.track?.id}, enabled=${e.track?.enabled}`);
       if (e.track && !state.stream.getTracks().some(t=>t.id===e.track.id)) {
         state.stream.addTrack(e.track);
         if (state.handlers?.onTrack) state.handlers.onTrack(state.stream);
-        if (e.track?.kind === 'audio') this._setupPeerLevel(peerId, state);
+        if (e.track?.kind === 'audio') {
+          this._log(`Настройка аудиоанализатора для пира ${peerId}`);
+          this._setupPeerLevel(peerId, state);
+        }
       }
     });
 
@@ -262,6 +283,7 @@ export class WebRTCManager {
       try {
         if (offerCollision) {
           await pc.setLocalDescription({ type:'rollback' });
+          peer.makingOffer = false; // сброс флага после rollback
         }
         await pc.setRemoteDescription(desc);
         peer.remoteSet = true;
@@ -344,7 +366,36 @@ export class WebRTCManager {
   toggleMic(){
     if (!this.localStream) return false;
     const tr = this.localStream.getAudioTracks()[0];
-    if (!tr) return false;
+    if (!tr) {
+      // Создаем новый аудиотрек если его нет
+      navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true, 
+          noiseSuppression: true, 
+          autoGainControl: true,
+          deviceId: this.preferred.micId ? { exact: this.preferred.micId } : undefined,
+        },
+        video: false
+      }).then(s=>{
+        const [at] = s.getAudioTracks();
+        if (!at) return;
+        this.localStream.addTrack(at);
+        // Добавляем трек ко всем существующим соединениям
+        for (const [peerId, state] of this.peers) {
+          try {
+            const sender = state.pc.getSenders().find(s => s.track?.kind === 'audio');
+            if (sender) {
+              sender.replaceTrack(at);
+            } else {
+              state.pc.addTrack(at, this.localStream);
+            }
+          } catch (e) {
+            this._log(`Error adding audio track to peer ${peerId}: ${e}`);
+          }
+        }
+      }).catch(e=> this._log(`Microphone init: ${e?.name||e}`));
+      return true;
+    }
     tr.enabled = !tr.enabled;
     return tr.enabled;
   }
@@ -353,6 +404,7 @@ export class WebRTCManager {
     if (!this.localStream) return false;
     let tr = this.localStream.getVideoTracks()[0];
     if (!tr){
+      // Создаем новый видеотрек
       navigator.mediaDevices.getUserMedia({
         video: { 
           deviceId: this.preferred.camId ? { exact: this.preferred.camId } : undefined,
@@ -366,12 +418,21 @@ export class WebRTCManager {
         if (!vt) return;
         this.localStream.addTrack(vt);
         if (this.localVideo){
-          const ms = this.localVideo.srcObject instanceof MediaStream ? 
-            this.localVideo.srcObject : new MediaStream();
-          ms.addTrack(vt); 
-          this.localVideo.srcObject = ms;
+          this.localVideo.srcObject = this.localStream;
         }
-        // добавили — negotiationneeded сработает сам
+        // Добавляем трек ко всем существующим соединениям
+        for (const [peerId, state] of this.peers) {
+          try {
+            const sender = state.pc.getSenders().find(s => s.track?.kind === 'video');
+            if (sender) {
+              sender.replaceTrack(vt);
+            } else {
+              state.pc.addTrack(vt, this.localStream);
+            }
+          } catch (e) {
+            this._log(`Error adding video track to peer ${peerId}: ${e}`);
+          }
+        }
       }).catch(e=> this._log(`Camera init: ${e?.name||e}`));
       return true;
     }
