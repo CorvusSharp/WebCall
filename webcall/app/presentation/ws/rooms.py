@@ -12,7 +12,8 @@ from ...infrastructure.config import get_settings
 
 from ...core.domain.models import Signal
 from ...core.ports.services import SignalBus, TokenProvider
-from ..api.deps.containers import get_signal_bus, get_token_provider
+from ...core.ports.repositories import UserRepository
+from ..api.deps.containers import get_signal_bus, get_token_provider, get_user_repo
 from ...infrastructure.messaging.redis_bus import RedisSignalBus  # for type-check to enable Redis chat broadcast
 
 router = APIRouter()
@@ -27,6 +28,7 @@ async def ws_room(
     room_id: str,
     bus: SignalBus = Depends(get_signal_bus),
     tokens: TokenProvider = Depends(get_token_provider),
+    users: UserRepository = Depends(get_user_repo),
 ):  # type: ignore[override]
     settings = get_settings()
     token = websocket.query_params.get("token")
@@ -77,7 +79,12 @@ async def ws_room(
                         data = json.loads(msg["data"])  # type: ignore[arg-type]
                     except Exception:
                         continue
-                    await websocket.send_json({"type": "chat", "authorId": data.get("authorId"), "content": data.get("content")})
+                    await websocket.send_json({
+                        "type": "chat",
+                        "authorId": data.get("authorId"),
+                        "authorName": data.get("authorName"),
+                        "content": data.get("content")
+                    })
             finally:
                 with contextlib.suppress(Exception):
                     await pubsub.unsubscribe(chat_channel)
@@ -110,12 +117,26 @@ async def ws_room(
                 # Broadcast chat to all participants in room (including sender)
                 content = data.get("content")
                 author = data.get("fromUserId")
+                author_name: str | None = None
+                # Попробуем получить имя пользователя по его UUID, если он передан
+                try:
+                    if author:
+                        u = await users.get_by_id(UUID(author))
+                        if u:
+                            author_name = u.username
+                except Exception:
+                    # Не прерываем чат при ошибке, просто не заполним имя
+                    pass
                 if isinstance(bus, RedisSignalBus):
                     # Publish to Redis channel so all processes deliver the message
-                    await bus.redis.publish(chat_channel, json.dumps({"authorId": author, "content": content}))
+                    await bus.redis.publish(chat_channel, json.dumps({
+                        "authorId": author,
+                        "authorName": author_name,
+                        "content": content
+                    }))
                 else:
                     # In-process fallback (dev/test)
-                    payload = {"type": "chat", "authorId": author, "content": content}
+                    payload = {"type": "chat", "authorId": author, "authorName": author_name, "content": content}
                     # Backward compat for older UIs relying on 'echo'
                     payload_with_echo = {**payload, "echo": content}
                     dead: list[WebSocket] = []

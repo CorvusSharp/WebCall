@@ -19,7 +19,7 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: webcall
-      POSTGRES_PASSWORD: CHANGE_DB_PASSWORD     # ← совпадает с .env
+      POSTGRES_PASSWORD: Mousa     # ← совпадает с .env
       POSTGRES_DB: webcall
     ports:
       - "5432:5432"
@@ -47,7 +47,7 @@ services:
       - --listening-port=3478
       - --external-ip=104.238.24.120          # ← публичный IP твоего VPS
       - --lt-cred-mech
-      - --user=webcall:CHANGE_TURN_PASSWORD   # ← совпадает с .env
+      - --user=webcall:Mousa   # ← совпадает с .env
       - --fingerprint
     ports:
       - "3478:3478/udp"

@@ -98,7 +98,8 @@ async function connect(){
     if (msg.type === 'signal') {
       await rtc?.handleSignal(msg);
     } else if (msg.type === 'chat') {
-      appendChat(els.chat, msg.authorId || 'system', msg.content || msg.echo || '');
+  const who = msg.authorName || msg.authorId || 'system';
+  appendChat(els.chat, who, msg.content || msg.echo || '');
     }
   };
   ws.onclose = () => { log('WS closed'); setConnectedState(false); };
