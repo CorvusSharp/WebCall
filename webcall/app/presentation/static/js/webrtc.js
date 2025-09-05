@@ -224,6 +224,32 @@ export class WebRTCManager {
         if (offerCollision) await pc.setLocalDescription({ type:'rollback' });
         await pc.setRemoteDescription(desc);
         peer.remoteSet = true;
+        // Гарантируем, что у нас есть sendrecv для аудио с локальным треком
+        try {
+          const at = this.localStream?.getAudioTracks?.()[0];
+          if (at) {
+            // Найдём аудио sender
+            let aSender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
+            if (!aSender) {
+              // Возможно sender есть, но без трека
+              aSender = pc.getSenders().find(s => s.track == null && s?.sender?.track?.kind === 'audio');
+            }
+            if (!aSender) {
+              try { aSender = pc.addTrack(at, this.localStream); } catch {}
+            } else if (!aSender.track) {
+              try { await aSender.replaceTrack(at); } catch {}
+            }
+            // Выставим transceiver на sendrecv
+            try {
+              const tx = pc.getTransceivers().find(t => (t.sender && t.sender === aSender) || (t.receiver?.track?.kind === 'audio'));
+              if (tx && tx.direction !== 'sendrecv') tx.direction = 'sendrecv';
+            } catch {}
+          } else {
+            // Если локального аудио нет — хотя бы приём
+            const tx = pc.getTransceivers().find(t => t.receiver?.track?.kind === 'audio');
+            if (!tx) { try { pc.addTransceiver('audio', { direction: 'recvonly' }); } catch {} }
+          }
+        } catch {}
         await this._flushQueuedCandidates(peerId);
 
         const answer = await pc.createAnswer();
