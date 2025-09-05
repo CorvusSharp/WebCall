@@ -6,7 +6,7 @@ services:
     env_file:
       - .env
     ports:
-      - "8000:8000"         # для локальной проверки, Nginx ходит на 127.0.0.1:8000
+      - "8000:8000" # для локальной проверки, Nginx ходит на 127.0.0.1:8000
     depends_on:
       - postgres
       - redis
@@ -19,7 +19,7 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: webcall
-      POSTGRES_PASSWORD: Mousa     # ← совпадает с .env
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: webcall
     ports:
       - "5432:5432"
@@ -41,13 +41,13 @@ services:
       - --log-file=stdout
       - --min-port=49152
       - --max-port=49200
-      - --realm=turn.bandjshoos.ru
+      - --realm=${TURN_REALM}
       - --listening-ip=0.0.0.0
       - --relay-ip=0.0.0.0
       - --listening-port=3478
-      - --external-ip=104.238.24.120          # ← публичный IP твоего VPS
+      - --external-ip=${TURN_PUBLIC_IP}
       - --lt-cred-mech
-      - --user=webcall:Mousa   # ← совпадает с .env
+      - --user=${TURN_USERNAME}:${TURN_PASSWORD}
       - --fingerprint
     ports:
       - "3478:3478/udp"

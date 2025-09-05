@@ -41,9 +41,9 @@
 |------------|------------|--------|
 | `APP_ENV` | окружение (dev/prod) | dev |
 | `HOST` / `PORT` | bind адрес API | 0.0.0.0 / 8000 |
-| `JWT_SECRET` | секрет JWT | change_me |
+| `JWT_SECRET` | секрет JWT (обязателен) | (указать в .env) |
 | `JWT_EXPIRES_MIN` | время жизни токена (мин) | 60 |
-| `REGISTRATION_SECRET` | обязательный код регистрации | abc123 |
+| `REGISTRATION_SECRET` | обязательный код регистрации | (указать в .env) |
 | `DATABASE_URL` | строка подключения Postgres | postgresql+asyncpg://webcall:pwd@postgres:5432/webcall |
 | `REDIS_URL` | строка Redis | redis://redis:6379/0 |
 | `CORS_ORIGINS` | списком, запятые | http://localhost:5173,http://localhost:8000 |
@@ -145,4 +145,4 @@ poetry run pytest -q
 MIT (при необходимости поменяйте).
 
 ---
-Секрет регистрации по умолчанию: **abc123**. Поменяйте в .env перед деплоем.
+Все секреты (JWT, регистрационный, TURN, БД) задаются только через .env. В репозитории отсутствуют реальные значения.

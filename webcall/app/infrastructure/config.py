@@ -18,10 +18,10 @@ class Settings(BaseSettings):
     PORT: int = 8000
 
     # Security
-    JWT_SECRET: str = "change_me"
+    JWT_SECRET: str  # must be provided via .env
     JWT_EXPIRES_MIN: int = 60
     # Registration secret (mandatory gate for /auth/register)
-    REGISTRATION_SECRET: str = "abc123"
+    REGISTRATION_SECRET: str  # must be provided via .env
 
     # Databases
     DATABASE_URL: str
