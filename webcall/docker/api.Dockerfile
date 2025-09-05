@@ -17,8 +17,8 @@ ENV POETRY_HOME=/opt/poetry \
 ENV PATH="$POETRY_HOME/bin:$PATH"
 RUN curl -sSL https://install.python-poetry.org | python3 - && poetry --version
 
-# Copy project files
-COPY pyproject.toml README.md ./
+# Copy only dependency manifest first (README не обязателен на этом слое)
+COPY pyproject.toml ./
 RUN poetry config virtualenvs.create false \
     && poetry install --no-interaction --no-ansi --with dev
 
