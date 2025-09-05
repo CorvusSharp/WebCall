@@ -64,6 +64,10 @@ body::before{
   pointer-events:none;
 }
 
+/* Futuristic spiderweb canvas */
+#fx-web-canvas{z-index:0;}
+body,html{background-attachment:fixed}
+
 /* Адаптация для prefers-reduced-motion */
 @media (prefers-reduced-motion: reduce){
   *{animation:none !important; transition:none !important}
