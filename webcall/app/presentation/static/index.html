@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WebCall Demo</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="container header-inner">
+        <div class="brand">
+          <span class="logo" aria-hidden>●</span>
+          <span class="title">WebCall</span>
+        </div>
+        <nav class="actions">
+          <button class="btn ghost" id="btnToggleTheme" title="Переключить тему">🌓</button>
+          <a class="btn ghost" href="/docs" target="_blank" rel="noreferrer">Docs</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="container app-main">
+      <section class="panel grid-2">
+        <div class="card">
+          <h2>Авторизация</h2>
+          <div class="form-grid">
+            <label>
+              <span>Email</span>
+              <input id="email" type="email" placeholder="you@example.com" value="user@example.com" />
+            </label>
+            <label>
+              <span>Пароль</span>
+              <input id="password" type="password" placeholder="••••••••" value="string" />
+            </label>
+            <button id="btnLogin" class="btn primary">Войти</button>
+            <div class="muted" id="loginNote">Демо-логин возвращает тестовый токен.</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Комната</h2>
+          <div class="form-grid">
+            <label>
+              <span>Room ID</span>
+              <input id="roomId" placeholder="room-123" />
+            </label>
+            <div class="row">
+              <button id="btnConnect" class="btn success">Подключиться</button>
+              <button id="btnLeave" class="btn" disabled>Выйти</button>
+              <button id="btnCopyLink" class="btn ghost">Скопировать ссылку</button>
+            </div>
+            <div class="muted" id="connStatus">Не подключено</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel grid-3">
+        <div class="card video-card">
+          <div class="video-wrap">
+            <video id="localVideo" autoplay playsinline muted></video>
+          </div>
+          <div class="controls">
+            <button id="btnToggleMic" class="btn" disabled>🎤 Вкл/Выкл</button>
+            <button id="btnToggleCam" class="btn" disabled>🎥 Вкл/Выкл</button>
+          </div>
+        </div>
+
+        <div class="card video-card">
+          <div class="video-wrap">
+            <video id="remoteVideo" autoplay playsinline></video>
+          </div>
+          <div class="controls">
+            <span class="muted">Удалённое видео</span>
+          </div>
+        </div>
+
+        <div class="card chat-card">
+          <h2>Чат</h2>
+          <div id="chat" class="chat-log" aria-live="polite"></div>
+          <div class="chat-input">
+            <input id="chatInput" placeholder="Напишите сообщение..." />
+            <button id="btnSend" class="btn" disabled>Отправить</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card panel">
+        <h2>Логи</h2>
+        <div id="logs" class="logs"></div>
+      </section>
+    </main>
+
+    <template id="tpl-log-line">
+      <div class="log-line"><span class="time"></span><span class="msg"></span></div>
+    </template>
+
+    <script type="module" src="/static/js/main.js"></script>
+  </body>
+  </html>

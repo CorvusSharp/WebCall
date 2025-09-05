@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv/
+.poetry/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.cache/
