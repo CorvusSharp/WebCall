@@ -53,7 +53,24 @@ let globalAudioCtx = null;
 let latestUserNames = {}; // { connId: displayName }
 let friendsWs = null;
 let currentDirectFriend = null; // UUID друга выбранного в личном чате
-const directSeenMessageIds = new Set();
+// Пер-друг кэш id сообщений чтобы не дублировать (Map<friendId, Set<msgId>>)
+const directSeenByFriend = new Map();
+// Количество непрочитанных per друг
+const directUnread = new Map();
+
+function updateFriendUnreadBadge(friendId){
+  // Находим кнопку чата по data-friend-id
+  const btn = document.querySelector(`button.chat-btn[data-friend-id="${friendId}"]`);
+  if (!btn) return;
+  const count = directUnread.get(friendId) || 0;
+  if (count > 0){
+    btn.classList.add('has-unread');
+    btn.dataset.unread = String(count);
+  } else {
+    btn.classList.remove('has-unread');
+    delete btn.dataset.unread;
+  }
+}
 
 const els = {
   roomId: document.getElementById('roomId'),
@@ -645,12 +662,15 @@ async function loadFriends(){
         if (!room) return alert('Укажите ID комнаты');
         try{ await notifyCall(f.user_id, room); alert('Уведомление отправлено'); }catch(e){ alert(String(e)); }
       });
-      const btnChat = makeBtn('Чат', 'btn', ()=> selectDirectFriend(f.user_id, f.username || f.user_id));
+      const btnChat = makeBtn('Чат', 'btn chat-btn', ()=> selectDirectFriend(f.user_id, f.username || f.user_id));
+      btnChat.dataset.friendId = f.user_id;
       renderUserRow(els.friendsList, { id: f.user_id, username: f.username || f.user_id, email: f.email || '' }, {
         actions: [btnCall, btnChat],
         // Оставляем кликабельность всей строки для удобства
         onSelectDirect: (user)=> selectDirectFriend(user.id, user.username || user.id)
       });
+      // Применить badge если уже есть непрочитанные
+      updateFriendUnreadBadge(f.user_id);
     });
     // Requests
     els.friendRequests.innerHTML = '';
@@ -737,21 +757,29 @@ async function selectDirectFriend(friendId, label){
   if (els.directChatCard) els.directChatCard.style.display = '';
   if (els.directChatTitle) els.directChatTitle.textContent = 'Чат с: ' + (label || friendId.slice(0,8));
   ensureDirectActions();
+  // Сбрасываем непрочитанные
+  if (directUnread.has(friendId)) { directUnread.delete(friendId); updateFriendUnreadBadge(friendId); }
   if (els.directMessages) els.directMessages.innerHTML = '<div class="muted">Загрузка...</div>';
   try{
     const t = localStorage.getItem('wc_token');
     const r = await fetch(`/api/v1/direct/${friendId}/messages`, { headers: { 'Authorization': `Bearer ${t}` } });
     const arr = await r.json();
-    if (!Array.isArray(arr) || !arr.length){ els.directMessages.innerHTML = '<div class="muted">Пусто</div>'; }
-    else {
+    // Получаем или создаём Set для друга
+    let seen = directSeenByFriend.get(friendId);
+    if (!seen){ seen = new Set(); directSeenByFriend.set(friendId, seen); }
+    let added = 0;
+    if (Array.isArray(arr) && arr.length){
       els.directMessages.innerHTML = '';
       arr.forEach(m => {
-        if (m.id && !directSeenMessageIds.has(m.id)){
-          directSeenMessageIds.add(m.id);
+        if (m.id && !seen.has(m.id)){
+          seen.add(m.id); added++;
           appendDirectMessage(m, m.from_user_id === getAccountId());
         }
       });
-      scrollDirectToEnd();
+      if (added === 0){ els.directMessages.innerHTML = '<div class="muted">Пусто</div>'; }
+      else scrollDirectToEnd();
+    } else {
+      els.directMessages.innerHTML = '<div class="muted">Пусто</div>';
     }
   }catch{ try{ els.directMessages.innerHTML = '<div class="muted">Ошибка загрузки</div>'; }catch{} }
 }
@@ -764,8 +792,10 @@ function appendDirectMessage(m, isSelf){
   if (!els.directMessages) return;
   const div = document.createElement('div');
   div.className = 'chat-line' + (isSelf ? ' self' : '');
-  const ts = new Date(m.sent_at || m.sentAt || Date.now()).toLocaleTimeString();
-  div.innerHTML = `<span class="who">${isSelf ? 'Я' : (m.from_user_id||m.fromUserId||'--').slice(0,6)}</span> <span class="msg"></span> <span class="time">${ts}</span>`;
+  const dt = new Date(m.sent_at || m.sentAt || Date.now());
+  const ts = dt.toLocaleTimeString();
+  const full = dt.toLocaleString();
+  div.innerHTML = `<span class="who">${isSelf ? 'Я' : (m.from_user_id||m.fromUserId||'--').slice(0,6)}</span> <span class="msg"></span> <span class="time" title="${full}">${ts}</span>`;
   div.querySelector('.msg').textContent = m.content;
   els.directMessages.appendChild(div);
 }
@@ -781,8 +811,10 @@ function handleIncomingDirect(msg){
   const show = currentDirectFriend && other === currentDirectFriend;
   if (show){
     const mid = msg.messageId || msg.id;
-    if (mid && directSeenMessageIds.has(mid)) return; // уже добавили
-    if (mid) directSeenMessageIds.add(mid);
+    let seen = directSeenByFriend.get(currentDirectFriend);
+    if (!seen){ seen = new Set(); directSeenByFriend.set(currentDirectFriend, seen); }
+    if (mid && seen.has(mid)) return; // уже добавили
+    if (mid) seen.add(mid);
     appendDirectMessage({
       id: mid,
       from_user_id: msg.fromUserId,
@@ -790,6 +822,13 @@ function handleIncomingDirect(msg){
       sent_at: msg.sentAt
     }, msg.fromUserId === acc);
     scrollDirectToEnd();
+  } else {
+    // Не активный чат: считаем непрочитанные
+    if (acc && msg.fromUserId !== acc){
+      const prev = directUnread.get(other) || 0;
+      directUnread.set(other, prev + 1);
+      updateFriendUnreadBadge(other);
+    }
   }
 }
 
@@ -801,7 +840,9 @@ function handleDirectCleared(msg){
   const ids = msg.userIds || [];
   if (ids.includes(acc) && ids.includes(currentDirectFriend)){
     if (els.directMessages) els.directMessages.innerHTML = '<div class="muted">Пусто</div>';
-    directSeenMessageIds.clear();
+    directSeenByFriend.set(currentDirectFriend, new Set());
+    directUnread.delete(currentDirectFriend);
+    updateFriendUnreadBadge(currentDirectFriend);
   }
 }
 
@@ -822,7 +863,7 @@ function ensureDirectActions(){
           const j = await r.json();
           // Локально очистим (WS событие тоже придёт)
           if (els.directMessages) els.directMessages.innerHTML = '<div class="muted">Пусто</div>';
-          directSeenMessageIds.clear();
+          directSeenByFriend.set(currentDirectFriend, new Set());
           appendLog(els.logs, `Переписка удалена (${j.removed||0})`);
         }
       }catch{}
@@ -845,8 +886,10 @@ if (els.btnDirectSend){
       });
       if (r.ok){
         const m = await r.json();
-        if (m.id && !directSeenMessageIds.has(m.id)){
-          directSeenMessageIds.add(m.id);
+        let seen = directSeenByFriend.get(currentDirectFriend);
+        if (!seen){ seen = new Set(); directSeenByFriend.set(currentDirectFriend, seen); }
+        if (m.id && !seen.has(m.id)){
+          seen.add(m.id);
           appendDirectMessage(m, true);
           scrollDirectToEnd();
         }
