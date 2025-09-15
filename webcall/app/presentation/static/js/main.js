@@ -61,8 +61,9 @@ const directUnread = new Map();
 // ===== Спец-рингтон для пары пользователей =====
 // Файл находится рядом со скриптами в static/js/
 let specialRingtone = null;
-let specialRingtoneTimer = null;
-let specialRingtoneActive = false;
+let specialRingtoneTimer = null; // больше не используется для повторов, но оставим для совместимости
+let specialRingtoneActive = false; // ожидаем играть (входящий инвайт у спец-email)
+let specialRingtonePlaying = false; // реально играет сейчас
 
 function getStoredEmail(){ try{ return localStorage.getItem('wc_email') || ''; }catch{ return ''; } }
 function getStoredUsername(){ try{ return localStorage.getItem('wc_username') || ''; }catch{ return ''; } }
@@ -87,44 +88,43 @@ async function ensureSpecialRingtone(){
 }
 
 function startSpecialRingtone(){
-  if (specialRingtoneActive) return;
+  if (specialRingtoneActive) return; // уже запрошен запуск
   specialRingtoneActive = true;
   // Требуем разблокировки аудио политиками браузера
   unlockAudioPlayback();
   ensureSpecialRingtone().then(audio => {
     if (!audio) return;
-    let attempts = 0;
-    const setTo28 = () => {
-      attempts++;
-      try { audio.currentTime = 28; } catch {}
-      const tryPlay = () => audio.play().catch(()=>{});
-      // Если метаданные ещё не загружены — подождём
-      if (isNaN(audio.duration) || !isFinite(audio.duration) || audio.duration === 0){
-        audio.addEventListener('loadedmetadata', ()=>{ try { audio.currentTime = 28; } catch {}; tryPlay(); }, { once: true });
-      } else {
-        try { if (audio.currentTime < 27.5) audio.currentTime = 28; } catch {}
-        tryPlay();
-      }
-      // Подстраховка: повторим несколько раз с интервалом, если время не установилось
-      let retry = 0;
-      const id = setInterval(()=>{
-        retry++;
-        if (!specialRingtoneActive) { clearInterval(id); return; }
-        try {
-          if (audio.currentTime < 27.5) audio.currentTime = 28;
-        } catch {}
-        try { audio.play().catch(()=>{}); } catch {}
-        if (retry > 5) clearInterval(id);
-      }, 400);
+    const START_AT = 28;
+    const startPlayback = () => {
+      if (!specialRingtoneActive || specialRingtonePlaying) return;
+      specialRingtonePlaying = true;
+      audio.play().catch(()=>{
+        // одна мягкая повторная попытка спустя 300мс, без циклов
+        setTimeout(()=>{ if (specialRingtoneActive) audio.play().catch(()=>{}); }, 300);
+      });
     };
-    // Если уже можно играть — сразу, иначе дождёмся canplay
-    if (audio.readyState >= 2){ setTo28(); }
-    else { audio.addEventListener('canplay', setTo28, { once: true }); setTo28(); }
+    const seekAndStart = () => {
+      // Установим позицию и дождёмся подтверждения seeked
+      const onSeeked = () => { audio.removeEventListener('seeked', onSeeked); startPlayback(); };
+      audio.addEventListener('seeked', onSeeked, { once: true });
+      try { audio.currentTime = START_AT; } catch { /* если не удалось сейчас, попробуем после метаданных */ }
+      // Если уже "похоже" на 28 — запускаем без ожидания
+      try { if (Math.abs((audio.currentTime||0) - START_AT) < 0.5) { audio.removeEventListener('seeked', onSeeked); startPlayback(); } } catch {}
+    };
+    // Если метаданные уже есть — сразу seek+start, иначе подождём loadedmetadata
+    if (audio.readyState >= 1) {
+      seekAndStart();
+    } else {
+      audio.addEventListener('loadedmetadata', seekAndStart, { once: true });
+      // На случай, если loadedmetadata не приходит из-за кеша — вызовем принудительно load
+      try { audio.load?.(); } catch {}
+    }
   });
 }
 
 function stopSpecialRingtone(){
   specialRingtoneActive = false;
+  specialRingtonePlaying = false;
   if (specialRingtone){ try{ specialRingtone.pause(); }catch{} }
   if (specialRingtoneTimer) { clearTimeout(specialRingtoneTimer); specialRingtoneTimer = null; }
 }
