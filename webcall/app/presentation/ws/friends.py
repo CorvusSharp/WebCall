@@ -36,6 +36,10 @@ router = APIRouter()
 _friend_clients: Dict[UUID, Set[WebSocket]] = {}
 _ws_to_user: Dict[WebSocket, UUID] = {}
 
+# Pending call invites stored in-memory until accepted/declined
+# Keyed by room_id -> payload dict
+_pending_calls: Dict[str, dict] = {}
+
 
 def _register(user_id: UUID, ws: WebSocket):
     _friend_clients.setdefault(user_id, set()).add(ws)
@@ -93,6 +97,21 @@ async def ws_friends(
     # В неавторизованном режиме не храним подписку, только echo/ping
     if user_id is not None:
         _register(user_id, websocket)
+        # На новое подключение отправляем все ожидающие инвайты для этого пользователя
+        try:
+            for room_id, payload in list(_pending_calls.items()):
+                if str(user_id) in (payload.get('fromUserId'), payload.get('toUserId')):
+                    with contextlib.suppress(Exception):
+                        await websocket.send_json({
+                            'type': 'call_invite',
+                            'fromUserId': payload['fromUserId'],
+                            'toUserId': payload['toUserId'],
+                            'roomId': room_id,
+                            'fromUsername': payload.get('fromUsername'),
+                            'fromEmail': payload.get('fromEmail'),
+                        })
+        except Exception:
+            pass
 
     try:
         while True:
@@ -178,6 +197,13 @@ async def publish_direct_cleared(user_a: UUID, user_b: UUID):
 # === Звонки (эфемерные комнаты) ===
 
 async def publish_call_invite(from_user: UUID, to_user: UUID, room_id: str, from_username: str | None = None, from_email: str | None = None):
+    # Persist pending invite so it survives reconnects until accepted/declined
+    _pending_calls[room_id] = {
+        'fromUserId': str(from_user),
+        'toUserId': str(to_user),
+        'fromUsername': from_username,
+        'fromEmail': from_email,
+    }
     await broadcast_users({from_user, to_user}, {
         'type': 'call_invite',
         'fromUserId': str(from_user),
@@ -189,6 +215,8 @@ async def publish_call_invite(from_user: UUID, to_user: UUID, room_id: str, from
 
 
 async def publish_call_accept(from_user: UUID, to_user: UUID, room_id: str):
+    # Clear pending invite on accept
+    _pending_calls.pop(room_id, None)
     await broadcast_users({from_user, to_user}, {
         'type': 'call_accept',
         'fromUserId': str(from_user),
@@ -198,6 +226,8 @@ async def publish_call_accept(from_user: UUID, to_user: UUID, room_id: str):
 
 
 async def publish_call_decline(from_user: UUID, to_user: UUID, room_id: str):
+    # Clear pending invite on decline
+    _pending_calls.pop(room_id, None)
     await broadcast_users({from_user, to_user}, {
         'type': 'call_decline',
         'fromUserId': str(from_user),

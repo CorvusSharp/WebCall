@@ -873,13 +873,7 @@ async function loadFriends(){
           els.roomId.value = room;
           // СНАЧАЛА локально отмечаем исходящий, чтобы входящее событие не сработало у инициатора
           setActiveOutgoingCall(f, room);
-          // Спец-логика: для особых email — включаем рингтон и при исходящем звонке до принятия/отклонения
-          try {
-            const myEmail = (getStoredEmail() || '').toLowerCase();
-            if (myEmail && SPECIAL_RING_EMAILS.has(myEmail)){
-              startSpecialRingtone();
-            }
-          } catch {}
+          // Рингтон только у принимающей стороны (callee), у инициатора не запускаем
           // И только потом — уведомляем сервер (без await, чтобы не ловить гонку)
           try{ notifyCall(f.user_id, room).catch(()=>{}); }catch{}
           // Автоподключение
@@ -1094,16 +1088,16 @@ function startFriendsWs(){
           const isForMe = acc && msg.toUserId === acc;
           if (isForMe && !activeCall){
             setActiveIncomingCall(msg.fromUserId, msg.fromUsername, msg.roomId);
-            // Спец-логика: рингтон только для указанных email-адресатов
-            try {
-              const myEmail = (getStoredEmail() || '').toLowerCase();
-              if (myEmail && SPECIAL_RING_EMAILS.has(myEmail)){
-                startSpecialRingtone();
-              }
-            } catch {}
-          } else {
-            // Уже в звонке/ожидании: авто-отклоняем (не отправляя decline) или игнорируем
+            // Рингтон только для нужных e-mail
+            const myEmail = (getStoredEmail() || '').toLowerCase();
+            if (SPECIAL_RING_EMAILS.has(myEmail)) {
+              startSpecialRingtone();
+            }
+          } else if (!activeCall && acc && msg.fromUserId === acc) {
+            // Это повторная доставка инвайта для инициатора (после перезагрузки): восстановим исходящее состояние
+            setActiveOutgoingCall({ user_id: msg.toUserId, username: msg.toUsername || msg.toUserId }, msg.roomId);
           }
+          // Уже в звонке/ожидании: игнорируем
           break; }
         case 'call_accept': {
           // наш собеседник принял: если это наш исходящий звонок — статус accepted и если мы ещё не подключены к этой комнате, уже подключены
