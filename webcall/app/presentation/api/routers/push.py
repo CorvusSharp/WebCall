@@ -57,7 +57,8 @@ async def get_vapid_public():
 
 class CallNotifyIn(BaseModel):
     to_user_id: UUID
-    room_id: UUID
+    # Принимаем строковый room_id, чтобы поддерживать простые идентификаторы (например, "3")
+    room_id: str
 
 
 async def _send_pushes(current, body: CallNotifyIn, users: UserRepository, repo: PushSubscriptionRepository):
@@ -101,6 +102,10 @@ async def _send_pushes(current, body: CallNotifyIn, users: UserRepository, repo:
 async def notify_call(body: CallNotifyIn, background: BackgroundTasks, current=Depends(get_current_user), users: UserRepository = Depends(get_user_repo), repo: PushSubscriptionRepository = Depends(get_push_repo)):
     if body.to_user_id == current.id:
         raise HTTPException(status_code=400, detail="Cannot notify yourself")
+    # Конфигурация VAPID обязательна для отправки
+    s = get_settings()
+    if not (s.VAPID_PUBLIC_KEY and s.VAPID_PRIVATE_KEY and s.VAPID_SUBJECT):
+        raise HTTPException(status_code=503, detail="Push not configured: VAPID keys missing")
     # отправим в фоне
     background.add_task(_send_pushes, current, body, users, repo)
     return {"ok": True, "scheduled": True}
