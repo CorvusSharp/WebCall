@@ -38,36 +38,6 @@ async def list_rooms(
     return [RoomDTO(id=str(r.id), name=str(r.name), owner_id=str(r.owner_id), is_private=r.is_private, created_at=r.created_at) for r in items]
 
 
-@router.get("/{room_id}", response_model=RoomDTO)
-async def get_room(
-    room_id: str,
-    rooms: RoomRepository = Depends(get_room_repo),
-    current_user=Depends(get_current_user),
-) -> RoomDTO:  # type: ignore[override]
-    use = GetRoom(rooms)
-    room = await use.execute(UUID(room_id))
-    return RoomDTO(id=str(room.id), name=str(room.name), owner_id=str(room.owner_id), is_private=room.is_private, created_at=room.created_at)
-
-
-@router.delete("/{room_id}")
-async def delete_room(
-    room_id: str,
-    rooms: RoomRepository = Depends(get_room_repo),
-    current_user=Depends(get_current_user),
-):  # type: ignore[override]
-    from ....application.use_cases.rooms import DeleteRoom, GetRoom
-
-    getter = GetRoom(rooms)
-    room = await getter.execute(UUID(room_id))
-    if not room or str(room.owner_id) != str(current_user.id):
-        from fastapi import HTTPException, status
-
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only owner can delete room")
-    deleter = DeleteRoom(rooms)
-    await deleter.execute(UUID(room_id))
-    return {"status": "deleted"}
-
-
 @router.get("/visited", response_model=list[VisitedRoomDTO])
 async def list_visited_rooms(
     skip: int = 0,
@@ -93,3 +63,33 @@ async def list_visited_rooms(
             )
         )
     return out
+
+
+@router.get("/{room_id}", response_model=RoomDTO)
+async def get_room(
+    room_id: UUID,
+    rooms: RoomRepository = Depends(get_room_repo),
+    current_user=Depends(get_current_user),
+) -> RoomDTO:  # type: ignore[override]
+    use = GetRoom(rooms)
+    room = await use.execute(room_id)
+    return RoomDTO(id=str(room.id), name=str(room.name), owner_id=str(room.owner_id), is_private=room.is_private, created_at=room.created_at)
+
+
+@router.delete("/{room_id}")
+async def delete_room(
+    room_id: UUID,
+    rooms: RoomRepository = Depends(get_room_repo),
+    current_user=Depends(get_current_user),
+):  # type: ignore[override]
+    from ....application.use_cases.rooms import DeleteRoom, GetRoom
+
+    getter = GetRoom(rooms)
+    room = await getter.execute(room_id)
+    if not room or str(room.owner_id) != str(current_user.id):
+        from fastapi import HTTPException, status
+
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only owner can delete room")
+    deleter = DeleteRoom(rooms)
+    await deleter.execute(room_id)
+    return {"status": "deleted"}
