@@ -781,8 +781,9 @@ async function loadFriends(){
           callControls.push(span);
         }
       }
-      const btnChat = makeBtn('Чат', 'btn chat-btn', ()=> selectDirectFriend(f.user_id, f.username || f.user_id));
-  btnChat.addEventListener('click', e=> e.stopPropagation(), { capture: true });
+    const btnChat = makeBtn('Чат', 'btn chat-btn', ()=> selectDirectFriend(f.user_id, f.username || f.user_id));
+    // ВАЖНО: не используем capture, иначе stopPropagation на стадии capture может прервать target-обработчик
+    btnChat.addEventListener('click', e=> e.stopPropagation());
       btnChat.dataset.friendId = f.user_id;
       const btnDel = makeBtn('Удалить', 'btn danger ghost', async ()=>{
         event?.stopPropagation?.();
@@ -935,7 +936,7 @@ function startFriendsWs(){
   friendsWs.onerror = () => { try { friendsWs.close(); } catch {}; };
 }
 
-async function selectDirectFriend(friendId, label){
+async function selectDirectFriend(friendId, label, opts={}){
   // NOTE: Раньше при каждом клике мы заново загружали историю и затирали уже отображённые
   // сообщения, из-за чего чат визуально «пропадал» (особенно если в списке друзей происходила
   // перерисовка). Флаг already предотвращает повторную перезагрузку при выборе того же друга.
@@ -944,9 +945,16 @@ async function selectDirectFriend(friendId, label){
   if (els.directChatCard) els.directChatCard.style.display = '';
   if (els.directChatTitle) els.directChatTitle.textContent = 'Чат с: ' + (label || friendId.slice(0,8));
   ensureDirectActions();
-  // Если уже открыт этот чат — ничего не перезагружаем
-  if (already) {
+  // Если уже открыт этот чат — обычно не перезагружаем, НО если явно просят форсировать или чат пуст — перезагрузим
+  if (already && !opts.force) {
+    // Снимаем непрочитанные
     if (directUnread.has(friendId)) { directUnread.delete(friendId); updateFriendUnreadBadge(friendId); }
+    // Если сообщений нет или стоит метка "Пусто" — пробуем обновить
+    const hasAny = !!els.directMessages && els.directMessages.querySelector('.chat-line');
+    const showsEmpty = !!els.directMessages && /Пусто|Загрузка|Ошибка/.test(els.directMessages.textContent||'');
+    if (!hasAny || showsEmpty){
+      return await selectDirectFriend(friendId, label, { force: true });
+    }
     return;
   }
   // Сбрасываем непрочитанные при первом открытии после выбора
@@ -971,7 +979,25 @@ async function selectDirectFriend(friendId, label){
       if (added === 0){ els.directMessages.innerHTML = '<div class="muted">Пусто</div>'; }
       else scrollDirectToEnd();
     } else {
+      // Пусто — повторная попытка загрузки через короткую задержку
       els.directMessages.innerHTML = '<div class="muted">Пусто</div>';
+      setTimeout(async ()=>{
+        try{
+          const t2 = localStorage.getItem('wc_token');
+          const r2 = await fetch(`/api/v1/direct/${friendId}/messages`, { headers: { 'Authorization': `Bearer ${t2}` } });
+          if (r2.ok){
+            const arr2 = await r2.json();
+            if (Array.isArray(arr2) && arr2.length){
+              els.directMessages.innerHTML = '';
+              let seen2 = directSeenByFriend.get(friendId);
+              if (!seen2){ seen2 = new Set(); directSeenByFriend.set(friendId, seen2); }
+              let added2 = 0;
+              arr2.forEach(m => { if (m.id && !seen2.has(m.id)){ seen2.add(m.id); added2++; appendDirectMessage(m, m.from_user_id === getAccountId()); } });
+              if (added2 === 0){ els.directMessages.innerHTML = '<div class="muted">Пусто</div>'; } else scrollDirectToEnd();
+            }
+          }
+        }catch{}
+      }, 600);
     }
   }catch{ try{ els.directMessages.innerHTML = '<div class="muted">Ошибка загрузки</div>'; }catch{} }
 }
