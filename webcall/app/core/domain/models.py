@@ -140,3 +140,22 @@ class PushSubscription:
     @staticmethod
     def create(user_id: UUID, endpoint: str, p256dh: str, auth: str) -> "PushSubscription":
         return PushSubscription(id=uuid4(), user_id=user_id, endpoint=endpoint, p256dh=p256dh, auth=auth, created_at=datetime.utcnow())
+
+
+@dataclass(slots=True)
+class DirectMessage:
+    id: UUID
+    user_a_id: UUID
+    user_b_id: UUID
+    sender_id: UUID
+    ciphertext: str
+    sent_at: datetime
+
+    @staticmethod
+    def create(user1: UUID, user2: UUID, sender_id: UUID, ciphertext: str) -> "DirectMessage":
+        a_s, b_s = str(user1), str(user2)
+        if a_s <= b_s:
+            ua, ub = user1, user2
+        else:
+            ua, ub = user2, user1
+        return DirectMessage(id=uuid4(), user_a_id=ua, user_b_id=ub, sender_id=sender_id, ciphertext=ciphertext, sent_at=datetime.utcnow())

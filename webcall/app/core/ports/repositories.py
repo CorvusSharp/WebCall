@@ -5,7 +5,7 @@ from typing import Iterable, Optional
 from datetime import datetime
 from uuid import UUID
 
-from ..domain.models import Message, Participant, Room, User, Friendship, FriendStatus, PushSubscription
+from ..domain.models import Message, Participant, Room, User, Friendship, FriendStatus, PushSubscription, DirectMessage
 
 
 class UserRepository(ABC):
@@ -134,4 +134,18 @@ class PushSubscriptionRepository(ABC):
 
     @abstractmethod
     async def list_by_user(self, user_id: UUID) -> list[PushSubscription]:
+        raise NotImplementedError
+
+
+class DirectMessageRepository(ABC):
+    @abstractmethod
+    async def add(self, dm: DirectMessage) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def list_pair(self, user_a: UUID, user_b: UUID, limit: int = 50, before: UUID | None = None) -> list[DirectMessage]:
+        """Список сообщений между двумя пользователями (упорядоченных по sent_at desc).
+
+        Аргумент before (message id) может использоваться для пагинации (сообщения строго раньше указанного).
+        """
         raise NotImplementedError

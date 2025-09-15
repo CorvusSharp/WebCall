@@ -67,6 +67,16 @@
             <div id="friendSearchResults" class="list"></div>
           </div>
         </div>
+        <div class="card" id="directChatCard" style="display:none;">
+          <h2>Личный чат</h2>
+          <div class="muted small" id="directChatTitle" style="margin-bottom:6px;">Не выбран</div>
+          <div id="directMessages" class="chat-box" style="height:180px;"></div>
+          <div class="chat-input" style="margin-top:6px;">
+            <input type="text" id="directInput" placeholder="Сообщение другу..." />
+            <button class="btn" id="btnDirectSend">»</button>
+          </div>
+          <div class="muted small" style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap;" id="directActions"></div>
+        </div>
         <div class="card" id="statusCard" style="display:none;">
           <h2>Статус</h2>
           <div id="connStatus"></div>

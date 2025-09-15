@@ -19,6 +19,7 @@ from ..presentation.api.routers import webrtc as webrtc_router
 from ..presentation.api.routers import friends as friends_router
 from ..presentation.api.routers import push as push_router
 from ..presentation.api.routers import users as users_router
+from ..presentation.api.routers import direct as direct_router
 from ..presentation.api.deps.containers import (
     get_user_repo,
     get_room_repo,
@@ -30,6 +31,7 @@ from ..presentation.api.deps.containers import (
     get_ice_provider,
 )
 from ..presentation.ws import rooms as ws_rooms
+from ..presentation.ws import friends as ws_friends
 from ..presentation.api.deps.db import get_db_session
 from ..infrastructure.db.repositories.users import PgUserRepository
 from ..infrastructure.db.repositories.rooms import PgRoomRepository
@@ -84,9 +86,11 @@ def create_app() -> FastAPI:
     app.include_router(friends_router.router)
     app.include_router(push_router.router)
     app.include_router(users_router.router)
+    app.include_router(direct_router.router)
 
     # WS
     app.include_router(ws_rooms.router)
+    app.include_router(ws_friends.router)
 
     # Static demo
     app.mount("/static", StaticFiles(directory="app/presentation/static"), name="static")

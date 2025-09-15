@@ -13,6 +13,11 @@ from ..deps.containers import get_db_session
 from ..deps.containers import get_user_repo
 from ....infrastructure.db.repositories.friends import PgFriendshipRepository
 from pydantic import BaseModel
+from ...ws.friends import (
+    publish_friend_request,
+    publish_friend_accepted,
+    publish_friend_cancelled,
+)
 
 
 router = APIRouter(prefix="/api/v1/friends", tags=["friends"])
@@ -101,10 +106,20 @@ async def send_request(body: FriendRequestIn, current=Depends(get_current_user),
             existing.requested_by = current.id
             existing.updated_at = existing.updated_at
             await repo.update(existing)
+            # publish accept for both sides
+            try:
+                await publish_friend_accepted(existing.user_a_id, existing.user_b_id, None, None)
+            except Exception:
+                pass
             return {"ok": True, "accepted": True}
         raise HTTPException(status_code=409, detail="Request already exists")
     f = Friendship.pair(current.id, body.user_id, requested_by=current.id)
     await repo.add(f)
+    # publish request to target user
+    try:
+        await publish_friend_request(current.id, body.user_id, None)
+    except Exception:
+        pass
     return {"ok": True}
 
 
@@ -117,6 +132,10 @@ async def accept_friend(friend_id: UUID, current=Depends(get_current_user), repo
     f.requested_by = current.id
     f.updated_at = f.updated_at
     await repo.update(f)
+    try:
+        await publish_friend_accepted(f.user_a_id, f.user_b_id, None, None)
+    except Exception:
+        pass
     return {"ok": True}
 
 
@@ -129,4 +148,8 @@ async def cancel_request(friend_id: UUID, current=Depends(get_current_user), rep
     f.status = FriendStatus.blocked
     f.updated_at = f.updated_at
     await repo.update(f)
+    try:
+        await publish_friend_cancelled(current.id, friend_id)
+    except Exception:
+        pass
     return {"ok": True}

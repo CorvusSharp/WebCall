@@ -51,6 +51,8 @@ let selected = { mic: null, cam: null, spk: null };
 let audioUnlocked = false;
 let globalAudioCtx = null;
 let latestUserNames = {}; // { connId: displayName }
+let friendsWs = null;
+let currentDirectFriend = null; // UUID друга выбранного в личном чате
 
 const els = {
   roomId: document.getElementById('roomId'),
@@ -86,6 +88,13 @@ const els = {
   inCallSection: document.getElementById('inCallSection'),
   visitedCard: document.getElementById('visitedCard'),
   statusCard: document.getElementById('statusCard'),
+  // Direct chat
+  directChatCard: document.getElementById('directChatCard'),
+  directChatTitle: document.getElementById('directChatTitle'),
+  directMessages: document.getElementById('directMessages'),
+  directInput: document.getElementById('directInput'),
+  btnDirectSend: document.getElementById('btnDirectSend'),
+  directActions: document.getElementById('directActions'),
 };
 
 function showPreJoin(){
@@ -611,6 +620,10 @@ function renderUserRow(container, u, opts={}){
   `;
   const actions = row.querySelector('div[style]');
   (opts.actions || []).forEach(a => actions.appendChild(a));
+  if (opts.onSelectDirect){
+    row.style.cursor = 'pointer';
+    row.addEventListener('click', ()=> opts.onSelectDirect(u));
+  }
   container.appendChild(row);
 }
 
@@ -631,7 +644,10 @@ async function loadFriends(){
         if (!room) return alert('Укажите ID комнаты');
         try{ await notifyCall(f.user_id, room); alert('Уведомление отправлено'); }catch(e){ alert(String(e)); }
       });
-      renderUserRow(els.friendsList, { id: f.user_id, username: f.username || f.user_id, email: f.email || '' }, { actions: [btnCall] });
+      renderUserRow(els.friendsList, { id: f.user_id, username: f.username || f.user_id, email: f.email || '' }, {
+        actions: [btnCall],
+        onSelectDirect: (user)=> selectDirectFriend(user.id, user.username || user.id)
+      });
     });
     // Requests
     els.friendRequests.innerHTML = '';
@@ -648,6 +664,8 @@ async function loadFriends(){
 
 function initFriendsUI(){
   if (!els.friendsCard) return;
+  // Запуск WS друзей один раз после авторизации
+  try { startFriendsWs(); } catch {}
   els.btnFriendSearch?.addEventListener('click', async ()=>{
     const q = (els.friendSearch?.value || '').trim();
     if (!q) return;
@@ -667,4 +685,123 @@ function initFriendsUI(){
   });
   // Инициализируем списки
   loadFriends();
+}
+
+function startFriendsWs(){
+  if (friendsWs) return;
+  const t = localStorage.getItem('wc_token');
+  if (!t) return; // нет токена – не подключаемся
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = new URL(`${proto}://${location.host}/ws/friends`);
+  url.searchParams.set('token', t);
+  friendsWs = new WebSocket(url.toString());
+  friendsWs.onopen = () => {
+    appendLog(els.logs, 'WS друзей открыт');
+    try { friendsWs.send(JSON.stringify({ type: 'ping' })); } catch {}
+  };
+  friendsWs.onmessage = async (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (!msg || typeof msg !== 'object') return;
+      switch (msg.type){
+        case 'friend_request':
+        case 'friend_accepted':
+        case 'friend_cancelled':
+          // Перезагружаем списки (debounce простейший)
+          scheduleFriendsReload();
+          break;
+        case 'direct_message':
+          handleIncomingDirect(msg);
+          break;
+        default:
+          break;
+      }
+    } catch {}
+  };
+  friendsWs.onclose = () => {
+    friendsWs = null;
+    // Автореконнект через 5с если токен всё ещё есть
+    setTimeout(()=>{ try{ startFriendsWs(); }catch{} }, 5000);
+  };
+  friendsWs.onerror = () => { try { friendsWs.close(); } catch {}; };
+}
+
+async function selectDirectFriend(friendId, label){
+  currentDirectFriend = friendId;
+  if (els.directChatCard) els.directChatCard.style.display = '';
+  if (els.directChatTitle) els.directChatTitle.textContent = 'Чат с: ' + (label || friendId.slice(0,8));
+  if (els.directMessages) els.directMessages.innerHTML = '<div class="muted">Загрузка...</div>';
+  try{
+    const t = localStorage.getItem('wc_token');
+    const r = await fetch(`/api/v1/direct/${friendId}/messages`, { headers: { 'Authorization': `Bearer ${t}` } });
+    const arr = await r.json();
+    if (!Array.isArray(arr) || !arr.length){ els.directMessages.innerHTML = '<div class="muted">Пусто</div>'; }
+    else {
+      els.directMessages.innerHTML = '';
+      arr.forEach(m => appendDirectMessage(m, m.from_user_id === getAccountId()));
+      scrollDirectToEnd();
+    }
+  }catch{ try{ els.directMessages.innerHTML = '<div class="muted">Ошибка загрузки</div>'; }catch{} }
+}
+
+function getAccountId(){
+  try{ const t = localStorage.getItem('wc_token'); if (!t) return null; const payload = JSON.parse(atob(t.split('.')[1])); return payload.sub; }catch{ return null; }
+}
+
+function appendDirectMessage(m, isSelf){
+  if (!els.directMessages) return;
+  const div = document.createElement('div');
+  div.className = 'chat-line' + (isSelf ? ' self' : '');
+  const ts = new Date(m.sent_at || m.sentAt || Date.now()).toLocaleTimeString();
+  div.innerHTML = `<span class="who">${isSelf ? 'Я' : (m.from_user_id||m.fromUserId||'--').slice(0,6)}</span> <span class="msg"></span> <span class="time">${ts}</span>`;
+  div.querySelector('.msg').textContent = m.content;
+  els.directMessages.appendChild(div);
+}
+
+function scrollDirectToEnd(){
+  try{ els.directMessages.scrollTop = els.directMessages.scrollHeight; }catch{}
+}
+
+function handleIncomingDirect(msg){
+  const acc = getAccountId();
+  // Проверяем, что это переписка с текущим выбранным другом
+  const other = msg.fromUserId === acc ? msg.toUserId : msg.fromUserId;
+  const show = currentDirectFriend && other === currentDirectFriend;
+  if (show){
+    appendDirectMessage({
+      from_user_id: msg.fromUserId,
+      content: msg.content,
+      sent_at: msg.sentAt
+    }, msg.fromUserId === acc);
+    scrollDirectToEnd();
+  }
+}
+
+if (els.btnDirectSend){
+  els.btnDirectSend.addEventListener('click', async ()=>{
+    if (!currentDirectFriend) return;
+    const text = (els.directInput?.value || '').trim();
+    if (!text) return;
+    try{
+      const t = localStorage.getItem('wc_token');
+      const r = await fetch(`/api/v1/direct/${currentDirectFriend}/messages`, {
+        method: 'POST',
+        headers: { 'content-type':'application/json', 'Authorization': `Bearer ${t}` },
+        body: JSON.stringify({ content: text })
+      });
+      if (r.ok){
+        const m = await r.json();
+        appendDirectMessage(m, true); // локально сразу добавим (дубликат от WS можно оставить)
+        scrollDirectToEnd();
+      }
+    }catch{}
+    els.directInput.value='';
+  });
+  els.directInput?.addEventListener('keydown', e=>{ if (e.key==='Enter') els.btnDirectSend.click(); });
+}
+
+let _friendsReloadTimer = null;
+function scheduleFriendsReload(){
+  if (_friendsReloadTimer) clearTimeout(_friendsReloadTimer);
+  _friendsReloadTimer = setTimeout(()=>{ loadFriends(); }, 300); // простая стабилизация всплеска событий
 }

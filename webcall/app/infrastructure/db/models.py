@@ -76,3 +76,16 @@ class PushSubscriptions(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "endpoint", name="uq_push_user_endpoint"),
     )
+
+
+class DirectMessages(Base):
+    __tablename__ = 'direct_messages'
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    user_a_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey('users.id'), index=True, nullable=False)
+    user_b_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey('users.id'), index=True, nullable=False)
+    sender_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey('users.id'), index=True, nullable=False)
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), index=True, nullable=False)
+    __table_args__ = (
+        UniqueConstraint('id', name='uq_direct_msg_id'),
+    )
