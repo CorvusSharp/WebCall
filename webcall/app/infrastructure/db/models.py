@@ -19,7 +19,8 @@ class Users(Base):
     # Последняя посещенная комната (опционально)
     last_room_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("rooms.id"), nullable=True, index=True)
 
-    rooms = relationship("Rooms", back_populates="owner")
+    # Связь с созданными пользователем комнатами (users.id -> rooms.owner_id)
+    rooms = relationship("Rooms", back_populates="owner", foreign_keys="Rooms.owner_id")
 
 
 class Rooms(Base):
@@ -29,7 +30,8 @@ class Rooms(Base):
     is_private: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
 
-    owner = relationship("Users", back_populates="rooms")
+    # Владелец комнаты (rooms.owner_id -> users.id)
+    owner = relationship("Users", back_populates="rooms", foreign_keys=[owner_id])
 
 
 class Participants(Base):
