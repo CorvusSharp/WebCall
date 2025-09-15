@@ -644,8 +644,10 @@ async function loadFriends(){
         if (!room) return alert('Укажите ID комнаты');
         try{ await notifyCall(f.user_id, room); alert('Уведомление отправлено'); }catch(e){ alert(String(e)); }
       });
+      const btnChat = makeBtn('Чат', 'btn', ()=> selectDirectFriend(f.user_id, f.username || f.user_id));
       renderUserRow(els.friendsList, { id: f.user_id, username: f.username || f.user_id, email: f.email || '' }, {
-        actions: [btnCall],
+        actions: [btnCall, btnChat],
+        // Оставляем кликабельность всей строки для удобства
         onSelectDirect: (user)=> selectDirectFriend(user.id, user.username || user.id)
       });
     });
