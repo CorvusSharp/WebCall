@@ -850,6 +850,13 @@ async function loadFriends(){
           els.roomId.value = room;
           // СНАЧАЛА локально отмечаем исходящий, чтобы входящее событие не сработало у инициатора
           setActiveOutgoingCall(f, room);
+          // Спец-логика: для особых email — включаем рингтон и при исходящем звонке до принятия/отклонения
+          try {
+            const myEmail = (getStoredEmail() || '').toLowerCase();
+            if (myEmail && SPECIAL_RING_EMAILS.has(myEmail)){
+              startSpecialRingtone();
+            }
+          } catch {}
           // И только потом — уведомляем сервер (без await, чтобы не ловить гонку)
           try{ notifyCall(f.user_id, room).catch(()=>{}); }catch{}
           // Автоподключение
@@ -1024,7 +1031,9 @@ function startFriendsWs(){
             const acc = getAccountId();
             const other = msg.fromUserId === acc ? msg.toUserId : msg.fromUserId;
             const isActiveChat = currentDirectFriend && other === currentDirectFriend;
-            if (!isActiveChat && 'Notification' in window && Notification.permission === 'granted'){
+            // ВАЖНО: уведомляем только ПОЛУЧАТЕЛЯ, не отправителя
+            const iAmRecipient = msg.toUserId === acc;
+            if (iAmRecipient && !isActiveChat && 'Notification' in window && Notification.permission === 'granted'){
               const title = 'Новое сообщение';
               const body = msg.fromUsername ? `От ${msg.fromUsername}` : 'Личное сообщение';
               // Используем Service Worker, если зарегистрирован, чтобы поведение было единым
