@@ -513,6 +513,8 @@ function leave(){
   setConnectedState(false);
   els.peersGrid.innerHTML = '';
   log('Отключено');
+  // если был активный звонок — сбросим статус
+  if (activeCall) { resetActiveCall('leave'); }
   // обновим историю
   try { loadVisitedRooms(); } catch {}
 }
@@ -765,15 +767,13 @@ async function loadFriends(){
           span.className = 'muted small';
           span.textContent = 'Ожидание...';
           callControls.push(span);
-          const btnCancel = makeBtn('Отменить', 'btn ghost', (ev)=>{ ev?.stopPropagation?.(); resetActiveCall('cancel'); });
+          const btnCancel = makeBtn('Отменить', 'btn ghost', (ev)=>{ ev?.stopPropagation?.(); try{ leave(); }catch{} resetActiveCall('cancel'); });
           callControls.push(btnCancel);
         } else if (activeCall.status === 'accepted'){
           const span = document.createElement('span');
           span.className = 'muted small';
           span.textContent = 'В звонке';
           callControls.push(span);
-          const btnEnd = makeBtn('Завершить', 'btn danger ghost', (ev)=>{ ev?.stopPropagation?.(); resetActiveCall('end'); });
-          callControls.push(btnEnd);
         } else if (activeCall.status === 'declined'){
           const span = document.createElement('span');
           span.className = 'muted small';
@@ -964,17 +964,18 @@ async function selectDirectFriend(friendId, label, opts={}){
     const t = localStorage.getItem('wc_token');
     const r = await fetch(`/api/v1/direct/${friendId}/messages`, { headers: { 'Authorization': `Bearer ${t}` } });
     const arr = await r.json();
-    // Получаем или создаём Set для друга
-    let seen = directSeenByFriend.get(friendId);
-    if (!seen){ seen = new Set(); directSeenByFriend.set(friendId, seen); }
+    // ВАЖНО: Полная перезагрузка чата должна заново отрисовать ВСЕ сообщения,
+    // поэтому пересоздаём набор seen, чтобы не фильтровать уже известные id.
+    let seen = new Set();
+    directSeenByFriend.set(friendId, seen);
     let added = 0;
     if (Array.isArray(arr) && arr.length){
       els.directMessages.innerHTML = '';
       arr.forEach(m => {
-        if (m.id && !seen.has(m.id)){
-          seen.add(m.id); added++;
-          appendDirectMessage(m, m.from_user_id === getAccountId());
-        }
+        // Отрисовываем все элементы, параллельно наполняя seen
+        if (m.id) seen.add(m.id);
+        added++;
+        appendDirectMessage(m, m.from_user_id === getAccountId());
       });
       if (added === 0){ els.directMessages.innerHTML = '<div class="muted">Пусто</div>'; }
       else scrollDirectToEnd();
