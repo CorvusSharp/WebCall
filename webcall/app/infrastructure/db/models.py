@@ -89,3 +89,10 @@ class DirectMessages(Base):
     __table_args__ = (
         UniqueConstraint('id', name='uq_direct_msg_id'),
     )
+
+
+class DirectReadStates(Base):
+    __tablename__ = 'direct_read_states'
+    owner_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey('users.id'), primary_key=True)
+    other_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey('users.id'), primary_key=True)
+    last_read_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)

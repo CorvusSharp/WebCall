@@ -7,10 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from ....core.domain.models import Friendship, FriendStatus
 from ....core.errors import ConflictError
-from ....core.ports.repositories import FriendshipRepository, UserRepository
+from ....core.ports.repositories import FriendshipRepository, UserRepository, DirectMessageRepository, DirectReadStateRepository
 from ..deps.auth import get_current_user
 from ..deps.containers import get_db_session
-from ..deps.containers import get_user_repo
+from ..deps.containers import get_user_repo, get_db_session
+from ....infrastructure.db.repositories.direct_messages import PgDirectMessageRepository
+from ....infrastructure.db.repositories.direct_reads import PgDirectReadStateRepository
 from ....infrastructure.db.repositories.friends import PgFriendshipRepository
 from pydantic import BaseModel
 from ...ws.friends import (
@@ -35,6 +37,7 @@ class FriendshipOut(BaseModel):
     requested_by: UUID
     username: str | None = None
     email: str | None = None
+    unread: int = 0
 
 
 def _other_side(f: Friendship, me: UUID) -> UUID:
@@ -50,12 +53,16 @@ async def list_friends(
     current=Depends(get_current_user),
     repo: FriendshipRepository = Depends(get_friend_repo),
     users: UserRepository = Depends(get_user_repo),
+    dms: DirectMessageRepository = Depends(lambda session=Depends(get_db_session): PgDirectMessageRepository(session)),
+    reads: DirectReadStateRepository = Depends(lambda session=Depends(get_db_session): PgDirectReadStateRepository(session)),
 ):
     items = await repo.list_friends(current.id, status=FriendStatus.accepted)
     result: list[FriendshipOut] = []
     for f in items:
         other_id = _other_side(f, current.id)
         u = await users.get_by_id(other_id)
+        last_read = await reads.get_last_read(current.id, other_id)
+        unread = await dms.count_unread(current.id, other_id, last_read)
         result.append(
             FriendshipOut(
                 id=f.id,
@@ -64,6 +71,7 @@ async def list_friends(
                 requested_by=f.requested_by,
                 username=(u.username if u else None),
                 email=(str(u.email) if u else None),
+                unread=unread,
             )
         )
     return result

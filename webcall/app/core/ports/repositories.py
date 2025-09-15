@@ -168,3 +168,24 @@ class DirectMessageRepository(ABC):
         Пара пользователей рассматривается как неупорядоченная.
         """
         raise NotImplementedError
+
+    @abstractmethod
+    async def count_unread(self, user_id: UUID, friend_id: UUID, since: datetime | None) -> int:
+        """Подсчитать количество непрочитанных сообщений для пользователя от друга.
+
+        Используется правило: сообщения, где sender_id != user_id и sent_at > (since or эпоха).
+        Репозиторий обязан трактовать пару (user_id, friend_id) как неупорядоченную.
+        """
+        raise NotImplementedError
+
+
+class DirectReadStateRepository(ABC):
+    @abstractmethod
+    async def get_last_read(self, user_id: UUID, friend_id: UUID) -> datetime | None:
+        """Вернуть момент последнего прочтения переписки user_id<->friend_id пользователем user_id."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def set_last_read(self, user_id: UUID, friend_id: UUID, when: datetime) -> None:
+        """Обновить момент последнего прочтения (upsert)."""
+        raise NotImplementedError

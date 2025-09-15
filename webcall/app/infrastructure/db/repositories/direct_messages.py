@@ -64,3 +64,22 @@ class PgDirectMessageRepository(DirectMessageRepository):
         deleted = res.rowcount if res.rowcount is not None else 0
         await self.session.commit()
         return deleted
+
+    async def count_unread(self, user_id: UUID, friend_id: UUID, since: datetime | None) -> int:  # type: ignore[override]
+        a_s, b_s = str(user_id), str(friend_id)
+        if a_s <= b_s:
+            ua, ub = user_id, friend_id
+        else:
+            ua, ub = friend_id, user_id
+        stmt = select(func.count()).select_from(m.DirectMessages).where(
+            and_(
+                m.DirectMessages.user_a_id == ua,
+                m.DirectMessages.user_b_id == ub,
+                m.DirectMessages.sender_id != user_id,
+            )
+        )
+        if since is not None:
+            stmt = stmt.where(m.DirectMessages.sent_at > since)
+        res = await self.session.execute(stmt)
+        cnt = res.scalar_one() or 0
+        return int(cnt)

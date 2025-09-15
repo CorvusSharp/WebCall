@@ -3,15 +3,21 @@ from __future__ import annotations
 from typing import List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
 from ....core.domain.models import DirectMessage, FriendStatus
-from ....core.ports.repositories import FriendshipRepository, DirectMessageRepository, UserRepository
+from ....core.ports.repositories import FriendshipRepository, DirectMessageRepository, UserRepository, DirectReadStateRepository, PushSubscriptionRepository
 from ..deps.auth import get_current_user
 from ..deps.containers import get_db_session
 from ....infrastructure.db.repositories.friends import PgFriendshipRepository
 from ....infrastructure.db.repositories.direct_messages import PgDirectMessageRepository
+from ....infrastructure.db.repositories.direct_reads import PgDirectReadStateRepository
+from ....infrastructure.db.repositories.push_subs import PgPushSubscriptionRepository
+from ....infrastructure.db.repositories.users import PgUserRepository
+from ....infrastructure.db.session import get_session
+from ....infrastructure.services.webpush import WebPushSender, WebPushMessage
+from ....infrastructure.config import get_settings
 from ....infrastructure.services.direct_crypto import encrypt_direct, decrypt_direct
 from ...ws.friends import publish_direct_message, publish_direct_cleared
 
@@ -38,6 +44,10 @@ async def get_dm_repo(session=Depends(get_db_session)) -> DirectMessageRepositor
     return PgDirectMessageRepository(session)
 
 
+async def get_read_repo(session=Depends(get_db_session)) -> DirectReadStateRepository:
+    return PgDirectReadStateRepository(session)
+
+
 @router.get('/{friend_id}/messages', response_model=List[DirectMessageOut])
 async def list_direct_messages(friend_id: UUID, current=Depends(get_current_user), frepo: FriendshipRepository = Depends(get_friend_repo), dms: DirectMessageRepository = Depends(get_dm_repo)):
     f = await frepo.get_pair(current.id, friend_id)
@@ -58,8 +68,30 @@ async def list_direct_messages(friend_id: UUID, current=Depends(get_current_user
     return result
 
 
+class ReadAckIn(BaseModel):
+    at: str | None = None  # ISO8601; если не задано — использовать текущее время на сервере
+
+
+@router.post('/{friend_id}/read-ack')
+async def mark_direct_read(friend_id: UUID, body: ReadAckIn | None = None, current=Depends(get_current_user), frepo: FriendshipRepository = Depends(get_friend_repo), reads: DirectReadStateRepository = Depends(get_read_repo)):
+    f = await frepo.get_pair(current.id, friend_id)
+    if not f or f.status != FriendStatus.accepted:
+        raise HTTPException(status_code=404, detail='Not friends')
+    from datetime import datetime
+    when = None
+    try:
+        if body and body.at:
+            when = datetime.fromisoformat(body.at)
+    except Exception:
+        when = None
+    if when is None:
+        when = datetime.utcnow()
+    await reads.set_last_read(current.id, friend_id, when)
+    return {"ok": True}
+
+
 @router.post('/{friend_id}/messages', response_model=DirectMessageOut, status_code=201)
-async def post_direct_message(friend_id: UUID, body: DirectMessageIn, current=Depends(get_current_user), frepo: FriendshipRepository = Depends(get_friend_repo), dms: DirectMessageRepository = Depends(get_dm_repo)):
+async def post_direct_message(friend_id: UUID, body: DirectMessageIn, background: BackgroundTasks, current=Depends(get_current_user), frepo: FriendshipRepository = Depends(get_friend_repo), dms: DirectMessageRepository = Depends(get_dm_repo), reads: DirectReadStateRepository = Depends(get_read_repo), push_repo: PushSubscriptionRepository = Depends(lambda session=Depends(get_db_session): PgPushSubscriptionRepository(session)), users: UserRepository = Depends(get_current_user.__wrapped__ if hasattr(get_current_user, '__wrapped__') else get_current_user)):
     f = await frepo.get_pair(current.id, friend_id)
     if not f or f.status != FriendStatus.accepted:
         raise HTTPException(status_code=404, detail='Not friends')
@@ -75,6 +107,59 @@ async def post_direct_message(friend_id: UUID, body: DirectMessageIn, current=De
         await publish_direct_message(current.id, friend_id, dm.id, content, dm.sent_at)
     except Exception:
         pass
+    # Планируем отложенное пуш-уведомление через 10 минут, если получатель не прочитал
+    async def _delayed_push_if_unread(sender_id: UUID, to_id: UUID, sent_at_iso: str):
+        # Ждём 10 минут, затем проверяем, прочитано ли сообщение (по last_read)
+        import asyncio
+        from datetime import datetime
+        await asyncio.sleep(600)
+        # Настройки push
+        settings = get_settings()
+        if not (settings.VAPID_PUBLIC_KEY and settings.VAPID_PRIVATE_KEY and settings.VAPID_SUBJECT):
+            return
+        # Парсим время отправки сообщения
+        try:
+            sent_at = datetime.fromisoformat(sent_at_iso)
+        except Exception:
+            return
+        # Открываем новую БД-сессию и переиспользуем репозитории
+        async with get_session() as session:
+            reads_repo = PgDirectReadStateRepository(session)
+            push_repo_local = PgPushSubscriptionRepository(session)
+            user_repo_local = PgUserRepository(session)
+            try:
+                last_read = await reads_repo.get_last_read(to_id, sender_id)
+            except Exception:
+                last_read = None
+            # Если прочитано (last_read >= sent_at) — пуш не нужен
+            if last_read is not None and last_read >= sent_at:
+                return
+            # Готовим данные уведомления
+            sender_user = await user_repo_local.get_by_id(sender_id)
+            sender_name = sender_user.username if sender_user else "пользователь"
+            subs = await push_repo_local.list_by_user(to_id)
+            if not subs:
+                return
+            push_sender = WebPushSender(
+                vapid_public=settings.VAPID_PUBLIC_KEY,
+                vapid_private=settings.VAPID_PRIVATE_KEY,
+                subject=settings.VAPID_SUBJECT,
+            )
+            title = "Новое сообщение"
+            body_text = f"Вам сообщение от {sender_name}"
+            for s in subs:
+                try:
+                    await push_sender.send(
+                        s.endpoint,
+                        s.p256dh,
+                        s.auth,
+                        WebPushMessage(title=title, body=body_text, data={"type": "direct", "from": str(sender_id)}),
+                    )
+                except Exception:
+                    # игнорируем ошибки доставки
+                    pass
+
+    background.add_task(_delayed_push_if_unread, current.id, friend_id, dm.sent_at.isoformat())
     return DirectMessageOut(id=dm.id, from_user_id=current.id, to_user_id=friend_id, content=content, sent_at=dm.sent_at.isoformat())
 
 

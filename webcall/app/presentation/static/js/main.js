@@ -715,11 +715,15 @@ async function loadFriends(){
   els.friendsList.innerHTML = '<div class="muted">Загрузка...</div>';
   els.friendRequests.innerHTML = '<div class="muted">Загрузка...</div>';
   try{
-    const [friends, reqs] = await Promise.all([listFriends(), listFriendRequests()]);
+  const [friends, reqs] = await Promise.all([listFriends(), listFriendRequests()]);
     // Friends
     els.friendsList.innerHTML = '';
     if (!friends.length) els.friendsList.innerHTML = '<div class="muted">Нет друзей</div>';
     friends.forEach(f => {
+      // Обновим локальные счётчики непрочитанных по данным сервера
+      if (typeof f.unread === 'number') {
+        if (f.unread > 0) directUnread.set(f.user_id, f.unread); else directUnread.delete(f.user_id);
+      }
       const callControls = [];
       const isActiveWith = activeCall && activeCall.withUserId === f.user_id && activeCall.status !== 'ended';
       if (!isActiveWith){
@@ -957,8 +961,13 @@ async function selectDirectFriend(friendId, label, opts={}){
     }
     return;
   }
-  // Сбрасываем непрочитанные при первом открытии после выбора
+  // Сбрасываем непрочитанные при первом открытии после выбора (локально + серверу read-ack)
   if (directUnread.has(friendId)) { directUnread.delete(friendId); updateFriendUnreadBadge(friendId); }
+  try{
+    const t = localStorage.getItem('wc_token');
+    // не важно, дойдёт ли — best-effort
+    fetch(`/api/v1/direct/${friendId}/read-ack`, { method: 'POST', headers: { 'content-type':'application/json', 'Authorization': `Bearer ${t}` }, body: JSON.stringify({}) }).catch(()=>{});
+  }catch{}
   if (els.directMessages) els.directMessages.innerHTML = '<div class="muted">Загрузка...</div>';
   try{
     const t = localStorage.getItem('wc_token');

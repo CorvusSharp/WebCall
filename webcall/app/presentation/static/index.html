@@ -21,6 +21,7 @@
     </header>
 
     <main class="container app-main">
+      <!-- Верхняя панель: Комната + История -->
       <section class="panel grid-2">
         <div class="card">
           <h2>Комната</h2>
@@ -38,12 +39,64 @@
             </div>
           </div>
         </div>
-
-        <!-- Правый столбец: до входа — История; в звонке — Статус -->
+        <!-- Правый столбец: до входа — История -->
         <div class="card" id="visitedCard">
           <h2>Ваши комнаты</h2>
           <div id="visitedRooms" class="list"></div>
         </div>
+      </section>
+
+      <!-- Блок, который виден только в звонке -->
+      <section id="inCallSection" style="display:none;" class="app-in-call">
+        <section class="panel grid-2">
+          <div class="card video-card" id="localCard" style="display:none">
+            <h2>Вы</h2>
+            <div class="video-wrap">
+              <video id="localVideo" muted playsinline></video>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div id="peersGrid" class="peers-grid">
+            <!-- Сюда добавляются плитки участников -->
+          </div>
+        </section>
+
+        <section class="card panel">
+          <h2>Общий Чат</h2>
+          <div id="chat" class="chat-box"></div>
+          <div class="chat-input">
+            <input type="text" id="chatInput" placeholder="Сообщение..." />
+            <button id="btnSend" class="btn">»</button>
+          </div>
+        </section>
+
+        <!-- Статус перенесён ниже общего чата и сделан полноширинным как Логи -->
+        <section class="card panel" id="statusCard" style="display:none;">
+          <h2>Статус</h2>
+          <div id="connStatus"></div>
+          <div class="form-grid" style="margin-top: .5rem; gap: .5rem 1rem;">
+            <label class="row">
+              <span>Микрофон</span>
+              <select id="micSel" class="sel" title="Микрофон"></select>
+            </label>
+            <label class="row">
+              <span>Динамики</span>
+              <select id="spkSel" class="sel" title="Динамики"></select>
+            </label>
+          </div>
+          <div id="stats" class="logs"></div>
+        </section>
+
+        <section class="card panel">
+          <h2>Логи</h2>
+          <div id="logs" class="logs"></div>
+        </section>
+      </section>
+
+      <!-- Нижняя панель: Друзья + Личный чат (перенесены ниже плиток участников) -->
+      <section class="panel grid-2">
         <div class="card" id="friendsCard">
           <h2>Друзья</h2>
           <div class="form-grid" style="margin-bottom:.5rem; gap:.5rem 1rem;">
@@ -77,53 +130,6 @@
           </div>
           <div class="muted small" style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap;" id="directActions"></div>
         </div>
-        <div class="card" id="statusCard" style="display:none;">
-          <h2>Статус</h2>
-          <div id="connStatus"></div>
-          <div class="form-grid" style="margin-top: .5rem; gap: .5rem 1rem;">
-            <label class="row">
-              <span>Микрофон</span>
-              <select id="micSel" class="sel" title="Микрофон"></select>
-            </label>
-            <label class="row">
-              <span>Динамики</span>
-              <select id="spkSel" class="sel" title="Динамики"></select>
-            </label>
-          </div>
-          <div id="stats" class="logs"></div>
-        </div>
-      </section>
-
-      <!-- Блок, который виден только в звонке -->
-      <section id="inCallSection" style="display:none;" class="app-in-call">
-        <section class="panel grid-2">
-          <div class="card video-card" id="localCard" style="display:none">
-            <h2>Вы</h2>
-            <div class="video-wrap">
-              <video id="localVideo" muted playsinline></video>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div id="peersGrid" class="peers-grid">
-            <!-- Сюда добавляются плитки участников -->
-          </div>
-        </section>
-
-        <section class="card panel">
-          <h2>Общий Чат</h2>
-          <div id="chat" class="chat-box"></div>
-          <div class="chat-input">
-            <input type="text" id="chatInput" placeholder="Сообщение..." />
-            <button id="btnSend" class="btn">»</button>
-          </div>
-        </section>
-
-        <section class="card panel">
-          <h2>Логи</h2>
-          <div id="logs" class="logs"></div>
-        </section>
       </section>
     </main>
 
