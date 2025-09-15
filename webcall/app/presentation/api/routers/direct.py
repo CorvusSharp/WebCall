@@ -107,6 +107,37 @@ async def post_direct_message(friend_id: UUID, body: DirectMessageIn, background
         await publish_direct_message(current.id, friend_id, dm.id, content, dm.sent_at)
     except Exception:
         pass
+    # Мгновенное пуш-уведомление получателю (не дожидаясь 10 минут)
+    async def _instant_push(sender_id: UUID, to_id: UUID, plaintext: str):
+        settings = get_settings()
+        if not (settings.VAPID_PUBLIC_KEY and settings.VAPID_PRIVATE_KEY and settings.VAPID_SUBJECT):
+            return
+        async with get_session() as session:
+            push_repo_local = PgPushSubscriptionRepository(session)
+            user_repo_local = PgUserRepository(session)
+            subs = await push_repo_local.list_by_user(to_id)
+            if not subs:
+                return
+            sender_user = await user_repo_local.get_by_id(sender_id)
+            sender_name = sender_user.username if sender_user else "пользователь"
+            push_sender = WebPushSender(
+                vapid_public=settings.VAPID_PUBLIC_KEY,
+                vapid_private=settings.VAPID_PRIVATE_KEY,
+                subject=settings.VAPID_SUBJECT,
+            )
+            title = "Новое сообщение"
+            body_text = f"Вам сообщение от {sender_name}"
+            for s in subs:
+                try:
+                    await push_sender.send(
+                        s.endpoint,
+                        s.p256dh,
+                        s.auth,
+                        WebPushMessage(title=title, body=body_text, data={"type": "direct", "from": str(sender_id)}),
+                    )
+                except Exception:
+                    pass
+    background.add_task(_instant_push, current.id, friend_id, content)
     # Планируем отложенное пуш-уведомление через 10 минут, если получатель не прочитал
     async def _delayed_push_if_unread(sender_id: UUID, to_id: UUID, sent_at_iso: str):
         # Ждём 10 минут, затем проверяем, прочитано ли сообщение (по last_read)
