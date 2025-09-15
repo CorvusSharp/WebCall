@@ -63,7 +63,6 @@ const els = {
   logs: document.getElementById('logs'),
   chat: document.getElementById('chat'),
   btnToggleMic: document.getElementById('btnToggleMic'),
-  btnToggleCam: document.getElementById('btnToggleCam'),
   localVideo: document.getElementById('localVideo'),
   peersGrid: document.getElementById('peersGrid'),
   stats: document.getElementById('stats'),
@@ -73,26 +72,26 @@ const els = {
   btnDiag: document.getElementById('btnDiag'),
   btnToggleTheme: document.getElementById('btnToggleTheme'),
   btnLogout: document.getElementById('btnLogout'),
-  membersList: document.getElementById('membersList'), // legacy (removed section)
+  membersList: document.getElementById('membersList'),
   visitedRooms: document.getElementById('visitedRooms'),
-  // new elements for stateful UI
   preJoinControls: document.getElementById('preJoinControls'),
   inCallControls: document.getElementById('inCallControls'),
   inCallSection: document.getElementById('inCallSection'),
   visitedCard: document.getElementById('visitedCard'),
+  statusCard: document.getElementById('statusCard'),
 };
 
 function showPreJoin(){
-  if (els.preJoinControls) els.preJoinControls.style.display = '';
   if (els.inCallControls) els.inCallControls.style.display = 'none';
   if (els.inCallSection) els.inCallSection.style.display = 'none';
   if (els.visitedCard) els.visitedCard.style.display = '';
+  if (els.statusCard) els.statusCard.style.display = 'none';
 }
 function showInCall(){
-  if (els.preJoinControls) els.preJoinControls.style.display = 'none';
   if (els.inCallControls) els.inCallControls.style.display = '';
   if (els.inCallSection) els.inCallSection.style.display = '';
   if (els.visitedCard) els.visitedCard.style.display = 'none';
+  if (els.statusCard) els.statusCard.style.display = '';
 }
 
 // Безопасный пинг: используем экспорт из signal.js, либо локальный fallback
@@ -113,7 +112,6 @@ function setConnectingState(isConnecting) {
   setEnabled(els.btnLeave, false);
   setEnabled(els.btnSend, false);
   setEnabled(els.btnToggleMic, false);
-  setEnabled(els.btnToggleCam, false);
 }
 
 function setConnectedState(connected){
@@ -122,7 +120,6 @@ function setConnectedState(connected){
   setEnabled(els.btnSend, connected);
   setEnabled(els.btnLeave, connected);
   setEnabled(els.btnToggleMic, connected);
-  setEnabled(els.btnToggleCam, connected);
   // toggle stateful UI
   if (connected) showInCall(); else showPreJoin();
 }
@@ -465,16 +462,6 @@ function setupUI(){
     const enabled = await rtc.toggleMic();
     els.btnToggleMic.textContent = enabled ? 'Выкл.микро' : 'Вкл.микро';
   });
-  bind(els.btnToggleCam, 'click', ()=>{
-    if (!rtc) return;
-    const enabled = rtc.toggleCam();
-    els.btnToggleCam.textContent = enabled ? 'Выкл.камеру' : 'Вкл.камеру';
-    try{
-      const hasVideo = !!(rtc.localStream && rtc.localStream.getVideoTracks()[0] && rtc.localStream.getVideoTracks()[0].enabled);
-      const card = document.getElementById('localCard');
-      if (card) card.style.display = hasVideo ? '' : 'none';
-    }catch{}
-  });
   bind(els.btnDiag, 'click', ()=> rtc?.diagnoseAudio());
   bind(els.btnToggleTheme, 'click', ()=>{
     const isDark = document.body.classList.toggle('dark');
@@ -539,13 +526,31 @@ async function loadVisitedRooms(){
           <div class="bold">${title}</div>
           <div class="muted small">${it.room_id} • ${when}</div>
         </div>
-        <button class="btn" data-room="${it.room_id}">Войти</button>
+        <div style="display:flex; gap:8px;">
+          <button class="btn" data-room="${it.room_id}">Войти</button>
+          <button class="btn ghost danger" data-del="${it.room_id}" title="Удалить из истории">Удалить</button>
+        </div>
       `;
-      const btn = div.querySelector('button');
-      btn.addEventListener('click', ()=>{
+      const btnJoin = div.querySelector('button[data-room]');
+      btnJoin.addEventListener('click', ()=>{
         els.roomId.value = it.room_id;
         unlockAudioPlayback();
         connect();
+      });
+      const btnDel = div.querySelector('button[data-del]');
+      btnDel.addEventListener('click', async ()=>{
+        try{
+          const resp = await fetch(`/api/v1/rooms/visited/${encodeURIComponent(it.room_id)}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${rawToken}` }
+          });
+          if (resp.ok){
+            div.remove();
+            if (!els.visitedRooms.children.length){
+              els.visitedRooms.innerHTML = '<div class="muted">История пуста</div>';
+            }
+          }
+        }catch{}
       });
       els.visitedRooms.appendChild(div);
     }

@@ -65,6 +65,17 @@ async def list_visited_rooms(
     return out
 
 
+@router.delete("/visited/{room_id}")
+async def delete_visited_room(
+    room_id: UUID,
+    participants: ParticipantRepository = Depends(get_participant_repo),
+    current_user=Depends(get_current_user),
+):  # type: ignore[override]
+    # Удаляем все записи участника в этой комнате (очистка истории по комнате)
+    await participants.remove(room_id, UUID(str(current_user.id)))
+    return {"status": "ok"}
+
+
 @router.get("/{room_id}", response_model=RoomDTO)
 async def get_room(
     room_id: UUID,

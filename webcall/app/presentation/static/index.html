@@ -25,12 +25,8 @@
         <div class="card">
           <h2>Комната</h2>
           <div class="form-grid">
-            <label class="row">
-              <span>ID комнаты</span>
-              <input type="text" id="roomId" placeholder="ID комнаты" />
-            </label>
-            <!-- Только до входа -->
-            <div id="preJoinControls" class="controls-grid" style="grid-column:1/-1;">
+            <div class="row" style="grid-column:1/-1; align-items:stretch; gap:8px;">
+              <input type="text" id="roomId" placeholder="ID комнаты" style="flex:1;" />
               <button id="btnConnect" class="btn primary">Войти</button>
             </div>
             <!-- Во время звонка -->
@@ -38,38 +34,36 @@
               <button id="btnLeave" class="btn danger">Выйти</button>
               <button id="btnCopyLink" class="btn">Копия ссылки</button>
               <button id="btnToggleMic" class="btn">Выкл.микро</button>
-              <button id="btnToggleCam" class="btn">Вкл.камеру</button>
               <button id="btnDiag" class="btn ghost">Диагностика</button>
             </div>
           </div>
         </div>
 
-        <!-- ВИЗИТЫ: показываем до входа -->
+        <!-- Правый столбец: до входа — История; в звонке — Статус -->
         <div class="card" id="visitedCard">
           <h2>Ваши комнаты</h2>
           <div id="visitedRooms" class="list"></div>
+        </div>
+        <div class="card" id="statusCard" style="display:none;">
+          <h2>Статус</h2>
+          <div id="connStatus"></div>
+          <div class="form-grid" style="margin-top: .5rem; gap: .5rem 1rem;">
+            <label class="row">
+              <span>Микрофон</span>
+              <select id="micSel" class="sel" title="Микрофон"></select>
+            </label>
+            <label class="row">
+              <span>Динамики</span>
+              <select id="spkSel" class="sel" title="Динамики"></select>
+            </label>
+          </div>
+          <div id="stats" class="logs"></div>
         </div>
       </section>
 
       <!-- Блок, который виден только в звонке -->
       <section id="inCallSection" style="display:none;" class="app-in-call">
         <section class="panel grid-2">
-          <div class="card">
-            <h2>Статус</h2>
-            <div id="connStatus"></div>
-            <div class="form-grid" style="margin-top: .5rem; gap: .5rem 1rem;">
-              <label class="row">
-                <span>Микрофон</span>
-                <select id="micSel" class="sel" title="Микрофон"></select>
-              </label>
-              <label class="row">
-                <span>Динамики</span>
-                <select id="spkSel" class="sel" title="Динамики"></select>
-              </label>
-            </div>
-            <div id="stats" class="logs"></div>
-          </div>
-
           <div class="card video-card" id="localCard" style="display:none">
             <h2>Вы</h2>
             <div class="video-wrap">
