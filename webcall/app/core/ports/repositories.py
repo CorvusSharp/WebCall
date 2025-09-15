@@ -122,6 +122,16 @@ class FriendshipRepository(ABC):
     async def update(self, f: Friendship) -> None:
         raise NotImplementedError
 
+    @abstractmethod
+    async def remove(self, user_a: UUID, user_b: UUID) -> None:
+        """Удалить дружбу (неупорядоченную пару пользователей), если существует.
+
+        Пара (user_a,user_b) трактуется как неупорядоченная: реализация должна
+        привести её к детерминированному порядку перед удалением.
+        Отсутствие записи не считается ошибкой.
+        """
+        raise NotImplementedError
+
 
 class PushSubscriptionRepository(ABC):
     @abstractmethod

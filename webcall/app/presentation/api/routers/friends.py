@@ -17,6 +17,7 @@ from ...ws.friends import (
     publish_friend_request,
     publish_friend_accepted,
     publish_friend_cancelled,
+    publish_friend_removed,
 )
 
 
@@ -150,6 +151,24 @@ async def cancel_request(friend_id: UUID, current=Depends(get_current_user), rep
     await repo.update(f)
     try:
         await publish_friend_cancelled(current.id, friend_id)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@router.delete("/{friend_id}")
+async def delete_friend(friend_id: UUID, current=Depends(get_current_user), repo: FriendshipRepository = Depends(get_friend_repo)):
+    """Удалить дружбу (обоюдно). Если дружбы нет — 404.
+
+    Возвращает {ok:true}. Паблишит WS событие friend_removed обеим сторонам.
+    """
+    f = await repo.get_pair(current.id, friend_id)
+    if not f or f.status != FriendStatus.accepted:
+        raise HTTPException(status_code=404, detail="Friendship not found")
+    # Удаляем
+    await repo.remove(current.id, friend_id)
+    try:
+        await publish_friend_removed(current.id, friend_id)
     except Exception:
         pass
     return {"ok": True}

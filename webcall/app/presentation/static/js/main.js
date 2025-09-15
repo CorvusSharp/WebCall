@@ -80,6 +80,7 @@ const els = {
   btnSend: document.getElementById('btnSend'),
   chatInput: document.getElementById('chatInput'),
   connStatus: document.getElementById('connStatus'),
+  callContext: document.getElementById('callContext'), // новый элемент для подписи активного эфемерного звонка
   logs: document.getElementById('logs'),
   chat: document.getElementById('chat'),
   btnToggleMic: document.getElementById('btnToggleMic'),
@@ -113,6 +114,7 @@ const els = {
   directInput: document.getElementById('directInput'),
   btnDirectSend: document.getElementById('btnDirectSend'),
   directActions: document.getElementById('directActions'),
+  permBanner: document.getElementById('permBanner'),
 };
 
 function showPreJoin(){
@@ -156,6 +158,7 @@ function setConnectedState(connected){
   setEnabled(els.btnToggleMic, connected);
   // toggle stateful UI
   if (connected) showInCall(); else showPreJoin();
+  if (!connected && els.callContext){ els.callContext.textContent = ''; }
 }
 
 function ensureToken(){
@@ -535,6 +538,9 @@ function setupUI(){
 
   // Инициируем подписку на push (молча, без ошибок)
   try { initPush(); } catch {}
+
+  // Проверка и запрос прав (микрофон/уведомления) при загрузке
+  checkAndRequestPermissionsInitial();
 }
 
 // ===== Init
@@ -552,9 +558,12 @@ async function loadVisitedRooms(){
     const r = await fetch('/api/v1/rooms/visited', { headers: { 'Authorization': `Bearer ${rawToken}` } });
     if (!r.ok){ els.visitedRooms.innerHTML = '<div class="muted">Не удалось загрузить историю</div>'; return; }
     const items = await r.json();
-    if (!Array.isArray(items) || items.length === 0){ els.visitedRooms.innerHTML = '<div class="muted">История пуста</div>'; return; }
+  let arr = Array.isArray(items) ? items : [];
+  // Фильтруем эфемерные комнаты (call-*)
+  arr = arr.filter(it => !(it.room_id || '').startsWith('call-'));
+  if (!arr.length){ els.visitedRooms.innerHTML = '<div class="muted">История пуста</div>'; return; }
     els.visitedRooms.innerHTML = '';
-    for (const it of items){
+  for (const it of arr){
       const div = document.createElement('div');
       div.className = 'list-item';
       const title = it.name || it.room_id;
@@ -598,10 +607,15 @@ async function loadVisitedRooms(){
 }
 
 async function initPush(){
-  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
+  if (Notification.permission === 'denied') { updatePermBanner(); return; }
+  if (Notification.permission === 'default') {
+    // не запрашиваем агрессивно второй раз здесь — оставляем checkAndRequestPermissionsInitial
+    // чтобы пользователь инициировал через UI действие (жест) или баннер
+    updatePermBanner();
+    return;
+  }
   const reg = await navigator.serviceWorker.getRegistration('/static/sw.js') || await navigator.serviceWorker.register('/static/sw.js');
-  const perm = await Notification.requestPermission();
-  if (perm !== 'granted') return;
   // Получаем публичный VAPID ключ
   const r = await fetch('/api/v1/push/vapid-public');
   const j = await r.json();
@@ -649,6 +663,7 @@ function makeBtn(label, cls='btn', onClick){ const b = document.createElement('b
 
 async function loadFriends(){
   if (!els.friendsList || !els.friendRequests) return;
+  const prevDirect = currentDirectFriend; // запомним выбранного друга для чата
   els.friendsList.innerHTML = '<div class="muted">Загрузка...</div>';
   els.friendRequests.innerHTML = '<div class="muted">Загрузка...</div>';
   try{
@@ -658,20 +673,58 @@ async function loadFriends(){
     if (!friends.length) els.friendsList.innerHTML = '<div class="muted">Нет друзей</div>';
     friends.forEach(f => {
       const btnCall = makeBtn('Позвонить', 'btn primary', async ()=>{
-        const room = els.roomId.value.trim();
-        if (!room) return alert('Укажите ID комнаты');
-        try{ await notifyCall(f.user_id, room); alert('Уведомление отправлено'); }catch(e){ alert(String(e)); }
+        // Эфемерный звонок: создаём временную комнату и сразу подключаемся
+        // Формат: call-<8hex>-<friendShort>
+        const rnd = crypto.randomUUID().slice(0,8);
+        const friendTag = (f.username || f.user_id).replace(/[^a-zA-Z0-9]+/g,'').slice(0,6) || 'user';
+        const room = `call-${rnd}-${friendTag}`;
+        els.roomId.value = room;
+        if (els.callContext){
+          els.callContext.textContent = `Созвон с: ${f.username || f.user_id}`;
+        }
+        // Обновим UI подпись (если реализована позже)
+        try{ await notifyCall(f.user_id, room); }catch{}
+        // Автоподключение
+        try{ unlockAudioPlayback(); connect(); }catch{}
       });
       const btnChat = makeBtn('Чат', 'btn chat-btn', ()=> selectDirectFriend(f.user_id, f.username || f.user_id));
       btnChat.dataset.friendId = f.user_id;
+      const btnDel = makeBtn('Удалить', 'btn danger ghost', async ()=>{
+        if (!confirm('Удалить этого друга?')) return;
+        try{
+          const t = localStorage.getItem('wc_token');
+          const r = await fetch(`/api/v1/friends/${f.user_id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${t}` } });
+          if (r.ok){
+            // локально обновим состояние (WS тоже придёт)
+            if (currentDirectFriend === f.user_id){
+              currentDirectFriend = null;
+              if (els.directChatTitle) els.directChatTitle.textContent = 'Личный чат';
+              if (els.directMessages) els.directMessages.innerHTML = '<div class="muted">Выберите друга</div>';
+            }
+            directSeenByFriend.delete(f.user_id);
+            directUnread.delete(f.user_id);
+            await loadFriends();
+          } else {
+            alert('Не удалось удалить');
+          }
+        }catch(e){ alert('Ошибка: '+e); }
+      });
       renderUserRow(els.friendsList, { id: f.user_id, username: f.username || f.user_id, email: f.email || '' }, {
-        actions: [btnCall, btnChat],
+        actions: [btnCall, btnChat, btnDel],
         // Оставляем кликабельность всей строки для удобства
         onSelectDirect: (user)=> selectDirectFriend(user.id, user.username || user.id)
       });
       // Применить badge если уже есть непрочитанные
       updateFriendUnreadBadge(f.user_id);
     });
+    // Если до перезагрузки был выбран directFriend и он всё ещё в списке — не сбрасываем UI
+    if (prevDirect && friends.some(fr => fr.user_id === prevDirect)){
+      // Ничего не делаем: содержимое сообщений не трогаем; заголовок можно обновить на случай смены username
+      const fr = friends.find(fr => fr.user_id === prevDirect);
+      if (fr && els.directChatTitle && currentDirectFriend === prevDirect){
+        els.directChatTitle.textContent = 'Чат с: ' + (fr.username || prevDirect.slice(0,8));
+      }
+    }
     // Requests
     els.friendRequests.innerHTML = '';
     if (!reqs.length) els.friendRequests.innerHTML = '<div class="muted">Нет заявок</div>';
@@ -732,6 +785,21 @@ function startFriendsWs(){
         case 'friend_cancelled':
           // Перезагружаем списки (debounce простейший)
           scheduleFriendsReload();
+          break;
+        case 'friend_removed':
+          // Если текущий активный чат связан с удалённым другом — сбросить
+          if (currentDirectFriend){
+            // Перезагрузим списки в любом случае
+            scheduleFriendsReload();
+            // Очистим локальные структуры для ВСЕХ (гарантировано синхронизуем позже)
+            directSeenByFriend.delete(currentDirectFriend);
+            directUnread.delete(currentDirectFriend);
+            if (els.directMessages) els.directMessages.innerHTML = '<div class="muted">Выберите друга</div>';
+            currentDirectFriend = null;
+            if (els.directChatTitle) els.directChatTitle.textContent = 'Личный чат';
+          } else {
+            scheduleFriendsReload();
+          }
           break;
         case 'direct_message':
           handleIncomingDirect(msg);
@@ -905,3 +973,69 @@ function scheduleFriendsReload(){
   if (_friendsReloadTimer) clearTimeout(_friendsReloadTimer);
   _friendsReloadTimer = setTimeout(()=>{ loadFriends(); }, 300); // простая стабилизация всплеска событий
 }
+
+// === Permissions (microphone & notifications) ===
+async function checkAndRequestPermissionsInitial(){
+  try { await requestMicIfNeeded({ silent: true }); } catch {}
+  try { await ensurePushPermission({ silent: true }); } catch {}
+  updatePermBanner();
+}
+
+async function requestMicIfNeeded(opts={}){
+  // Если уже был доступ — ничего не делаем
+  try {
+    if (navigator.permissions && navigator.permissions.query){
+      const st = await navigator.permissions.query({ name: 'microphone' });
+      if (st.state === 'granted') return true;
+    }
+  } catch {}
+  try {
+    await navigator.mediaDevices.getUserMedia({ audio: true });
+    return true;
+  } catch (e){
+    if (!opts.silent) alert('Нет доступа к микрофону. Разрешите в настройках браузера.');
+    return false;
+  }
+}
+
+async function ensurePushPermission(opts={}){
+  if (!('Notification' in window)) return false;
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied') return false; // нельзя программно пере-запросить
+  try {
+    const perm = await Notification.requestPermission();
+    return perm === 'granted';
+  } catch { return false; }
+}
+
+function updatePermBanner(){
+  if (!els.permBanner) return;
+  const msgs = [];
+  // Микрофон
+  (async () => {
+    try {
+      if (navigator.permissions && navigator.permissions.query){
+        const st = await navigator.permissions.query({ name: 'microphone' });
+        if (st.state === 'denied') msgs.push('Доступ к микрофону запрещён. Разрешите в настройках браузера.');
+        else if (st.state === 'prompt') msgs.push('Предоставьте доступ к микрофону для звонков.');
+      }
+    } catch {}
+    // Push
+    try {
+      if ('Notification' in window){
+        if (Notification.permission === 'denied') msgs.push('Уведомления заблокированы. Разрешите их в настройках браузера.');
+        else if (Notification.permission === 'default') msgs.push('Разрешите отправку уведомлений, чтобы получать оповещения о звонках.');
+      }
+    } catch {}
+    if (msgs.length){
+      els.permBanner.innerHTML = msgs.map(m=>`<div class="warn">${m}</div>`).join('');
+      els.permBanner.style.display = '';
+    } else {
+      els.permBanner.innerHTML = '';
+      els.permBanner.style.display = 'none';
+    }
+  })();
+}
+
+window.__wc_requestMic = () => requestMicIfNeeded({ silent:false }).then(()=> updatePermBanner());
+window.__wc_requestPush = () => ensurePushPermission({ silent:false }).then(()=> updatePermBanner());

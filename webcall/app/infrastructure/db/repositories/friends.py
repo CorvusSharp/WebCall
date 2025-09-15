@@ -4,6 +4,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from sqlalchemy import and_, or_, select, update
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ....core.domain.models import Friendship, FriendStatus
@@ -60,5 +61,12 @@ class PgFriendshipRepository(FriendshipRepository):
             update(Friendships)
             .where(Friendships.id == f.id)
             .values(status=f.status.value, requested_by=f.requested_by, updated_at=f.updated_at)
+        )
+        await self.session.commit()
+
+    async def remove(self, user_a: UUID, user_b: UUID) -> None:  # type: ignore[override]
+        ua, ub = _order_pair(user_a, user_b)
+        await self.session.execute(
+            delete(Friendships).where(and_(Friendships.user_a_id == ua, Friendships.user_b_id == ub))
         )
         await self.session.commit()

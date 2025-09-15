@@ -68,6 +68,31 @@ body::before{
 #fx-web-canvas{z-index:0;}
 body,html{background-attachment:fixed}
 
+/* ======= PERMISSIONS BANNER ======= */
+#permBanner{display:none;margin-bottom:12px;display:none}
+#permBanner .warn{
+  background:rgba(255,176,0,0.10);
+  border:1px solid color-mix(in srgb, var(--warning) 60%, transparent);
+  padding:8px 12px;
+  border-radius:10px;
+  font-size:13px;
+  line-height:1.35;
+  display:flex;
+  gap:6px;
+  align-items:flex-start;
+  position:relative;
+}
+#permBanner .warn::before{
+  content:"!";
+  font-weight:600;
+  color:var(--warning);
+  width:18px;height:18px;
+  display:inline-flex;align-items:center;justify-content:center;
+  background:rgba(255,176,0,0.15);
+  border-radius:6px;
+  font-size:12px;
+}
+
 /* Адаптация для prefers-reduced-motion */
 @media (prefers-reduced-motion: reduce){
   *{animation:none !important; transition:none !important}
@@ -200,18 +225,21 @@ input:active{ transform: scale(.995) }
 .btn.danger{ background: linear-gradient(100deg, var(--danger), #dc2626); border-color:transparent }
 
 /* Chat unread badge (используем ::before, чтобы не конфликтовать с .btn::after подсветкой) */
+.btn.chat-btn.has-unread{
+  /* Чуть увеличим правый верхний отступ, чтобы кружок не накладывался на текст */
+  padding-right: 16px;
+  padding-top: 14px;
+}
 .btn.chat-btn.has-unread::before{
   content: "";
   position: absolute;
-  top: 4px; right: 6px;
-  width: 10px; height: 10px;
+  top: 2px; right: 2px; /* В самый угол */
+  width: 12px; height: 12px;
   background: var(--danger);
   border-radius: 50%;
-  box-shadow: 0 0 0 3px rgba(0,0,0,.35), 0 0 8px rgba(239,68,68,.7);
-  /* Сбрасываем возможные наследованные свойства от базового ::after */
-  inset: auto;
-  transform: none;
+  box-shadow: 0 0 0 2px var(--bg), 0 0 6px rgba(239,68,68,.8);
   pointer-events: none;
+  /* Если захотим показывать число: заменить content: attr(data-unread); и добавить стили ниже */
 }
 
 /* XS вариант, если понадобится */

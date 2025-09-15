@@ -9,6 +9,7 @@ from __future__ import annotations
  - {"type":"friend_request","fromUserId":str, "username":str|null}
  - {"type":"friend_accepted","userId":str, "username":str|null}
  - {"type":"friend_cancelled","userId":str}
+ - {"type":"friend_removed","userId":str}  # дружба удалена (обоим рассылается)
  - {"type":"direct_message","fromUserId":str,"toUserId":str,"content":str,"messageId":str,"sentAt":iso8601}
 
 Авторизация: query param token=<JWT> (аналогично rooms WS). Если token отсутствует и среда не dev/test — 4401.
@@ -136,6 +137,17 @@ async def publish_friend_cancelled(requester: UUID, other: UUID):
     await broadcast_users({requester, other}, {
         'type': 'friend_cancelled',
         'userId': str(other),
+    })
+
+
+async def publish_friend_removed(user_a: UUID, user_b: UUID):
+    """Оповестить обе стороны что дружба удалена.
+
+    Клиент при получении события просто перезагружает списки друзей/заявок.
+    """
+    await broadcast_users({user_a, user_b}, {
+        'type': 'friend_removed',
+        'userId': str(user_a),  # поле userId не критично; фронт всё равно делает reload
     })
 
 
