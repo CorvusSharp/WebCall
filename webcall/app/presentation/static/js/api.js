@@ -104,6 +104,24 @@ export async function notifyCall(toUserId, roomId){
   return await r.json();
 }
 
+export async function acceptCall(otherUserId, roomId){
+  const r = await fetch(`${base}/api/v1/push/call/accept`, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ other_user_id: otherUserId, room_id: roomId })
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+
+export async function declineCall(otherUserId, roomId){
+  const r = await fetch(`${base}/api/v1/push/call/decline`, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ other_user_id: otherUserId, room_id: roomId })
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+
 export async function findUsers(q){
   const r = await fetch(`${base}/api/v1/users/find?` + new URLSearchParams({ q }), { headers: { ...authHeaders() } });
   if (!r.ok) throw new Error(await r.text());

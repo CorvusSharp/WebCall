@@ -14,6 +14,7 @@ from ....infrastructure.db.repositories.push_subs import PgPushSubscriptionRepos
 from ....infrastructure.db.repositories.users import PgUserRepository
 from ....infrastructure.services.webpush import WebPushSender, WebPushMessage
 from ....infrastructure.config import get_settings
+from ...ws.friends import publish_call_invite, publish_call_accept, publish_call_decline
 
 
 router = APIRouter(prefix="/api/v1/push", tags=["push"])
@@ -58,6 +59,11 @@ async def get_vapid_public():
 class CallNotifyIn(BaseModel):
     to_user_id: UUID
     # Принимаем строковый room_id, чтобы поддерживать простые идентификаторы (например, "3")
+    room_id: str
+
+
+class CallActionIn(BaseModel):
+    other_user_id: UUID
     room_id: str
 
 
@@ -108,4 +114,28 @@ async def notify_call(body: CallNotifyIn, background: BackgroundTasks, current=D
         raise HTTPException(status_code=503, detail="Push not configured: VAPID keys missing")
     # отправим в фоне
     background.add_task(_send_pushes, current, body, users, repo)
-    return {"ok": True, "scheduled": True}
+    # Параллельно публикуем WS событие приглашения в звонок (эфемерная комната)
+    try:
+        await publish_call_invite(current.id, body.to_user_id, body.room_id)
+    except Exception:
+        pass
+    return {"ok": True, "scheduled": True, "room_id": body.room_id}
+
+
+@router.post("/call/accept")
+async def accept_call(body: CallActionIn, current=Depends(get_current_user)):
+    # Публикуем событие принятия; клиент инициирует соединение в room_id
+    try:
+        await publish_call_accept(current.id, body.other_user_id, body.room_id)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@router.post("/call/decline")
+async def decline_call(body: CallActionIn, current=Depends(get_current_user)):
+    try:
+        await publish_call_decline(current.id, body.other_user_id, body.room_id)
+    except Exception:
+        pass
+    return {"ok": True}

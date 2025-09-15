@@ -11,6 +11,9 @@ from __future__ import annotations
  - {"type":"friend_cancelled","userId":str}
  - {"type":"friend_removed","userId":str}  # дружба удалена (обоим рассылается)
  - {"type":"direct_message","fromUserId":str,"toUserId":str,"content":str,"messageId":str,"sentAt":iso8601}
+ - {"type":"call_invite","fromUserId":str,"toUserId":str,"roomId":str}
+ - {"type":"call_accept","fromUserId":str,"toUserId":str,"roomId":str}
+ - {"type":"call_decline","fromUserId":str,"toUserId":str,"roomId":str}
 
 Авторизация: query param token=<JWT> (аналогично rooms WS). Если token отсутствует и среда не dev/test — 4401.
 """
@@ -170,3 +173,32 @@ async def publish_direct_cleared(user_a: UUID, user_b: UUID):
         'userIds': [str(user_a), str(user_b)],
     }
     await broadcast_users({user_a, user_b}, payload)
+
+
+# === Звонки (эфемерные комнаты) ===
+
+async def publish_call_invite(from_user: UUID, to_user: UUID, room_id: str):
+    await broadcast_users({from_user, to_user}, {
+        'type': 'call_invite',
+        'fromUserId': str(from_user),
+        'toUserId': str(to_user),
+        'roomId': room_id,
+    })
+
+
+async def publish_call_accept(from_user: UUID, to_user: UUID, room_id: str):
+    await broadcast_users({from_user, to_user}, {
+        'type': 'call_accept',
+        'fromUserId': str(from_user),
+        'toUserId': str(to_user),
+        'roomId': room_id,
+    })
+
+
+async def publish_call_decline(from_user: UUID, to_user: UUID, room_id: str):
+    await broadcast_users({from_user, to_user}, {
+        'type': 'call_decline',
+        'fromUserId': str(from_user),
+        'toUserId': str(to_user),
+        'roomId': room_id,
+    })

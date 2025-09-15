@@ -1,5 +1,5 @@
 // main.js — вход (исправлено: логируем адрес WS, кнопка диагностики, стабильные presence/инициация)
-import { buildWs, subscribePush, findUsers, listFriends, listFriendRequests, sendFriendRequest, acceptFriend, notifyCall } from './api.js?v=2';
+import { buildWs, subscribePush, findUsers, listFriends, listFriendRequests, sendFriendRequest, acceptFriend, notifyCall, acceptCall, declineCall } from './api.js?v=2';
 
 // ===== RUNTIME AUTH GUARD =====
 // Если пользователь не авторизован (нет валидного JWT в localStorage) —
@@ -57,6 +57,52 @@ let currentDirectFriend = null; // UUID друга выбранного в ли�
 const directSeenByFriend = new Map();
 // Количество непрочитанных per друг
 const directUnread = new Map();
+
+// ===== Call state (эфемерные звонки) =====
+// activeCall: { roomId, withUserId, direction: 'outgoing'|'incoming', status: 'invited'|'accepted'|'declined'|'ended' }
+let activeCall = null;
+// pendingIncomingInvites: Map<fromUserId, { roomId, username }>
+const pendingIncomingInvites = new Map();
+
+function resetActiveCall(reason){
+  if (activeCall){
+    // Попытаемся восстановить подпись
+    if (els.callContext) els.callContext.textContent = '';
+  }
+  activeCall = null;
+  // Перерисовать друзей (вернёт кнопку Позвонить)
+  try { loadFriends(); } catch {}
+}
+
+function setActiveOutgoingCall(friend, roomId){
+  activeCall = { roomId, withUserId: friend.user_id, direction: 'outgoing', status: 'invited' };
+  if (els.callContext) els.callContext.textContent = `Исходящий звонок: ${friend.username || friend.user_id}`;
+  // обновим список друзей чтобы скрыть кнопку Позвонить и показать статус
+  loadFriends();
+}
+
+function setActiveIncomingCall(fromUserId, username, roomId){
+  activeCall = { roomId, withUserId: fromUserId, direction: 'incoming', status: 'invited' };
+  if (els.callContext) els.callContext.textContent = `Входящий звонок от: ${username || fromUserId}`;
+  pendingIncomingInvites.set(fromUserId, { roomId, username });
+  loadFriends();
+}
+
+function markCallAccepted(roomId){
+  if (activeCall && activeCall.roomId === roomId){
+    activeCall.status = 'accepted';
+    if (els.callContext) els.callContext.textContent = `Звонок с: ${activeCall.withUserId}`;
+  }
+  loadFriends();
+}
+
+function markCallDeclined(roomId){
+  if (activeCall && activeCall.roomId === roomId){
+    activeCall.status = 'declined';
+    setTimeout(()=> resetActiveCall('declined'), 1500);
+  }
+  loadFriends();
+}
 
 function updateFriendUnreadBadge(friendId){
   // Находим кнопку чата по data-friend-id
@@ -672,24 +718,74 @@ async function loadFriends(){
     els.friendsList.innerHTML = '';
     if (!friends.length) els.friendsList.innerHTML = '<div class="muted">Нет друзей</div>';
     friends.forEach(f => {
-      const btnCall = makeBtn('Позвонить', 'btn primary', async ()=>{
-        // Эфемерный звонок: создаём временную комнату и сразу подключаемся
-        // Формат: call-<8hex>-<friendShort>
-        const rnd = crypto.randomUUID().slice(0,8);
-        const friendTag = (f.username || f.user_id).replace(/[^a-zA-Z0-9]+/g,'').slice(0,6) || 'user';
-        const room = `call-${rnd}-${friendTag}`;
-        els.roomId.value = room;
-        if (els.callContext){
-          els.callContext.textContent = `Созвон с: ${f.username || f.user_id}`;
+      const callControls = [];
+      const isActiveWith = activeCall && activeCall.withUserId === f.user_id && activeCall.status !== 'ended';
+      if (!isActiveWith){
+        // Обычная кнопка Позвонить
+        const btnCall = makeBtn('Позвонить', 'btn primary', async (event)=>{
+          event?.stopPropagation?.();
+          if (activeCall) return; // уже есть звонок
+          const rnd = crypto.randomUUID().slice(0,8);
+          const friendTag = (f.username || f.user_id).replace(/[^a-zA-Z0-9]+/g,'').slice(0,6) || 'user';
+          const room = `call-${rnd}-${friendTag}`;
+          els.roomId.value = room;
+          try{ await notifyCall(f.user_id, room); }catch{}
+          setActiveOutgoingCall(f, room);
+          // Автоподключение
+          try{ unlockAudioPlayback(); connect(); }catch{}
+        });
+        callControls.push(btnCall);
+      } else {
+        // Есть активный или входящий/исходящий звонок с этим пользователем
+        if (activeCall.direction === 'incoming' && activeCall.status === 'invited'){
+          // Показать Принять / Отклонить
+            const btnAccept = makeBtn('Принять', 'btn success', async (ev)=>{
+              ev?.stopPropagation?.();
+              const info = pendingIncomingInvites.get(f.user_id);
+              if (!info) return;
+              try{
+                await acceptCall(f.user_id, info.roomId);
+                // join room
+                els.roomId.value = info.roomId;
+                try{ unlockAudioPlayback(); connect(); }catch{}
+                markCallAccepted(info.roomId);
+              }catch(e){ console.error(e); }
+            });
+            const btnDecline = makeBtn('Отклонить', 'btn danger ghost', async (ev)=>{
+              ev?.stopPropagation?.();
+              const info = pendingIncomingInvites.get(f.user_id);
+              if (!info) return;
+              try{ await declineCall(f.user_id, info.roomId); }catch{}
+              pendingIncomingInvites.delete(f.user_id);
+              markCallDeclined(info.roomId);
+            });
+            callControls.push(btnAccept, btnDecline);
+        } else if (activeCall.direction === 'outgoing' && activeCall.status === 'invited'){
+          const span = document.createElement('span');
+          span.className = 'muted small';
+          span.textContent = 'Ожидание...';
+          callControls.push(span);
+          const btnCancel = makeBtn('Отменить', 'btn ghost', (ev)=>{ ev?.stopPropagation?.(); resetActiveCall('cancel'); });
+          callControls.push(btnCancel);
+        } else if (activeCall.status === 'accepted'){
+          const span = document.createElement('span');
+          span.className = 'muted small';
+          span.textContent = 'В звонке';
+          callControls.push(span);
+          const btnEnd = makeBtn('Завершить', 'btn danger ghost', (ev)=>{ ev?.stopPropagation?.(); resetActiveCall('end'); });
+          callControls.push(btnEnd);
+        } else if (activeCall.status === 'declined'){
+          const span = document.createElement('span');
+          span.className = 'muted small';
+          span.textContent = 'Отклонён';
+          callControls.push(span);
         }
-        // Обновим UI подпись (если реализована позже)
-        try{ await notifyCall(f.user_id, room); }catch{}
-        // Автоподключение
-        try{ unlockAudioPlayback(); connect(); }catch{}
-      });
+      }
       const btnChat = makeBtn('Чат', 'btn chat-btn', ()=> selectDirectFriend(f.user_id, f.username || f.user_id));
+  btnChat.addEventListener('click', e=> e.stopPropagation(), { capture: true });
       btnChat.dataset.friendId = f.user_id;
       const btnDel = makeBtn('Удалить', 'btn danger ghost', async ()=>{
+        event?.stopPropagation?.();
         if (!confirm('Удалить этого друга?')) return;
         try{
           const t = localStorage.getItem('wc_token');
@@ -710,7 +806,7 @@ async function loadFriends(){
         }catch(e){ alert('Ошибка: '+e); }
       });
       renderUserRow(els.friendsList, { id: f.user_id, username: f.username || f.user_id, email: f.email || '' }, {
-        actions: [btnCall, btnChat, btnDel],
+        actions: [...callControls, btnChat, btnDel],
         // Оставляем кликабельность всей строки для удобства
         onSelectDirect: (user)=> selectDirectFriend(user.id, user.username || user.id)
       });
@@ -807,6 +903,25 @@ function startFriendsWs(){
         case 'direct_cleared':
           handleDirectCleared(msg);
           break;
+        case 'call_invite': {
+          // пришло приглашение: если у нас нет активного, выставляем incoming
+          if (!activeCall){
+            setActiveIncomingCall(msg.fromUserId, msg.fromUsername, msg.roomId);
+          } else {
+            // Уже в звонке/ожидании: авто-отклоняем (не отправляя decline) или игнорируем
+          }
+          break; }
+        case 'call_accept': {
+          // наш собеседник принял: если это наш исходящий звонок — статус accepted и если мы ещё не подключены к этой комнате, уже подключены
+          if (activeCall && activeCall.roomId === msg.roomId){
+            markCallAccepted(msg.roomId);
+          }
+          break; }
+        case 'call_decline': {
+          if (activeCall && activeCall.roomId === msg.roomId){
+            markCallDeclined(msg.roomId);
+          }
+          break; }
         default:
           break;
       }
@@ -821,11 +936,20 @@ function startFriendsWs(){
 }
 
 async function selectDirectFriend(friendId, label){
+  // NOTE: Раньше при каждом клике мы заново загружали историю и затирали уже отображённые
+  // сообщения, из-за чего чат визуально «пропадал» (особенно если в списке друзей происходила
+  // перерисовка). Флаг already предотвращает повторную перезагрузку при выборе того же друга.
+  const already = currentDirectFriend === friendId;
   currentDirectFriend = friendId;
   if (els.directChatCard) els.directChatCard.style.display = '';
   if (els.directChatTitle) els.directChatTitle.textContent = 'Чат с: ' + (label || friendId.slice(0,8));
   ensureDirectActions();
-  // Сбрасываем непрочитанные
+  // Если уже открыт этот чат — ничего не перезагружаем
+  if (already) {
+    if (directUnread.has(friendId)) { directUnread.delete(friendId); updateFriendUnreadBadge(friendId); }
+    return;
+  }
+  // Сбрасываем непрочитанные при первом открытии после выбора
   if (directUnread.has(friendId)) { directUnread.delete(friendId); updateFriendUnreadBadge(friendId); }
   if (els.directMessages) els.directMessages.innerHTML = '<div class="muted">Загрузка...</div>';
   try{
