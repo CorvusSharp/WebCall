@@ -674,18 +674,14 @@ function setupUI(){
   // Проверка и запрос прав (микрофон/уведомления) при загрузке
   checkAndRequestPermissionsInitial();
 
-  // Обновим локальные данные профиля (email/username) если не заполнены
+  // Гарантируем, что профиль загружен (wc_email/wc_username) ДО запуска канала друзей,
+  // чтобы обработчик call_invite уже имел e-mail и корректно запускал рингтон
   (async () => {
     try {
-      const t = localStorage.getItem('wc_token');
-      const hasEmail = !!localStorage.getItem('wc_email');
-      const hasName = !!localStorage.getItem('wc_username');
-      if (t && (!hasEmail || !hasName)){
-        const me = await getMe();
-        if (me?.email) localStorage.setItem('wc_email', me.email);
-        if (me?.username) localStorage.setItem('wc_username', me.username);
-      }
+      await ensureProfile();
     } catch {}
+    try { startFriendsWs(); } catch {}
+    try { await loadFriends(); } catch {}
   })();
 
   // SW → main: обработка кликов по уведомлению (открыть личный чат)
@@ -963,8 +959,7 @@ async function loadFriends(){
 
 function initFriendsUI(){
   if (!els.friendsCard) return;
-  // Запуск WS друзей один раз после авторизации
-  try { startFriendsWs(); } catch {}
+  // WS друзей запускается после ensureProfile() в setupUI
   els.btnFriendSearch?.addEventListener('click', async ()=>{
     const q = (els.friendSearch?.value || '').trim();
     if (!q) return;
@@ -983,7 +978,20 @@ function initFriendsUI(){
     }catch(e){ els.friendSearchResults.innerHTML = '<div class="muted">Ошибка поиска</div>'; }
   });
   // Инициализируем списки
-  loadFriends();
+  // Списки загружаем после ensureProfile() в setupUI
+}
+
+async function ensureProfile(){
+  try {
+    const t = localStorage.getItem('wc_token');
+    const hasEmail = !!localStorage.getItem('wc_email');
+    const hasName = !!localStorage.getItem('wc_username');
+    if (t && (!hasEmail || !hasName)){
+      const me = await getMe();
+      if (me?.email) localStorage.setItem('wc_email', me.email);
+      if (me?.username) localStorage.setItem('wc_username', me.username);
+    }
+  } catch {}
 }
 
 function startFriendsWs(){
