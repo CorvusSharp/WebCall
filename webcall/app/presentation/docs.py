@@ -10,5 +10,8 @@ def get_openapi_tags() -> List[dict]:
         {"name": "participants", "description": "Участники"},
         {"name": "messages", "description": "Сообщения"},
         {"name": "webrtc", "description": "WebRTC вспомогательные"},
+    {"name": "friends", "description": "Друзья"},
+    {"name": "push", "description": "Web Push уведомления"},
+    {"name": "users", "description": "Пользователи"},
         {"name": "health", "description": "Health checks"},
     ]

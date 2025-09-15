@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,3 +48,10 @@ class PgUserRepository(UserRepository):
             await self.session.rollback()
             # Переводим БД-ошибку в доменную 409
             raise ConflictError("User with same email or username already exists") from e
+
+    async def search(self, query: str, limit: int = 10) -> list[User]:  # type: ignore[override]
+        q = f"%{query.lower()}%"
+        stmt = select(Users).where(or_(Users.username.ilike(q), Users.email.ilike(q))).order_by(Users.username.asc()).limit(limit)
+        res = await self.session.execute(stmt)
+        rows = res.scalars().all()
+        return [User(id=r.id, email=Email(r.email), username=r.username, password_hash=PasswordHash(r.password_hash), created_at=r.created_at) for r in rows]

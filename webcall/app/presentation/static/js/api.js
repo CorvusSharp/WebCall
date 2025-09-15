@@ -49,3 +49,63 @@ export async function register(email, username, password, secret){
   if (!r.ok) throw new Error(await r.text());
   return await r.json();
 }
+
+function authHeaders(){
+  const t = localStorage.getItem('wc_token');
+  return t ? { Authorization: `Bearer ${t}` } : {};
+}
+
+// Friends
+export async function listFriends(){
+  const r = await fetch(`${base}/api/v1/friends/`, { headers: { ...authHeaders() } });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+
+export async function listFriendRequests(){
+  const r = await fetch(`${base}/api/v1/friends/requests`, { headers: { ...authHeaders() } });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+
+export async function sendFriendRequest(userId){
+  const r = await fetch(`${base}/api/v1/friends/request`, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ user_id: userId })
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+
+export async function acceptFriend(userId){
+  const r = await fetch(`${base}/api/v1/friends/${encodeURIComponent(userId)}/accept`, {
+    method: 'POST', headers: { ...authHeaders() }
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+
+// Push
+export async function subscribePush(subscription){
+  const r = await fetch(`${base}/api/v1/push/subscribe`, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(subscription)
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+
+export async function notifyCall(toUserId, roomId){
+  const r = await fetch(`${base}/api/v1/push/notify-call`, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ to_user_id: toUserId, room_id: roomId })
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+
+export async function findUsers(q){
+  const r = await fetch(`${base}/api/v1/users/find?` + new URLSearchParams({ q }), { headers: { ...authHeaders() } });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}

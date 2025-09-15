@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # Доп: пароль Postgres (может понадобиться для генерации URL или вспомогательных задач)
     POSTGRES_PASSWORD: str | None = None
 
+    # Web Push (VAPID)
+    VAPID_PUBLIC_KEY: str | None = None
+    VAPID_PRIVATE_KEY: str | None = None
+    VAPID_SUBJECT: str | None = None
+
 
 @lru_cache()
 def get_settings() -> Settings:

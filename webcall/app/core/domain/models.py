@@ -95,3 +95,48 @@ class Signal:
     def create(type: str, sender_id: UUID, room_id: UUID, sdp: Optional[str] = None, candidate: Optional[dict] = None, target_id: Optional[UUID] = None) -> "Signal":
         st = SignalType(type)
         return Signal(type=st, sender_id=sender_id, room_id=room_id, sent_at=datetime.utcnow(), sdp=sdp, candidate=candidate, target_id=target_id)
+
+
+class FriendStatus(str, Enum):
+    pending = "pending"
+    accepted = "accepted"
+    blocked = "blocked"
+
+
+@dataclass(slots=True)
+class Friendship:
+    """Undirected friendship with deterministic ordering of user ids.
+
+    user_a_id <= user_b_id lexicographically (as UUID string) to ensure uniqueness.
+    """
+    id: UUID
+    user_a_id: UUID
+    user_b_id: UUID
+    requested_by: UUID
+    status: FriendStatus
+    created_at: datetime
+    updated_at: datetime
+
+    @staticmethod
+    def pair(a: UUID, b: UUID, requested_by: UUID, status: FriendStatus = FriendStatus.pending) -> "Friendship":
+        a_s, b_s = str(a), str(b)
+        if a_s <= b_s:
+            ua, ub = a, b
+        else:
+            ua, ub = b, a
+        now = datetime.utcnow()
+        return Friendship(id=uuid4(), user_a_id=ua, user_b_id=ub, requested_by=requested_by, status=status, created_at=now, updated_at=now)
+
+
+@dataclass(slots=True)
+class PushSubscription:
+    id: UUID
+    user_id: UUID
+    endpoint: str
+    p256dh: str
+    auth: str
+    created_at: datetime
+
+    @staticmethod
+    def create(user_id: UUID, endpoint: str, p256dh: str, auth: str) -> "PushSubscription":
+        return PushSubscription(id=uuid4(), user_id=user_id, endpoint=endpoint, p256dh=p256dh, auth=auth, created_at=datetime.utcnow())

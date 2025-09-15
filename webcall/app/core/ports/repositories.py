@@ -5,7 +5,7 @@ from typing import Iterable, Optional
 from datetime import datetime
 from uuid import UUID
 
-from ..domain.models import Message, Participant, Room, User
+from ..domain.models import Message, Participant, Room, User, Friendship, FriendStatus, PushSubscription
 
 
 class UserRepository(ABC):
@@ -23,6 +23,11 @@ class UserRepository(ABC):
 
     @abstractmethod
     async def add(self, user: User) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def search(self, query: str, limit: int = 10) -> list[User]:
+        """Search users by username or email (case-insensitive)."""
         raise NotImplementedError
 
 
@@ -91,4 +96,42 @@ class MessageRepository(ABC):
 
     @abstractmethod
     async def list(self, room_id: UUID, skip: int = 0, limit: int = 50) -> list[Message]:
+        raise NotImplementedError
+
+
+class FriendshipRepository(ABC):
+    @abstractmethod
+    async def get_pair(self, user_a: UUID, user_b: UUID) -> Friendship | None:
+        """Return friendship record for an unordered pair of users."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def list_friends(self, user_id: UUID, status: FriendStatus = FriendStatus.accepted) -> list[Friendship]:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def list_requests(self, user_id: UUID) -> list[Friendship]:
+        """List incoming pending requests for user."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def add(self, f: Friendship) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def update(self, f: Friendship) -> None:
+        raise NotImplementedError
+
+
+class PushSubscriptionRepository(ABC):
+    @abstractmethod
+    async def add(self, sub: PushSubscription) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def remove(self, user_id: UUID, endpoint: str) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def list_by_user(self, user_id: UUID) -> list[PushSubscription]:
         raise NotImplementedError

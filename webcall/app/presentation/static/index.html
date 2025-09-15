@@ -44,6 +44,29 @@
           <h2>Ваши комнаты</h2>
           <div id="visitedRooms" class="list"></div>
         </div>
+        <div class="card" id="friendsCard">
+          <h2>Друзья</h2>
+          <div class="form-grid" style="margin-bottom:.5rem; gap:.5rem 1rem;">
+            <label class="row" style="grid-column:1/-1;">
+              <input type="text" id="friendSearch" placeholder="Поиск по username или email" />
+              <button class="btn" id="btnFriendSearch">Искать</button>
+            </label>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div>
+              <div class="muted small" style="margin-bottom:6px;">Друзья</div>
+              <div id="friendsList" class="list"></div>
+            </div>
+            <div>
+              <div class="muted small" style="margin-bottom:6px;">Заявки</div>
+              <div id="friendRequests" class="list"></div>
+            </div>
+          </div>
+          <div>
+            <div class="muted small" style="margin-top:10px; margin-bottom:6px;">Результаты поиска</div>
+            <div id="friendSearchResults" class="list"></div>
+          </div>
+        </div>
         <div class="card" id="statusCard" style="display:none;">
           <h2>Статус</h2>
           <div id="connStatus"></div>
@@ -116,5 +139,10 @@
 
   <script src="/static/js/fx_web.js" defer></script>
   <script type="module" src="/static/js/main.js?v=2"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/static/sw.js').catch(()=>{});
+    }
+  </script>
   </body>
 </html>

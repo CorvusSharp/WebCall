@@ -16,6 +16,9 @@ from ..presentation.api.routers import rooms as rooms_router
 from ..presentation.api.routers import participants as participants_router
 from ..presentation.api.routers import messages as messages_router
 from ..presentation.api.routers import webrtc as webrtc_router
+from ..presentation.api.routers import friends as friends_router
+from ..presentation.api.routers import push as push_router
+from ..presentation.api.routers import users as users_router
 from ..presentation.api.deps.containers import (
     get_user_repo,
     get_room_repo,
@@ -78,6 +81,9 @@ def create_app() -> FastAPI:
     app.include_router(participants_router.router)
     app.include_router(messages_router.router)
     app.include_router(webrtc_router.router)
+    app.include_router(friends_router.router)
+    app.include_router(push_router.router)
+    app.include_router(users_router.router)
 
     # WS
     app.include_router(ws_rooms.router)

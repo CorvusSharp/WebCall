@@ -9,6 +9,8 @@ from ....infrastructure.db.repositories.users import PgUserRepository
 from ....infrastructure.db.repositories.rooms import PgRoomRepository
 from ....infrastructure.db.repositories.participants import PgParticipantRepository
 from ....infrastructure.db.repositories.messages import PgMessageRepository
+from ....infrastructure.db.repositories.friends import PgFriendshipRepository
+from ....infrastructure.db.repositories.push_subs import PgPushSubscriptionRepository
 from ....infrastructure.security.password_hasher import BcryptPasswordHasher
 from ....infrastructure.security.jwt_provider import JoseTokenProvider
 from ....infrastructure.ice.provider import EnvIceConfigProvider
@@ -40,6 +42,14 @@ async def get_participant_repo(session: AsyncSession = Depends(get_db_session)):
 
 async def get_message_repo(session: AsyncSession = Depends(get_db_session)):
     return PgMessageRepository(session)
+
+
+async def get_friendship_repo(session: AsyncSession = Depends(get_db_session)):
+    return PgFriendshipRepository(session)
+
+
+async def get_push_subscription_repo(session: AsyncSession = Depends(get_db_session)):
+    return PgPushSubscriptionRepository(session)
 
 
 # Services

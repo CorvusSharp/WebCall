@@ -1,5 +1,5 @@
 // main.js — вход (исправлено: логируем адрес WS, кнопка диагностики, стабильные presence/инициация)
-import { buildWs } from './api.js';
+import { buildWs, subscribePush, findUsers, listFriends, listFriendRequests, sendFriendRequest, acceptFriend, notifyCall } from './api.js';
 
 // ===== RUNTIME AUTH GUARD =====
 // Если пользователь не авторизован (нет валидного JWT в localStorage) —
@@ -74,6 +74,13 @@ const els = {
   btnLogout: document.getElementById('btnLogout'),
   membersList: document.getElementById('membersList'),
   visitedRooms: document.getElementById('visitedRooms'),
+  // Friends UI
+  friendsCard: document.getElementById('friendsCard'),
+  friendsList: document.getElementById('friendsList'),
+  friendRequests: document.getElementById('friendRequests'),
+  friendSearch: document.getElementById('friendSearch'),
+  btnFriendSearch: document.getElementById('btnFriendSearch'),
+  friendSearchResults: document.getElementById('friendSearchResults'),
   preJoinControls: document.getElementById('preJoinControls'),
   inCallControls: document.getElementById('inCallControls'),
   inCallSection: document.getElementById('inCallSection'),
@@ -495,8 +502,12 @@ function setupUI(){
 
   // Load visited rooms for quick access
   loadVisitedRooms().catch(()=>{});
+  initFriendsUI();
   // Изначально до входа
   showPreJoin();
+
+  // Инициируем подписку на push (молча, без ошибок)
+  try { initPush(); } catch {}
 }
 
 // ===== Init
@@ -557,4 +568,103 @@ async function loadVisitedRooms(){
   }catch(e){
     try{ els.visitedRooms.innerHTML = '<div class="muted">Ошибка загрузки</div>'; }catch{}
   }
+}
+
+async function initPush(){
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  const reg = await navigator.serviceWorker.getRegistration('/static/sw.js') || await navigator.serviceWorker.register('/static/sw.js');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') return;
+  // Получаем публичный VAPID ключ
+  const r = await fetch('/api/v1/push/vapid-public');
+  const j = await r.json();
+  const vapidKey = (j && j.key) ? urlBase64ToUint8Array(j.key) : null;
+  const existing = await reg.pushManager.getSubscription();
+  let sub = existing;
+  if (!sub) {
+    sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidKey });
+  }
+  const payload = { endpoint: sub.endpoint, keys: sub.toJSON().keys };
+  await subscribePush(payload);
+}
+
+function urlBase64ToUint8Array(base64String){
+  if (!base64String) return null;
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
+// ===== Friends UI =====
+function renderUserRow(container, u, opts={}){
+  const row = document.createElement('div');
+  row.className = 'list-item';
+  row.innerHTML = `
+    <div class="grow">
+      <div class="bold">${u.username}</div>
+      <div class="muted small">${u.email} • ${u.id?.slice?.(0,8) || ''}</div>
+    </div>
+    <div style="display:flex; gap:8px;"></div>
+  `;
+  const actions = row.querySelector('div[style]');
+  (opts.actions || []).forEach(a => actions.appendChild(a));
+  container.appendChild(row);
+}
+
+function makeBtn(label, cls='btn', onClick){ const b = document.createElement('button'); b.className = cls; b.textContent = label; b.addEventListener('click', onClick); return b; }
+
+async function loadFriends(){
+  if (!els.friendsList || !els.friendRequests) return;
+  els.friendsList.innerHTML = '<div class="muted">Загрузка...</div>';
+  els.friendRequests.innerHTML = '<div class="muted">Загрузка...</div>';
+  try{
+    const [friends, reqs] = await Promise.all([listFriends(), listFriendRequests()]);
+    // Friends
+    els.friendsList.innerHTML = '';
+    if (!friends.length) els.friendsList.innerHTML = '<div class="muted">Нет друзей</div>';
+    friends.forEach(f => {
+      const btnCall = makeBtn('Позвонить', 'btn primary', async ()=>{
+        const room = els.roomId.value.trim();
+        if (!room) return alert('Укажите ID комнаты');
+        try{ await notifyCall(f.user_id, room); alert('Уведомление отправлено'); }catch(e){ alert(String(e)); }
+      });
+      renderUserRow(els.friendsList, { id: f.user_id, username: f.username || f.user_id, email: f.email || '' }, { actions: [btnCall] });
+    });
+    // Requests
+    els.friendRequests.innerHTML = '';
+    if (!reqs.length) els.friendRequests.innerHTML = '<div class="muted">Нет заявок</div>';
+    reqs.forEach(r => {
+      const btnAccept = makeBtn('Принять', 'btn success', async ()=>{ try{ await acceptFriend(r.user_id); await loadFriends(); }catch(e){ alert(String(e)); } });
+            renderUserRow(els.friendRequests, { id: r.user_id, username: r.username || r.user_id, email: r.email || '' }, { actions: [btnAccept] });
+    });
+  }catch(e){
+    els.friendsList.innerHTML = '<div class="muted">Ошибка</div>';
+    els.friendRequests.innerHTML = '<div class="muted">Ошибка</div>';
+  }
+}
+
+function initFriendsUI(){
+  if (!els.friendsCard) return;
+  els.btnFriendSearch?.addEventListener('click', async ()=>{
+    const q = (els.friendSearch?.value || '').trim();
+    if (!q) return;
+    els.friendSearchResults.innerHTML = '<div class="muted">Поиск...</div>';
+    try{
+      const arr = await findUsers(q);
+      els.friendSearchResults.innerHTML = '';
+      if (!arr.length) els.friendSearchResults.innerHTML = '<div class="muted">Ничего не найдено</div>';
+      arr.forEach(u => {
+        const btnAdd = makeBtn('Добавить', 'btn', async ()=>{
+          try{ await sendFriendRequest(u.id); alert('Заявка отправлена'); await loadFriends(); }
+          catch(e){ alert(String(e)); }
+        });
+        renderUserRow(els.friendSearchResults, u, { actions: [btnAdd] });
+      });
+    }catch(e){ els.friendSearchResults.innerHTML = '<div class="muted">Ошибка поиска</div>'; }
+  });
+  // Инициализируем списки
+  loadFriends();
 }
