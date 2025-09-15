@@ -13,7 +13,7 @@ from ..deps.containers import get_db_session
 from ....infrastructure.db.repositories.friends import PgFriendshipRepository
 from ....infrastructure.db.repositories.direct_messages import PgDirectMessageRepository
 from ....infrastructure.services.direct_crypto import encrypt_direct, decrypt_direct
-from ...ws.friends import publish_direct_message
+from ...ws.friends import publish_direct_message, publish_direct_cleared
 
 router = APIRouter(prefix='/api/v1/direct', tags=['direct'])
 
@@ -76,3 +76,20 @@ async def post_direct_message(friend_id: UUID, body: DirectMessageIn, current=De
     except Exception:
         pass
     return DirectMessageOut(id=dm.id, from_user_id=current.id, to_user_id=friend_id, content=content, sent_at=dm.sent_at.isoformat())
+
+
+class DirectDeleteResult(BaseModel):
+    removed: int
+
+
+@router.delete('/{friend_id}/messages', response_model=DirectDeleteResult)
+async def delete_direct_messages(friend_id: UUID, current=Depends(get_current_user), frepo: FriendshipRepository = Depends(get_friend_repo), dms: DirectMessageRepository = Depends(get_dm_repo)):
+    f = await frepo.get_pair(current.id, friend_id)
+    if not f or f.status != FriendStatus.accepted:
+        raise HTTPException(status_code=404, detail='Not friends')
+    removed = await dms.delete_pair(current.id, friend_id)
+    try:
+        await publish_direct_cleared(current.id, friend_id)
+    except Exception:
+        pass
+    return DirectDeleteResult(removed=removed)

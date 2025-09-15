@@ -149,3 +149,12 @@ async def publish_direct_message(from_user: UUID, to_user: UUID, message_id: UUI
         'sentAt': sent_at.isoformat(),
     }
     await broadcast_users({from_user, to_user}, payload)
+
+
+async def publish_direct_cleared(user_a: UUID, user_b: UUID):
+    """Оповестить обе стороны, что их переписка очищена."""
+    payload = {
+        'type': 'direct_cleared',
+        'userIds': [str(user_a), str(user_b)],
+    }
+    await broadcast_users({user_a, user_b}, payload)

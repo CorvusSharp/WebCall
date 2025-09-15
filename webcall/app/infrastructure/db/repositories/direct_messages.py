@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List
 from uuid import UUID
 
-from sqlalchemy import select, and_, desc
+from sqlalchemy import select, and_, desc, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ....core.domain.models import DirectMessage
@@ -51,3 +51,18 @@ class PgDirectMessageRepository(DirectMessageRepository):
                 sent_at=r.sent_at,
             ))
         return result
+
+    async def delete_pair(self, user_a: UUID, user_b: UUID) -> int:  # type: ignore[override]
+        a_s, b_s = str(user_a), str(user_b)
+        if a_s <= b_s:
+            ua, ub = user_a, user_b
+        else:
+            ua, ub = user_b, user_a
+        # Используем returning для получения количества удалённых строк (PostgreSQL)
+        stmt = delete(m.DirectMessages).where(and_(m.DirectMessages.user_a_id == ua, m.DirectMessages.user_b_id == ub)).returning(func.count())
+        res = await self.session.execute(stmt)
+        # res.fetchall() вернёт строки с count по каждой удалённой строке — проще получить rowcount
+        deleted = res.rowcount if res.rowcount is not None else 0
+        # Явный flush для фиксации в транзакции
+        await self.session.flush()
+        return deleted

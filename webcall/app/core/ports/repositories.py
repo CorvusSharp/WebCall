@@ -149,3 +149,12 @@ class DirectMessageRepository(ABC):
         Аргумент before (message id) может использоваться для пагинации (сообщения строго раньше указанного).
         """
         raise NotImplementedError
+
+    @abstractmethod
+    async def delete_pair(self, user_a: UUID, user_b: UUID) -> int:
+        """Удалить всю переписку между двумя пользователями.
+
+        Возвращает количество удалённых сообщений (для потенциального аудита/логов).
+        Пара пользователей рассматривается как неупорядоченная.
+        """
+        raise NotImplementedError

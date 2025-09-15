@@ -53,6 +53,7 @@ let globalAudioCtx = null;
 let latestUserNames = {}; // { connId: displayName }
 let friendsWs = null;
 let currentDirectFriend = null; // UUID друга выбранного в личном чате
+const directSeenMessageIds = new Set();
 
 const els = {
   roomId: document.getElementById('roomId'),
@@ -715,6 +716,9 @@ function startFriendsWs(){
         case 'direct_message':
           handleIncomingDirect(msg);
           break;
+        case 'direct_cleared':
+          handleDirectCleared(msg);
+          break;
         default:
           break;
       }
@@ -732,6 +736,7 @@ async function selectDirectFriend(friendId, label){
   currentDirectFriend = friendId;
   if (els.directChatCard) els.directChatCard.style.display = '';
   if (els.directChatTitle) els.directChatTitle.textContent = 'Чат с: ' + (label || friendId.slice(0,8));
+  ensureDirectActions();
   if (els.directMessages) els.directMessages.innerHTML = '<div class="muted">Загрузка...</div>';
   try{
     const t = localStorage.getItem('wc_token');
@@ -740,7 +745,12 @@ async function selectDirectFriend(friendId, label){
     if (!Array.isArray(arr) || !arr.length){ els.directMessages.innerHTML = '<div class="muted">Пусто</div>'; }
     else {
       els.directMessages.innerHTML = '';
-      arr.forEach(m => appendDirectMessage(m, m.from_user_id === getAccountId()));
+      arr.forEach(m => {
+        if (m.id && !directSeenMessageIds.has(m.id)){
+          directSeenMessageIds.add(m.id);
+          appendDirectMessage(m, m.from_user_id === getAccountId());
+        }
+      });
       scrollDirectToEnd();
     }
   }catch{ try{ els.directMessages.innerHTML = '<div class="muted">Ошибка загрузки</div>'; }catch{} }
@@ -770,12 +780,54 @@ function handleIncomingDirect(msg){
   const other = msg.fromUserId === acc ? msg.toUserId : msg.fromUserId;
   const show = currentDirectFriend && other === currentDirectFriend;
   if (show){
+    const mid = msg.messageId || msg.id;
+    if (mid && directSeenMessageIds.has(mid)) return; // уже добавили
+    if (mid) directSeenMessageIds.add(mid);
     appendDirectMessage({
+      id: mid,
       from_user_id: msg.fromUserId,
       content: msg.content,
       sent_at: msg.sentAt
     }, msg.fromUserId === acc);
     scrollDirectToEnd();
+  }
+}
+
+function handleDirectCleared(msg){
+  // Если выбранный чат совпадает с очищенной парой — сбрасываем UI
+  if (!currentDirectFriend) return;
+  const acc = getAccountId();
+  if (!acc) return;
+  const ids = msg.userIds || [];
+  if (ids.includes(acc) && ids.includes(currentDirectFriend)){
+    if (els.directMessages) els.directMessages.innerHTML = '<div class="muted">Пусто</div>';
+    directSeenMessageIds.clear();
+  }
+}
+
+function ensureDirectActions(){
+  if (!els.directActions) return;
+  if (!els.directActions.querySelector('[data-act="clear"]')){
+    const btn = document.createElement('button');
+    btn.className = 'btn danger ghost';
+    btn.textContent = 'Очистить чат';
+    btn.dataset.act = 'clear';
+    btn.addEventListener('click', async ()=>{
+      if (!currentDirectFriend) return;
+      if (!confirm('Удалить всю переписку?')) return;
+      try{
+        const t = localStorage.getItem('wc_token');
+        const r = await fetch(`/api/v1/direct/${currentDirectFriend}/messages`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${t}` } });
+        if (r.ok){
+          const j = await r.json();
+          // Локально очистим (WS событие тоже придёт)
+          if (els.directMessages) els.directMessages.innerHTML = '<div class="muted">Пусто</div>';
+          directSeenMessageIds.clear();
+          appendLog(els.logs, `Переписка удалена (${j.removed||0})`);
+        }
+      }catch{}
+    });
+    els.directActions.appendChild(btn);
   }
 }
 
@@ -793,8 +845,11 @@ if (els.btnDirectSend){
       });
       if (r.ok){
         const m = await r.json();
-        appendDirectMessage(m, true); // локально сразу добавим (дубликат от WS можно оставить)
-        scrollDirectToEnd();
+        if (m.id && !directSeenMessageIds.has(m.id)){
+          directSeenMessageIds.add(m.id);
+          appendDirectMessage(m, true);
+          scrollDirectToEnd();
+        }
       }
     }catch{}
     els.directInput.value='';
