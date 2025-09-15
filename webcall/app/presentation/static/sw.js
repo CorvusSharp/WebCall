@@ -18,7 +18,24 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const roomId = event.notification.data?.room_id;
-  const url = roomId ? `/call/${encodeURIComponent(roomId)}` : '/call';
-  event.waitUntil(clients.openWindow(url));
+  const data = event.notification.data || {};
+  const from = data.from;
+  const url = '/call';
+  event.waitUntil((async () => {
+    // Пытаемся фокусировать открытую вкладку
+    const winClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (winClients && winClients.length){
+      const client = winClients[0];
+      try { await client.focus(); } catch {}
+      if (from){
+        try { client.postMessage({ type: 'openDirect', userId: from }); } catch {}
+      }
+      return;
+    }
+    // Иначе открываем новую вкладку
+    const newClient = await clients.openWindow(url);
+    if (newClient && from){
+      try { newClient.postMessage({ type: 'openDirect', userId: from }); } catch {}
+    }
+  })());
 });

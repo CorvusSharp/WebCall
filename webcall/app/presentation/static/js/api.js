@@ -127,3 +127,10 @@ export async function findUsers(q){
   if (!r.ok) throw new Error(await r.text());
   return await r.json();
 }
+
+// Auth: текущий пользователь
+export async function getMe(){
+  const r = await fetch(`${base}/api/v1/auth/me`, { headers: { ...authHeaders() } });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}

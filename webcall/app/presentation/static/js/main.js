@@ -1,5 +1,5 @@
 // main.js — вход (исправлено: логируем адрес WS, кнопка диагностики, стабильные presence/инициация)
-import { buildWs, subscribePush, findUsers, listFriends, listFriendRequests, sendFriendRequest, acceptFriend, notifyCall, acceptCall, declineCall } from './api.js?v=2';
+import { buildWs, subscribePush, findUsers, listFriends, listFriendRequests, sendFriendRequest, acceptFriend, notifyCall, acceptCall, declineCall, getMe } from './api.js?v=2';
 
 // ===== RUNTIME AUTH GUARD =====
 // Если пользователь не авторизован (нет валидного JWT в localStorage) —
@@ -58,6 +58,61 @@ const directSeenByFriend = new Map();
 // Количество непрочитанных per друг
 const directUnread = new Map();
 
+// ===== Спец-рингтон для пары пользователей =====
+// Файл находится рядом со скриптами в static/js/
+let specialRingtone = null;
+let specialRingtoneTimer = null;
+let specialRingtoneActive = false;
+
+function getStoredEmail(){ try{ return localStorage.getItem('wc_email') || ''; }catch{ return ''; } }
+function getStoredUsername(){ try{ return localStorage.getItem('wc_username') || ''; }catch{ return ''; } }
+
+function isSpecialUserNameOrEmail(nameOrEmail){
+  if (!nameOrEmail) return false;
+  const s = String(nameOrEmail).toLowerCase();
+  return s === 'roman74mamin@gmail.com' || s === 'corvusadmin';
+}
+
+async function ensureSpecialRingtone(){
+  if (specialRingtone) return specialRingtone;
+  try {
+    const src = '/static/js/Sil-a%20%26%20YUNG%20TRAPPA%20-%20%D0%94%D0%B0%D0%B2%D0%B0%D0%B9%20%D0%BA%D0%B8%D0%BD%D0%B5%D0%BC%20%D0%B1%D0%B0%D1%80%D1%8B%D0%B3%D1%83.mp3';
+    const audio = new Audio(src);
+    audio.preload = 'auto';
+    audio.loop = true; // играем пока не ответят/не отклонят
+    audio.volume = 1.0;
+    specialRingtone = audio;
+  } catch {}
+  return specialRingtone;
+}
+
+function startSpecialRingtone(){
+  if (specialRingtoneActive) return;
+  specialRingtoneActive = true;
+  // Требуем разблокировки аудио политиками браузера
+  unlockAudioPlayback();
+  ensureSpecialRingtone().then(audio => {
+    if (!audio) return;
+    try {
+      // Позиция 28с; если метка больше длины — начинать с 0
+      const setPos = () => { try { audio.currentTime = 28; } catch {} };
+      if (isNaN(audio.duration) || !isFinite(audio.duration) || audio.duration === 0){
+        audio.addEventListener('loadedmetadata', setPos, { once: true });
+      } else { setPos(); }
+    } catch {}
+    audio.play().catch(()=>{
+      // Повторить спустя малую задержку, если автоплей заблокирован
+      setTimeout(()=> audio.play().catch(()=>{}), 300);
+    });
+  });
+}
+
+function stopSpecialRingtone(){
+  specialRingtoneActive = false;
+  if (specialRingtone){ try{ specialRingtone.pause(); }catch{} }
+  if (specialRingtoneTimer) { clearTimeout(specialRingtoneTimer); specialRingtoneTimer = null; }
+}
+
 // ===== Call state (эфемерные звонки) =====
 // activeCall: { roomId, withUserId, direction: 'outgoing'|'incoming', status: 'invited'|'accepted'|'declined'|'ended' }
 let activeCall = null;
@@ -70,6 +125,8 @@ function resetActiveCall(reason){
     if (els.callContext) els.callContext.textContent = '';
   }
   activeCall = null;
+  // Остановим спец-рингтон при любом сбросе состояния
+  stopSpecialRingtone();
   // Перерисовать друзей (вернёт кнопку Позвонить)
   try { loadFriends(); } catch {}
 }
@@ -93,6 +150,8 @@ function markCallAccepted(roomId){
     activeCall.status = 'accepted';
     if (els.callContext) els.callContext.textContent = `Звонок с: ${activeCall.withUserId}`;
   }
+  // Прекращаем рингтон при ответе
+  stopSpecialRingtone();
   loadFriends();
 }
 
@@ -101,6 +160,8 @@ function markCallDeclined(roomId){
     activeCall.status = 'declined';
     setTimeout(()=> resetActiveCall('declined'), 1500);
   }
+  // Прекращаем рингтон при отклонении
+  stopSpecialRingtone();
   loadFriends();
 }
 
@@ -589,6 +650,35 @@ function setupUI(){
 
   // Проверка и запрос прав (микрофон/уведомления) при загрузке
   checkAndRequestPermissionsInitial();
+
+  // Обновим локальные данные профиля (email/username) если не заполнены
+  (async () => {
+    try {
+      const t = localStorage.getItem('wc_token');
+      const hasEmail = !!localStorage.getItem('wc_email');
+      const hasName = !!localStorage.getItem('wc_username');
+      if (t && (!hasEmail || !hasName)){
+        const me = await getMe();
+        if (me?.email) localStorage.setItem('wc_email', me.email);
+        if (me?.username) localStorage.setItem('wc_username', me.username);
+      }
+    } catch {}
+  })();
+
+  // SW → main: обработка кликов по уведомлению (открыть личный чат)
+  try {
+    if ('serviceWorker' in navigator){
+      navigator.serviceWorker.addEventListener('message', (e)=>{
+        const data = e.data || {};
+        if (data.type === 'openDirect' && data.userId){
+          // Если друзья уже подгружены — просто открыть; иначе дождаться и открыть
+          const open = ()=> selectDirectFriend(data.userId, data.userId, { force: true }).catch(()=>{});
+          if (els.friendsList && els.friendsList.children.length){ open(); }
+          else { setTimeout(open, 300); }
+        }
+      });
+    }
+  } catch {}
 }
 
 // ===== Init
@@ -904,6 +994,27 @@ function startFriendsWs(){
           break;
         case 'direct_message':
           handleIncomingDirect(msg);
+          try {
+            // Локальное уведомление: если это не наш открытый чат и есть разрешение на уведомления
+            const acc = getAccountId();
+            const other = msg.fromUserId === acc ? msg.toUserId : msg.fromUserId;
+            const isActiveChat = currentDirectFriend && other === currentDirectFriend;
+            if (!isActiveChat && 'Notification' in window && Notification.permission === 'granted'){
+              const title = 'Новое сообщение';
+              const body = msg.fromUsername ? `От ${msg.fromUsername}` : 'Личное сообщение';
+              // Используем Service Worker, если зарегистрирован, чтобы поведение было единым
+              const reg = await navigator.serviceWorker.getRegistration('/static/sw.js');
+              if (reg && reg.showNotification){
+                reg.showNotification(title, {
+                  body,
+                  data: { type: 'direct', from: other },
+                });
+              } else {
+                // Фоллбек на Notification API
+                new Notification(title, { body, data: { type: 'direct', from: other } });
+              }
+            }
+          } catch {}
           break;
         case 'direct_cleared':
           handleDirectCleared(msg);
@@ -912,6 +1023,15 @@ function startFriendsWs(){
           // пришло приглашение: если у нас нет активного, выставляем incoming
           if (!activeCall){
             setActiveIncomingCall(msg.fromUserId, msg.fromUsername, msg.roomId);
+            // Спец-логика: рингтон только для пары (роман ↔ герасименко)
+            try {
+              const myNameOrEmail = getStoredEmail() || getStoredUsername();
+              const fromNameOrEmail = msg.fromEmail || msg.fromUsername || '';
+              // если текущий пользователь и звонящий принадлежат паре — включаем с 28й секунды
+              if (isSpecialUserNameOrEmail(myNameOrEmail) && isSpecialUserNameOrEmail(fromNameOrEmail)){
+                startSpecialRingtone();
+              }
+            } catch {}
           } else {
             // Уже в звонке/ожидании: авто-отклоняем (не отправляя decline) или игнорируем
           }

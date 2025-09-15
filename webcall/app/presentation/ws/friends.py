@@ -177,12 +177,14 @@ async def publish_direct_cleared(user_a: UUID, user_b: UUID):
 
 # === Звонки (эфемерные комнаты) ===
 
-async def publish_call_invite(from_user: UUID, to_user: UUID, room_id: str):
+async def publish_call_invite(from_user: UUID, to_user: UUID, room_id: str, from_username: str | None = None, from_email: str | None = None):
     await broadcast_users({from_user, to_user}, {
         'type': 'call_invite',
         'fromUserId': str(from_user),
         'toUserId': str(to_user),
         'roomId': room_id,
+        'fromUsername': from_username,
+        'fromEmail': from_email,
     })
 
 

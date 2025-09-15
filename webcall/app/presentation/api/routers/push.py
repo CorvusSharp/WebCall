@@ -116,7 +116,7 @@ async def notify_call(body: CallNotifyIn, background: BackgroundTasks, current=D
     background.add_task(_send_pushes, current, body, users, repo)
     # Параллельно публикуем WS событие приглашения в звонок (эфемерная комната)
     try:
-        await publish_call_invite(current.id, body.to_user_id, body.room_id)
+        await publish_call_invite(current.id, body.to_user_id, body.room_id, current.username, str(current.email))
     except Exception:
         pass
     return {"ok": True, "scheduled": True, "room_id": body.room_id}

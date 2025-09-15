@@ -44,3 +44,16 @@ async def login(
     use = LoginUser(users, hasher, tokens)
     access = await use.execute(email=data.email, password=data.password)
     return TokenOutput(access_token=access)
+
+    # Дополнительный endpoint: текущий пользователь
+from pydantic import BaseModel
+from ..deps.auth import get_current_user
+
+class MeOut(BaseModel):
+    id: str
+    email: str
+    username: str
+
+@router.get("/me", response_model=MeOut)
+async def get_me(current=Depends(get_current_user)) -> MeOut:  # type: ignore[override]
+    return MeOut(id=str(current.id), email=str(current.email), username=current.username)

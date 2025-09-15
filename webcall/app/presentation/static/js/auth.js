@@ -54,6 +54,8 @@ function applyPostLogin(token){
   localStorage.setItem('wc_token', token);
   localStorage.setItem('wc_seen', '1');
   try{ const payload = JSON.parse(atob(token.split('.')[1])); localStorage.setItem('wc_user', payload.sub || ''); }catch{}
+  // Email может понадобиться для спец-логики в UI
+  try { const email = (document.getElementById('loginEmail')?.value || '').trim(); if (email) localStorage.setItem('wc_email', email); } catch {}
   const url = new URL(location.href);
   const redirect = getRedirect();
   const room = url.searchParams.get('room');
@@ -97,6 +99,7 @@ async function doRegister(){
   try{
     await register(email, username, password, secret);
   try { localStorage.setItem('wc_username', username); } catch {}
+  try { localStorage.setItem('wc_email', email); } catch {}
     log('Регистрация успешна. Выполняем вход...');
     const data = await login(email, password);
     applyPostLogin(data.access_token);
