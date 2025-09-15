@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Iterable
 from uuid import UUID
 
 from sqlalchemy import delete, select
@@ -33,6 +33,14 @@ class PgRoomRepository(RoomRepository):
         if owner_id:
             stmt = stmt.where(Rooms.owner_id == owner_id)
         stmt = stmt.offset(skip).limit(limit)
+        res = await self.session.execute(stmt)
+        rows = res.scalars().all()
+        return [Room(id=r.id, name=RoomName(r.name), owner_id=r.owner_id, is_private=r.is_private, created_at=r.created_at) for r in rows]
+
+    async def get_many(self, ids: Iterable[UUID]) -> list[Room]:  # type: ignore[override]
+        if not ids:
+            return []
+        stmt = select(Rooms).where(Rooms.id.in_(list(ids)))
         res = await self.session.execute(stmt)
         rows = res.scalars().all()
         return [Room(id=r.id, name=RoomName(r.name), owner_id=r.owner_id, is_private=r.is_private, created_at=r.created_at) for r in rows]

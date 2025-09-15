@@ -4,10 +4,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends
 
-from ....application.dto.rooms import CreateRoomInput, ListRoomsInput, RoomDTO
+from ....application.dto.rooms import CreateRoomInput, ListRoomsInput, RoomDTO, VisitedRoomDTO
 from ....application.use_cases.rooms import CreateRoom, GetRoom, ListRooms
-from ....core.ports.repositories import RoomRepository
-from ..deps.containers import get_room_repo
+from ....core.ports.repositories import RoomRepository, ParticipantRepository
+from ..deps.containers import get_room_repo, get_participant_repo
 from ..deps.auth import get_current_user
 
 router = APIRouter(prefix="/api/v1/rooms", tags=["rooms"])
@@ -66,3 +66,30 @@ async def delete_room(
     deleter = DeleteRoom(rooms)
     await deleter.execute(UUID(room_id))
     return {"status": "deleted"}
+
+
+@router.get("/visited", response_model=list[VisitedRoomDTO])
+async def list_visited_rooms(
+    skip: int = 0,
+    limit: int = 50,
+    rooms: RoomRepository = Depends(get_room_repo),
+    participants: ParticipantRepository = Depends(get_participant_repo),
+    current_user=Depends(get_current_user),
+):  # type: ignore[override]
+    pairs = await participants.list_visited_rooms(UUID(str(current_user.id)), skip=skip, limit=limit)
+    room_ids = [rid for rid, _ in pairs]
+    metas = await rooms.get_many(room_ids)
+    meta_map = { r.id: r for r in metas }
+    out: list[VisitedRoomDTO] = []
+    for rid, last_seen in pairs:
+        r = meta_map.get(rid)
+        out.append(
+            VisitedRoomDTO(
+                room_id=str(rid),
+                last_seen=last_seen,
+                name=str(r.name) if r else None,
+                owner_id=str(r.owner_id) if r else None,
+                is_private=r.is_private if r else None,
+            )
+        )
+    return out

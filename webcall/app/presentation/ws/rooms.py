@@ -6,14 +6,15 @@ from typing import Any
 from collections import defaultdict
 import contextlib
 from uuid import UUID, uuid5, NAMESPACE_URL
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from ...infrastructure.config import get_settings
 
 from ...core.domain.models import Signal
 from ...core.ports.services import SignalBus, TokenProvider
-from ...core.ports.repositories import UserRepository
-from ..api.deps.containers import get_signal_bus, get_token_provider, get_user_repo
+from ...core.ports.repositories import UserRepository, ParticipantRepository, RoomRepository
+from ..api.deps.containers import get_signal_bus, get_token_provider, get_user_repo, get_participant_repo, get_room_repo
 from ...infrastructure.messaging.redis_bus import RedisSignalBus  # for type-check to enable Redis chat broadcast
 
 router = APIRouter()
@@ -32,6 +33,8 @@ async def ws_room(
     bus: SignalBus = Depends(get_signal_bus),
     tokens: TokenProvider = Depends(get_token_provider),
     users: UserRepository = Depends(get_user_repo),
+    participants: ParticipantRepository = Depends(get_participant_repo),
+    rooms: RoomRepository = Depends(get_room_repo),
 ):  # type: ignore[override]
     settings = get_settings()
     token = websocket.query_params.get("token")
@@ -148,12 +151,15 @@ async def ws_room(
 
                 # Try to attach real username from token subject
                 real_name: str | None = None
+                account_uid: UUID | None = None
                 if token:
                     with contextlib.suppress(Exception):
                         payload = tokens.decode_token(token)
                         # subject is a UUID of user id
-                        uid = UUID(payload.get("sub")) if payload.get("sub") else None
+                        uid_str = payload.get("sub")
+                        uid = UUID(uid_str) if uid_str else None
                         if uid:
+                            account_uid = uid
                             user = await users.get_by_id(uid)
                             if user:
                                 real_name = user.username
@@ -168,6 +174,22 @@ async def ws_room(
                 for ws in list(_room_clients.get(room_uuid, set())):
                     with contextlib.suppress(Exception):
                         await ws.send_json({"type": "presence", "users": members, "userNames": names})
+
+                # Persist visit in DB for authenticated users
+                if account_uid is not None:
+                    try:
+                        # Persist only if the room exists in DB (avoid FK errors for ad-hoc rooms)
+                        room_meta = await rooms.get(room_uuid)
+                        if room_meta is not None:
+                            # Check if there's already an active participation
+                            active = await participants.get_active(room_uuid, account_uid)
+                            if not active:
+                                from ...core.domain.models import Participant, Role
+                                p = Participant.join(user_id=account_uid, room_id=room_uuid, role=Role.member)
+                                await participants.add(p)
+                    except Exception:
+                        # не роняем WS из‑за ошибки БД
+                        pass
             elif data.get("type") == "leave":
                 # Graceful close to avoid 1005/1006 on client
                 with contextlib.suppress(Exception):
@@ -230,3 +252,21 @@ async def ws_room(
             for ws in list(_room_clients.get(room_uuid, set())):
                 with contextlib.suppress(Exception):
                     await ws.send_json({"type": "presence", "users": members, "userNames": names})
+
+        # try to mark DB participation left_at for authenticated user
+        if token:
+            with contextlib.suppress(Exception):
+                payload = tokens.decode_token(token)
+                uid_str = payload.get("sub")
+                account_uid = UUID(uid_str) if uid_str else None
+                if account_uid is not None:
+                    try:
+                        # Update only if room exists (consistency with join)
+                        room_meta = await rooms.get(room_uuid)
+                        if room_meta is not None:
+                            active = await participants.get_active(room_uuid, account_uid)
+                            if active and not active.left_at:
+                                active.left_at = datetime.utcnow()
+                                await participants.update(active)
+                    except Exception:
+                        pass

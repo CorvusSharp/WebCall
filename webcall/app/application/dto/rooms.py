@@ -23,3 +23,12 @@ class ListRoomsInput(BaseModel):
     owner_id: Optional[str] = None
     skip: int = 0
     limit: int = 50
+
+
+class VisitedRoomDTO(BaseModel):
+    room_id: str
+    last_seen: datetime
+    # optional metadata if room still exists
+    name: Optional[str] = None
+    owner_id: Optional[str] = None
+    is_private: Optional[bool] = None

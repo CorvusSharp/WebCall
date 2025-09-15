@@ -16,6 +16,8 @@ class Users(Base):
     username: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    # Последняя посещенная комната (опционально)
+    last_room_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("rooms.id"), nullable=True, index=True)
 
     rooms = relationship("Rooms", back_populates="owner")
 

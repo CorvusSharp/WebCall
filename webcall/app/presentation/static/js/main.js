@@ -74,6 +74,7 @@ const els = {
   btnToggleTheme: document.getElementById('btnToggleTheme'),
   btnLogout: document.getElementById('btnLogout'),
   membersList: document.getElementById('membersList'), // legacy (removed section)
+  visitedRooms: document.getElementById('visitedRooms'),
 };
 
 // Безопасный пинг: используем экспорт из signal.js, либо локальный fallback
@@ -482,6 +483,9 @@ function setupUI(){
   if (u.searchParams.has('room')) {
     els.roomId.value = u.searchParams.get('room');
   }
+
+  // Load visited rooms for quick access
+  loadVisitedRooms().catch(()=>{});
 }
 
 // ===== Init
@@ -490,3 +494,38 @@ setupUI();
 refreshDevices();
 log('Приложение инициализировано');
 // Автоподключение отключено: пользователь выбирает комнату вручную и жмёт Войти
+
+async function loadVisitedRooms(){
+  if (!els.visitedRooms) return;
+  try{
+    const rawToken = localStorage.getItem('wc_token');
+    if (!rawToken) { els.visitedRooms.innerHTML = '<div class="muted">Войдите, чтобы увидеть историю комнат</div>'; return; }
+    const r = await fetch('/api/v1/rooms/visited', { headers: { 'Authorization': `Bearer ${rawToken}` } });
+    if (!r.ok){ els.visitedRooms.innerHTML = '<div class="muted">Не удалось загрузить историю</div>'; return; }
+    const items = await r.json();
+    if (!Array.isArray(items) || items.length === 0){ els.visitedRooms.innerHTML = '<div class="muted">История пуста</div>'; return; }
+    els.visitedRooms.innerHTML = '';
+    for (const it of items){
+      const div = document.createElement('div');
+      div.className = 'list-item';
+      const title = it.name || it.room_id;
+      const when = new Date(it.last_seen).toLocaleString();
+      div.innerHTML = `
+        <div class="grow">
+          <div class="bold">${title}</div>
+          <div class="muted small">${it.room_id} • ${when}</div>
+        </div>
+        <button class="btn" data-room="${it.room_id}">Войти</button>
+      `;
+      const btn = div.querySelector('button');
+      btn.addEventListener('click', ()=>{
+        els.roomId.value = it.room_id;
+        unlockAudioPlayback();
+        connect();
+      });
+      els.visitedRooms.appendChild(div);
+    }
+  }catch(e){
+    try{ els.visitedRooms.innerHTML = '<div class="muted">Ошибка загрузки</div>'; }catch{}
+  }
+}
