@@ -178,8 +178,23 @@ async def ws_room(
                 # Persist visit in DB for authenticated users
                 if account_uid is not None:
                     try:
-                        # Persist only if the room exists in DB (avoid FK errors for ad-hoc rooms)
+                        # Ensure room exists in DB. If not, auto-create with deterministic id
                         room_meta = await rooms.get(room_uuid)
+                        if room_meta is None:
+                            from ...core.domain.models import Room, Participant, Role
+                            from ...core.domain.values import RoomName
+                            # Derive a human-friendly name from provided path param
+                            safe_name = (room_id or str(room_uuid))[:100]
+                            # Create room with fixed UUID = room_uuid so WS and DB align
+                            new_room = Room(id=room_uuid, name=RoomName(safe_name), owner_id=account_uid, is_private=False, created_at=datetime.utcnow())
+                            try:
+                                await rooms.add(new_room)
+                            except Exception:
+                                # ignore race conditions or duplicates
+                                pass
+                            # refresh meta
+                            room_meta = await rooms.get(room_uuid)
+
                         if room_meta is not None:
                             # Check if there's already an active participation
                             active = await participants.get_active(room_uuid, account_uid)
