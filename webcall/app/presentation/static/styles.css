@@ -391,7 +391,7 @@ input[type="range"]::-moz-range-thumb{
 
 /* ======= SIMPLE LIST ======= */
 .list{ display:flex; flex-direction:column; gap:8px }
-.list-item{ display:flex; gap:12px; align-items:center; padding:10px; border:1px solid var(--border); border-radius:10px; background:linear-gradient(180deg, rgba(255,255,255,.02), rgba(255,255,255,.01)); }
+.list-item{ display:flex; gap:12px; align-items:center; padding:10px; border:1px solid var(--border); border-radius:10px; background:linear-gradient(180deg, rgba(255,255,255,.02), rgba(255,255,255,.01)); flex-wrap:wrap }
 .list-item .grow{ flex:1; min-width:0 }
 .bold{ font-weight:600 }
 .small{ font-size:12px }
@@ -435,4 +435,9 @@ input[type="range"]::-moz-range-thumb{
 }
 @media (min-width: 1280px){
   .chat-box{ height: 220px; }
+}
+
+@media (max-width: 760px){
+  .chat-input{flex-wrap:wrap}
+  .chat-input .btn{width:100%}
 }
