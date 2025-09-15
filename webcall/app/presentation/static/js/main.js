@@ -76,33 +76,59 @@ const SPECIAL_RING_EMAILS = new Set([
 
 async function ensureSpecialRingtone(){
   if (specialRingtone) return specialRingtone;
-  try {
-    const src = '/static/js/Sil-a%20%26%20YUNG%20TRAPPA%20-%20%D0%94%D0%B0%D0%B2%D0%B0%D0%B9%20%D0%BA%D0%B8%D0%BD%D0%B5%D0%BC%20%D0%B1%D0%B0%D1%80%D1%8B%D0%B3%D1%83.mp3';
-    const audio = new Audio(src);
-    audio.preload = 'auto';
-    audio.loop = true; // играем пока не ответят/не отклонят
-    audio.volume = 1.0;
-    specialRingtone = audio;
-  } catch {}
-  return specialRingtone;
+  const candidates = [
+    // 1) файл с расширением .mp3
+    '/static/js/Sil-a%20%26%20YUNG%20TRAPPA%20-%20%D0%94%D0%B0%D0%B2%D0%B0%D0%B9%20%D0%BA%D0%B8%D0%BD%D0%B5%D0%BC%20%D0%B1%D0%B0%D1%80%D1%8B%D0%B3%D1%83.mp3',
+    // 2) тот же файл БЕЗ расширения (по факту в статике может лежать без .mp3)
+    '/static/js/Sil-a%20%26%20YUNG%20TRAPPA%20-%20%D0%94%D0%B0%D0%B2%D0%B0%D0%B9%20%D0%BA%D0%B8%D0%BD%D0%B5%D0%BC%20%D0%B1%D0%B0%D1%80%D1%8B%D0%B3%D1%83',
+  ];
+  for (const src of candidates){
+    try {
+      const audio = new Audio(src);
+      audio.preload = 'auto';
+      audio.loop = true; // играем пока не ответят/не отклонят
+      audio.volume = 1.0;
+      // Ждём метаданные или canplay, чтобы убедиться, что источник живой
+      const ok = await new Promise((resolve)=>{
+        let done = false;
+        const cleanup = ()=>{ if (done) return; done = true; audio.removeEventListener('loadedmetadata', onMeta); audio.removeEventListener('canplay', onCan); audio.removeEventListener('error', onErr); };
+        const onMeta = ()=>{ cleanup(); resolve(true); };
+        const onCan = ()=>{ cleanup(); resolve(true); };
+        const onErr = ()=>{ cleanup(); resolve(false); };
+        audio.addEventListener('loadedmetadata', onMeta, { once: true });
+        audio.addEventListener('canplay', onCan, { once: true });
+        audio.addEventListener('error', onErr, { once: true });
+        try { audio.load?.(); } catch {}
+        // safety: если readyState уже достаточен
+        setTimeout(()=>{ if (audio.readyState >= 1) { cleanup(); resolve(true); } }, 50);
+      });
+      if (ok){ specialRingtone = audio; return specialRingtone; }
+    } catch {}
+  }
+  return specialRingtone; // может быть null, если не нашли
 }
 
 function startSpecialRingtone(){
-  if (specialRingtoneActive) return; // уже запрошен запуск
+  const wasActive = specialRingtoneActive;
   specialRingtoneActive = true;
   // Требуем разблокировки аудио политиками браузера
   unlockAudioPlayback();
   ensureSpecialRingtone().then(audio => {
     if (!audio) return;
-    const START_AT = 28;
+    const START_AT = 1;
     const startPlayback = () => {
       if (!specialRingtoneActive || specialRingtonePlaying) return;
       specialRingtonePlaying = true;
       audio.play().catch(()=>{
         // одна мягкая повторная попытка спустя 300мс, без циклов
-        setTimeout(()=>{ if (specialRingtoneActive) audio.play().catch(()=>{}); }, 300);
+        setTimeout(()=>{ if (specialRingtoneActive && !specialRingtonePlaying) audio.play().catch(()=>{}); }, 300);
       });
     };
+    // Если уже был активен рингтон (политика могла заблокировать старт), просто попробуем снова запустить
+    if (wasActive) {
+      if (!specialRingtonePlaying) startPlayback();
+      return;
+    }
     const seekAndStart = () => {
       // Установим позицию и дождёмся подтверждения seeked
       const onSeeked = () => { audio.removeEventListener('seeked', onSeeked); startPlayback(); };
@@ -560,8 +586,6 @@ function bindPeerMedia(peerId){
 
 // Try to unlock browser audio autoplay policies
 function unlockAudioPlayback(){
-  if (audioUnlocked) return;
-  audioUnlocked = true;
   try{
     // Create/resume a global AudioContext to satisfy iOS/Safari/Chrome policies
     const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -569,17 +593,20 @@ function unlockAudioPlayback(){
       if (!globalAudioCtx) globalAudioCtx = new Ctx();
       if (globalAudioCtx.state === 'suspended') globalAudioCtx.resume().catch(()=>{});
       // Play a tiny silent buffer
-      const buffer = globalAudioCtx.createBuffer(1, 1, 22050);
-      const source = globalAudioCtx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(globalAudioCtx.destination);
-      try{ source.start(0); }catch{}
+      try {
+        const buffer = globalAudioCtx.createBuffer(1, 1, 22050);
+        const source = globalAudioCtx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(globalAudioCtx.destination);
+        source.start(0);
+      } catch {}
+      try { audioUnlocked = (globalAudioCtx.state === 'running'); } catch { audioUnlocked = false; }
     }
     // Attempt to play any existing <audio> elements
     document.querySelectorAll('audio').forEach(a=>{
       try{ a.muted = false; a.volume = 1.0; a.play().catch(()=>{}); }catch{}
     });
-    // Если в момент разблокировки у нас есть входящий звонок в статусе invited для спец-email — запустим рингтон
+    // Если в момент разблокировки у нас есть входящий звонок в статусе invited для спец-email — запустим или перезапустим рингтон
     try {
       const myEmail = (getStoredEmail() || '').toLowerCase();
       if (activeCall && activeCall.direction === 'incoming' && activeCall.status === 'invited' && myEmail && SPECIAL_RING_EMAILS.has(myEmail)){
