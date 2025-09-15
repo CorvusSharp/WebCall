@@ -9,7 +9,6 @@ from ....core.domain.models import Friendship, FriendStatus
 from ....core.errors import ConflictError
 from ....core.ports.repositories import FriendshipRepository, UserRepository, DirectMessageRepository, DirectReadStateRepository
 from ..deps.auth import get_current_user
-from ..deps.containers import get_db_session
 from ..deps.containers import get_user_repo, get_db_session
 from ....infrastructure.db.repositories.direct_messages import PgDirectMessageRepository
 from ....infrastructure.db.repositories.direct_reads import PgDirectReadStateRepository
