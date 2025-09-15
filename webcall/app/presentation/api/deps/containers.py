@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import Depends
+from typing import AsyncIterator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ....infrastructure.db.session import get_session
@@ -16,11 +17,10 @@ from ....infrastructure.security.jwt_provider import JoseTokenProvider
 from ....infrastructure.ice.provider import EnvIceConfigProvider
 
 
-# DB session
-# DB session provider
-async def get_db_session() -> AsyncSession:
+# DB session provider (request-scoped)
+async def get_db_session() -> AsyncIterator[AsyncSession]:
     async with _get_session() as s:  # type: ignore[misc]
-        return s
+        yield s
 from ....infrastructure.messaging.redis_bus import RedisSignalBus
 from ....infrastructure.messaging.inmemory_bus import InMemorySignalBus
 from ....infrastructure.config import get_settings
