@@ -25,7 +25,7 @@ class PgDirectMessageRepository(DirectMessageRepository):
             sent_at=dm.sent_at,
         )
         self.session.add(row)
-        await self.session.flush()
+        await self.session.commit()
 
     async def list_pair(self, user_a: UUID, user_b: UUID, limit: int = 50, before: UUID | None = None) -> List[DirectMessage]:  # type: ignore[override]
         a_s, b_s = str(user_a), str(user_b)
@@ -58,11 +58,9 @@ class PgDirectMessageRepository(DirectMessageRepository):
             ua, ub = user_a, user_b
         else:
             ua, ub = user_b, user_a
-        # Используем returning для получения количества удалённых строк (PostgreSQL)
-        stmt = delete(m.DirectMessages).where(and_(m.DirectMessages.user_a_id == ua, m.DirectMessages.user_b_id == ub)).returning(func.count())
+        # Выполним удаление и получим число удалённых строк по rowcount
+        stmt = delete(m.DirectMessages).where(and_(m.DirectMessages.user_a_id == ua, m.DirectMessages.user_b_id == ub))
         res = await self.session.execute(stmt)
-        # res.fetchall() вернёт строки с count по каждой удалённой строке — проще получить rowcount
         deleted = res.rowcount if res.rowcount is not None else 0
-        # Явный flush для фиксации в транзакции
-        await self.session.flush()
+        await self.session.commit()
         return deleted
