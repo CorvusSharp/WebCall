@@ -67,11 +67,11 @@ let specialRingtoneActive = false;
 function getStoredEmail(){ try{ return localStorage.getItem('wc_email') || ''; }catch{ return ''; } }
 function getStoredUsername(){ try{ return localStorage.getItem('wc_username') || ''; }catch{ return ''; } }
 
-function isSpecialUserNameOrEmail(nameOrEmail){
-  if (!nameOrEmail) return false;
-  const s = String(nameOrEmail).toLowerCase();
-  return s === 'roman74mamin@gmail.com' || s === 'corvusadmin';
-}
+const SPECIAL_RING_EMAILS = new Set([
+  'roman74mamin@gmail.com',
+  'gerasimenkoooo37@gmail.com',
+  'myphone@gmail.com',
+]);
 
 async function ensureSpecialRingtone(){
   if (specialRingtone) return specialRingtone;
@@ -1025,10 +1025,8 @@ function startFriendsWs(){
             setActiveIncomingCall(msg.fromUserId, msg.fromUsername, msg.roomId);
             // Спец-логика: рингтон только для пары (роман ↔ герасименко)
             try {
-              const myNameOrEmail = getStoredEmail() || getStoredUsername();
-              const fromNameOrEmail = msg.fromEmail || msg.fromUsername || '';
-              // если текущий пользователь и звонящий принадлежат паре — включаем с 28й секунды
-              if (isSpecialUserNameOrEmail(myNameOrEmail) && isSpecialUserNameOrEmail(fromNameOrEmail)){
+              const myEmail = (getStoredEmail() || '').toLowerCase();
+              if (myEmail && SPECIAL_RING_EMAILS.has(myEmail)){
                 startSpecialRingtone();
               }
             } catch {}
