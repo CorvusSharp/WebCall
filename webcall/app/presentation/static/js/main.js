@@ -75,7 +75,25 @@ const els = {
   btnLogout: document.getElementById('btnLogout'),
   membersList: document.getElementById('membersList'), // legacy (removed section)
   visitedRooms: document.getElementById('visitedRooms'),
+  // new elements for stateful UI
+  preJoinControls: document.getElementById('preJoinControls'),
+  inCallControls: document.getElementById('inCallControls'),
+  inCallSection: document.getElementById('inCallSection'),
+  visitedCard: document.getElementById('visitedCard'),
 };
+
+function showPreJoin(){
+  if (els.preJoinControls) els.preJoinControls.style.display = '';
+  if (els.inCallControls) els.inCallControls.style.display = 'none';
+  if (els.inCallSection) els.inCallSection.style.display = 'none';
+  if (els.visitedCard) els.visitedCard.style.display = '';
+}
+function showInCall(){
+  if (els.preJoinControls) els.preJoinControls.style.display = 'none';
+  if (els.inCallControls) els.inCallControls.style.display = '';
+  if (els.inCallSection) els.inCallSection.style.display = '';
+  if (els.visitedCard) els.visitedCard.style.display = 'none';
+}
 
 // Безопасный пинг: используем экспорт из signal.js, либо локальный fallback
 const sendPingSafe = signal.sendPing ?? ((ws) => {
@@ -105,6 +123,8 @@ function setConnectedState(connected){
   setEnabled(els.btnLeave, connected);
   setEnabled(els.btnToggleMic, connected);
   setEnabled(els.btnToggleCam, connected);
+  // toggle stateful UI
+  if (connected) showInCall(); else showPreJoin();
 }
 
 function ensureToken(){
@@ -223,6 +243,8 @@ async function connect(){
       const card = document.getElementById('localCard');
       if (card) card.style.display = hasVideo ? '' : 'none';
     }catch{}
+    // после удачного коннекта обновим историю без перезагрузки
+    try { await loadVisitedRooms(); } catch {}
   };
 
   ws.onmessage = async (ev) => {
@@ -405,14 +427,14 @@ function unlockAudioPlayback(){
 
 function leave(){
   isManuallyDisconnected = true;
-  // Сообщаем серверу о выходе
   try { ws.send(JSON.stringify({ type: 'leave', fromUserId: userId })); } catch {}
   if (ws) ws.close();
   if (rtc) { rtc.close(); rtc = null; }
   setConnectedState(false);
   els.peersGrid.innerHTML = '';
-  // (participants volumes removed)
   log('Отключено');
+  // обновим историю
+  try { loadVisitedRooms(); } catch {}
 }
 
 // ===== Participants volumes list
@@ -486,6 +508,8 @@ function setupUI(){
 
   // Load visited rooms for quick access
   loadVisitedRooms().catch(()=>{});
+  // Изначально до входа
+  showPreJoin();
 }
 
 // ===== Init

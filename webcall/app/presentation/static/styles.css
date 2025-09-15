@@ -360,3 +360,14 @@ input[type="range"]::-moz-range-thumb{
 /* ======= AUTH FIELD ERRORS ======= */
 .input-error { border-color: var(--danger) !important; outline:1px solid var(--danger); }
 .input-error:focus { box-shadow: 0 0 0 .22rem rgba(239,68,68,0.35), 0 0 0 .44rem rgba(239,68,68,0.18) !important; }
+
+/* ======= IN-CALL LAYOUT ======= */
+.app-in-call{ display:block; }
+@media (max-width: 720px){
+  .controls-grid{ grid-template-columns:repeat(2,1fr); }
+  .peers-grid{ grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); }
+  .chat-box{ height: 160px; }
+}
+@media (min-width: 1280px){
+  .chat-box{ height: 220px; }
+}
