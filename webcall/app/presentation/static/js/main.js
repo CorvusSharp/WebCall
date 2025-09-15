@@ -93,17 +93,33 @@ function startSpecialRingtone(){
   unlockAudioPlayback();
   ensureSpecialRingtone().then(audio => {
     if (!audio) return;
-    try {
-      // Позиция 28с; если метка больше длины — начинать с 0
-      const setPos = () => { try { audio.currentTime = 28; } catch {} };
+    let attempts = 0;
+    const setTo28 = () => {
+      attempts++;
+      try { audio.currentTime = 28; } catch {}
+      const tryPlay = () => audio.play().catch(()=>{});
+      // Если метаданные ещё не загружены — подождём
       if (isNaN(audio.duration) || !isFinite(audio.duration) || audio.duration === 0){
-        audio.addEventListener('loadedmetadata', setPos, { once: true });
-      } else { setPos(); }
-    } catch {}
-    audio.play().catch(()=>{
-      // Повторить спустя малую задержку, если автоплей заблокирован
-      setTimeout(()=> audio.play().catch(()=>{}), 300);
-    });
+        audio.addEventListener('loadedmetadata', ()=>{ try { audio.currentTime = 28; } catch {}; tryPlay(); }, { once: true });
+      } else {
+        try { if (audio.currentTime < 27.5) audio.currentTime = 28; } catch {}
+        tryPlay();
+      }
+      // Подстраховка: повторим несколько раз с интервалом, если время не установилось
+      let retry = 0;
+      const id = setInterval(()=>{
+        retry++;
+        if (!specialRingtoneActive) { clearInterval(id); return; }
+        try {
+          if (audio.currentTime < 27.5) audio.currentTime = 28;
+        } catch {}
+        try { audio.play().catch(()=>{}); } catch {}
+        if (retry > 5) clearInterval(id);
+      }, 400);
+    };
+    // Если уже можно играть — сразу, иначе дождёмся canplay
+    if (audio.readyState >= 2){ setTo28(); }
+    else { audio.addEventListener('canplay', setTo28, { once: true }); setTo28(); }
   });
 }
 
@@ -563,6 +579,13 @@ function unlockAudioPlayback(){
     document.querySelectorAll('audio').forEach(a=>{
       try{ a.muted = false; a.volume = 1.0; a.play().catch(()=>{}); }catch{}
     });
+    // Если в момент разблокировки у нас есть входящий звонок в статусе invited для спец-email — запустим рингтон
+    try {
+      const myEmail = (getStoredEmail() || '').toLowerCase();
+      if (activeCall && activeCall.direction === 'incoming' && activeCall.status === 'invited' && myEmail && SPECIAL_RING_EMAILS.has(myEmail)){
+        startSpecialRingtone();
+      }
+    } catch {}
   }catch{}
 }
 
@@ -825,8 +848,10 @@ async function loadFriends(){
           const friendTag = (f.username || f.user_id).replace(/[^a-zA-Z0-9]+/g,'').slice(0,6) || 'user';
           const room = `call-${rnd}-${friendTag}`;
           els.roomId.value = room;
-          try{ await notifyCall(f.user_id, room); }catch{}
+          // СНАЧАЛА локально отмечаем исходящий, чтобы входящее событие не сработало у инициатора
           setActiveOutgoingCall(f, room);
+          // И только потом — уведомляем сервер (без await, чтобы не ловить гонку)
+          try{ notifyCall(f.user_id, room).catch(()=>{}); }catch{}
           // Автоподключение
           try{ unlockAudioPlayback(); connect(); }catch{}
         });
@@ -1020,10 +1045,12 @@ function startFriendsWs(){
           handleDirectCleared(msg);
           break;
         case 'call_invite': {
-          // пришло приглашение: если у нас нет активного, выставляем incoming
-          if (!activeCall){
+          // Входящее приглашение обрабатываем ТОЛЬКО если адресовано нам
+          const acc = getAccountId();
+          const isForMe = acc && msg.toUserId === acc;
+          if (isForMe && !activeCall){
             setActiveIncomingCall(msg.fromUserId, msg.fromUsername, msg.roomId);
-            // Спец-логика: рингтон только для пары (роман ↔ герасименко)
+            // Спец-логика: рингтон только для указанных email-адресатов
             try {
               const myEmail = (getStoredEmail() || '').toLowerCase();
               if (myEmail && SPECIAL_RING_EMAILS.has(myEmail)){
