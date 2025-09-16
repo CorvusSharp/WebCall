@@ -1,5 +1,5 @@
 // main.js — вход (исправлено: логируем адрес WS, кнопка диагностики, стабильные presence/инициация)
-import { buildWs, subscribePush, findUsers, listFriends, listFriendRequests, sendFriendRequest, acceptFriend, notifyCall, acceptCall, declineCall, getMe } from './api.js?v=2';
+import { buildWs, subscribePush, findUsers, listFriends, listFriendRequests, sendFriendRequest, acceptFriend, notifyCall, acceptCall, declineCall, getMe, getUserPublicKey, setMyPublicKey } from './api.js';
 
 // ===== RUNTIME AUTH GUARD =====
 // Если пользователь не авторизован (нет валидного JWT в localStorage) —
@@ -1016,7 +1016,7 @@ async function ensureE2EEKeys(){
         await setMyPublicKey(_e2ee_exported_pub);
       } else {
         try{
-          const api = await import('./api.js?v=2');
+        const api = await import('./api.js');
           if (api && typeof api.setMyPublicKey === 'function') await api.setMyPublicKey(_e2ee_exported_pub);
         }catch(e){}
       }
@@ -1067,7 +1067,7 @@ async function encryptForFriend(friendId, plaintext){
     const pkResp = await (async (id) => {
       if (typeof getUserPublicKey === 'function') return getUserPublicKey(id);
       try{
-        const api = await import('./api.js?v=2');
+      const api = await import('./api.js');
         if (api && typeof api.getUserPublicKey === 'function') return api.getUserPublicKey(id);
       }catch(e){}
       throw new Error('getUserPublicKey unavailable');
@@ -1089,7 +1089,7 @@ async function decryptFromFriend(friendId, b64cipher){
     const pkResp = await (async (id) => {
       if (typeof getUserPublicKey === 'function') return getUserPublicKey(id);
       try{
-        const api = await import('./api.js?v=2');
+      const api = await import('./api.js');
         if (api && typeof api.getUserPublicKey === 'function') return api.getUserPublicKey(id);
       }catch(e){}
       return null;
