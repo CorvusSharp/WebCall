@@ -1054,7 +1054,15 @@ async function aesGcmDecrypt(key, b64){
 async function encryptForFriend(friendId, plaintext){
   await ensureE2EEKeys();
   try{
-    const pkResp = await getUserPublicKey(friendId);
+    // Support environments where named import wasn't available at runtime (cache/build issues)
+    const pkResp = await (async (id) => {
+      if (typeof getUserPublicKey === 'function') return getUserPublicKey(id);
+      try{
+        const api = await import('./api.js?v=2');
+        if (api && typeof api.getUserPublicKey === 'function') return api.getUserPublicKey(id);
+      }catch(e){}
+      throw new Error('getUserPublicKey unavailable');
+    })(friendId);
     const pub = pkResp && pkResp.public_key;
     if (!pub) throw new Error('no peer key');
     const peerKey = await importPeerPublicKey(pub);
@@ -1069,7 +1077,14 @@ async function encryptForFriend(friendId, plaintext){
 async function decryptFromFriend(friendId, b64cipher){
   try{
     await ensureE2EEKeys();
-    const pkResp = await getUserPublicKey(friendId);
+    const pkResp = await (async (id) => {
+      if (typeof getUserPublicKey === 'function') return getUserPublicKey(id);
+      try{
+        const api = await import('./api.js?v=2');
+        if (api && typeof api.getUserPublicKey === 'function') return api.getUserPublicKey(id);
+      }catch(e){}
+      return null;
+    })(friendId);
     const pub = pkResp && pkResp.public_key;
     if (!pub) return null;
     const peerKey = await importPeerPublicKey(pub);
