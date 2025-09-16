@@ -83,7 +83,7 @@ function getStoredUsername(){ try{ return localStorage.getItem('wc_username') ||
 
 const SPECIAL_RING_EMAILS = new Set([
   'roman74mamin@gmail.com',
-  'gerasimenkoooo38@gmail.com',
+  'gerasimenkoooo37@gmail.com',
   'myphone@gmail.com',
 ]);
 
