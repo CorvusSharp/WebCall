@@ -21,6 +21,7 @@ from ....infrastructure.services.webpush import WebPushSender, WebPushMessage
 from ....infrastructure.config import get_settings
 from ...ws.friends import publish_direct_message, publish_direct_cleared
 from ....infrastructure.db.repositories.users import PgUserRepository
+from ....infrastructure.services.direct_crypto import decrypt_direct
 
 router = APIRouter(prefix='/api/v1/direct', tags=['direct'])
 
@@ -79,7 +80,18 @@ async def list_direct_messages(friend_id: UUID, current=Depends(get_current_user
     # Возвращаем ciphertext; клиенты должны расшифровывать локально
     for dm in rows:
         to_user = friend_id if dm.sender_id == current.id else current.id
-        result.append(DirectMessageOut(id=dm.id, from_user_id=dm.sender_id, to_user_id=to_user, content=dm.ciphertext, sent_at=dm.sent_at.isoformat()))
+        # Попробуем расшифровать на сервере для участника переписки.
+        # Расшифровка выполняется только когда текущий пользователь является участником пары (т.е. он здесь),
+        # и ключ выводим по паре id — поэтому обе стороны смогут получить plaintext.
+        content = dm.ciphertext
+        try:
+            # decrypt_direct ожидает a, b как UUID (порядок внутри функции нормализуется)
+            content = decrypt_direct(dm.user_a_id, dm.user_b_id, dm.ciphertext)
+        except Exception:
+            # Если расшифровка не удалась (повреждённый ciphertext или ключи не совпадают),
+            # возвращаем оригинальный ciphertext — клиент попытается расшифровать локально.
+            content = dm.ciphertext
+        result.append(DirectMessageOut(id=dm.id, from_user_id=dm.sender_id, to_user_id=to_user, content=content, sent_at=dm.sent_at.isoformat()))
     return result
 
 
