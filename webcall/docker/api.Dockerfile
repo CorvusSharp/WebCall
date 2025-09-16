@@ -1,4 +1,16 @@
 # syntax=docker/dockerfile:1
+## Build frontend in a node stage, then copy into python image
+FROM node:18-alpine AS nodebuilder
+WORKDIR /build
+# copy package.json to install esbuild
+COPY package.json ./
+# install npm deps (including dev deps / esbuild)
+RUN npm install --production=false --silent
+# copy frontend sources (only the static JS folder to keep context small)
+COPY app/presentation/static/js ./app/presentation/static/js
+# build bundles (script defined in package.json)
+RUN npm run build
+
 FROM python:3.11-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -23,6 +35,10 @@ RUN poetry config virtualenvs.create false \
     && poetry install --no-interaction --no-ansi --with dev
 
 COPY . .
+
+# Copy built frontend bundle from node stage (if present) into static folder
+COPY --from=nodebuilder /build/app/presentation/static/js/bundle.js ./app/presentation/static/js/bundle.js
+COPY --from=nodebuilder /build/app/presentation/static/js/api.bundle.js ./app/presentation/static/js/api.bundle.js
 
 EXPOSE 8000
 

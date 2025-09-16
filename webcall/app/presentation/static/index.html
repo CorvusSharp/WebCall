@@ -154,7 +154,31 @@
     </template>
 
   <script src="/static/js/fx_web.js" defer></script>
-  <script type="module" src="/static/js/bundle.js"></script>
+  <script>
+    // Try to load prebuilt bundle; if it's missing (404), fall back to module entry for development
+    (async function(){
+      try{
+        const resp = await fetch('/static/js/bundle.js', { method: 'HEAD' });
+        if (resp.ok){
+          const s = document.createElement('script');
+          s.type = 'module';
+          s.src = '/static/js/bundle.js';
+          document.body.appendChild(s);
+        } else {
+          // fallback to original module (dev)
+          const s2 = document.createElement('script');
+          s2.type = 'module';
+          s2.src = '/static/js/main.js?v=2';
+          document.body.appendChild(s2);
+        }
+      }catch(e){
+        const s2 = document.createElement('script');
+        s2.type = 'module';
+        s2.src = '/static/js/main.js?v=2';
+        document.body.appendChild(s2);
+      }
+    })();
+  </script>
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/static/sw.js').catch(()=>{});

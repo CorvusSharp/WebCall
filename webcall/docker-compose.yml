@@ -12,8 +12,9 @@ services:
       - redis
       - coturn
     command: ["sh", "-lc", "python app/scripts/wait_for_db.py && alembic upgrade head && uvicorn app.bootstrap.asgi:app --host 0.0.0.0 --port 8000"]
-    volumes:
-      - ./:/app
+    # NOTE: In production we intentionally DO NOT mount the host source into the container
+    # because it would overwrite files that were copied into the image during build (including bundle.js).
+    # For local development you can add a volume mapping manually (e.g. - ./:/app) in your compose override.
 
   postgres:
     image: postgres:16
