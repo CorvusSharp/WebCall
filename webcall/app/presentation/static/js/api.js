@@ -150,3 +150,13 @@ export async function getUserPublicKey(userId){
   if (!r.ok) throw new Error(await r.text());
   return await r.json();
 }
+
+// Backwards-compatibility: expose functions on window for clients that for some reason
+// load a cached or transformed module without named exports. This is a safe short-term
+// workaround to restore functionality while debugging deployment/caching issues.
+try {
+  if (typeof window !== 'undefined') {
+    window.getUserPublicKey = getUserPublicKey;
+    window.setMyPublicKey = setMyPublicKey;
+  }
+} catch (e) { /* ignore */ }
