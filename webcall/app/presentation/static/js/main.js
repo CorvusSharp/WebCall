@@ -70,7 +70,7 @@ function getStoredUsername(){ try{ return localStorage.getItem('wc_username') ||
 
 const SPECIAL_RING_EMAILS = new Set([
   'roman74mamin@gmail.com',
-  'gerasimenkoooo37@gmail.com',
+  'gerasimenkoooo38@gmail.com',
   'myphone@gmail.com',
 ]);
 
@@ -192,8 +192,12 @@ function markCallAccepted(roomId){
     activeCall.status = 'accepted';
     if (els.callContext) els.callContext.textContent = `Звонок с: ${activeCall.withUserId}`;
   }
-  // Прекращаем рингтон при ответе
+  // Прекращаем рингтон при ответе и удаляем любые pending приглашения для этого пользователя
   stopSpecialRingtone();
+  try {
+    // Если был pending invite от этого пользователя — удалим
+    if (activeCall && activeCall.withUserId) pendingIncomingInvites.delete(activeCall.withUserId);
+  } catch {}
   loadFriends();
 }
 
@@ -202,8 +206,11 @@ function markCallDeclined(roomId){
     activeCall.status = 'declined';
     setTimeout(()=> resetActiveCall('declined'), 1500);
   }
-  // Прекращаем рингтон при отклонении
+  // Прекращаем рингтон при отклонении и удаляем pending запись
   stopSpecialRingtone();
+  try {
+    if (activeCall && activeCall.withUserId) pendingIncomingInvites.delete(activeCall.withUserId);
+  } catch {}
   loadFriends();
 }
 
@@ -889,11 +896,14 @@ async function loadFriends(){
               const info = pendingIncomingInvites.get(f.user_id);
               if (!info) return;
               try{
+                // Сначала пометим как принятый (чтобы рингтон был отключён и состояние было консистентным), затем выполним accept на сервере
+                markCallAccepted(info.roomId);
+                // Удаляем pending запись
+                pendingIncomingInvites.delete(f.user_id);
                 await acceptCall(f.user_id, info.roomId);
                 // join room
                 els.roomId.value = info.roomId;
                 try{ unlockAudioPlayback(); connect(); }catch{}
-                markCallAccepted(info.roomId);
               }catch(e){ console.error(e); }
             });
             const btnDecline = makeBtn('Отклонить', 'btn danger ghost', async (ev)=>{
@@ -901,6 +911,7 @@ async function loadFriends(){
               const info = pendingIncomingInvites.get(f.user_id);
               if (!info) return;
               try{ await declineCall(f.user_id, info.roomId); }catch{}
+              // Удаляем pending запись и помечаем звонок как отклонённый — это остановит рингтон
               pendingIncomingInvites.delete(f.user_id);
               markCallDeclined(info.roomId);
             });
