@@ -1106,7 +1106,30 @@ async function decryptFromFriend(friendId, b64cipher){
 }
 
 // Ensure keys on initial load (best-effort, non-blocking)
-ensureE2EEKeys().catch(()=>{});
+async function tryDecryptVisibleMessages(friendId){
+  if (!friendId) return;
+  if (!els || !els.directMessages) return;
+  try{
+    // For each chat-line, attempt to decrypt its content if it looks like base64 ciphertext
+    const lines = Array.from(els.directMessages.querySelectorAll('.chat-line'));
+    for (const line of lines){
+      try{
+        const who = line.querySelector('.who')?.textContent || '';
+        const msgEl = line.querySelector('.msg');
+        if (!msgEl) continue;
+        const currentText = msgEl.textContent || '';
+        // Heuristic: if it looks like base64 (only A-Z,a-z,0-9,+,/ and '=' padding) and not short
+        if (/^[A-Za-z0-9+/=\-_.]+$/.test(currentText) && currentText.length > 16){
+          const otherId = friendId;
+          const dec = await decryptFromFriend(otherId, currentText);
+          if (dec) msgEl.textContent = dec;
+        }
+      }catch{}
+    }
+  }catch{}
+}
+
+ensureE2EEKeys().then(()=>{ try { if (currentDirectFriend) tryDecryptVisibleMessages(currentDirectFriend); } catch{} }).catch(()=>{});
 function renderUserRow(container, u, opts={}){
   const row = document.createElement('div');
   row.className = 'list-item';
@@ -1585,7 +1608,13 @@ if (els.btnDirectSend){
     try{
       // Encrypt before sending (client-side E2EE)
       const ct = await encryptForFriend(currentDirectFriend, text);
-      if (!ct) throw new Error('encryption failed');
+      if (!ct) {
+        // Friendly message: likely the recipient hasn't registered a public key
+        try { alert('Не удалось зашифровать сообщение: у получателя отсутствует публичный ключ (E2EE). Попросите друга открыть приложение, чтобы его публичный ключ был зарегистрирован на сервере.'); } catch {}
+        throw new Error('encryption failed');
+      }
+  // Попытаться расшифровать отображённые сообщения теперь, когда ключи могут быть готовы
+  try { tryDecryptVisibleMessages(friendId).catch(()=>{}); } catch{}
       const t = localStorage.getItem('wc_token');
       const r = await fetch(`/api/v1/direct/${currentDirectFriend}/messages`, {
         method: 'POST',
