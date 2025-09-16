@@ -7,6 +7,9 @@ from fastapi import Depends, FastAPI
 from fastapi.responses import RedirectResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+import os
+from pathlib import Path
+# use FastAPI's http middleware decorator instead of importing starlette types
 
 from ..infrastructure.config import get_settings
 from ..infrastructure.logging import configure_logging
@@ -75,6 +78,28 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Security headers middleware: add common HTTP security headers to every response.
+    @app.middleware("http")
+    async def security_headers_middleware(request, call_next):
+        response = await call_next(request)
+        # Prevent MIME sniffing
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        # Clickjacking protection
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        # Referrer policy
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        # HSTS — only enable when running over HTTPS in production
+        if settings.APP_ENV not in {"dev", "test"}:
+            # one year, include subdomains, preload
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+        # Content Security Policy — conservative default that allows scripts/styles from self
+        # If you use inline scripts/styles or external CDNs, adjust this policy accordingly.
+        # Allow 'unsafe-inline' for scripts for now to preserve current inline loader & service worker registration.
+        # Consider moving inline scripts to external files and introducing nonces for better security.
+        csp = "default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none';"
+        response.headers.setdefault("Content-Security-Policy", csp)
+        return response
+
     setup_error_handlers(app)
 
     # Routers
@@ -92,8 +117,13 @@ def create_app() -> FastAPI:
     app.include_router(ws_rooms.router)
     app.include_router(ws_friends.router)
 
-    # Static demo
-    app.mount("/static", StaticFiles(directory="app/presentation/static"), name="static")
+    # Static demo — use absolute path to avoid cwd-related issues and accidental exposure
+    static_dir = str(Path(__file__).resolve().parent.parent.joinpath('presentation', 'static'))
+    if os.path.isdir(static_dir):
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    else:
+        # fallback to relative path if layout is unexpected
+        app.mount("/static", StaticFiles(directory="app/presentation/static"), name="static")
 
     # Friendly entrypoints instead of /static/index.html
     @app.get("/", include_in_schema=False)
@@ -102,15 +132,18 @@ def create_app() -> FastAPI:
 
     @app.get("/call", include_in_schema=False)
     async def call_page():
-        return FileResponse("app/presentation/static/index.html")
+        path = Path(static_dir).joinpath('index.html') if 'static_dir' in locals() else Path('app/presentation/static/index.html')
+        return FileResponse(str(path))
 
     @app.get("/call/{room_id}", include_in_schema=False)
     async def call_page_room(room_id: str):  # room_id is used client-side from location
-        return FileResponse("app/presentation/static/index.html")
+        path = Path(static_dir).joinpath('index.html') if 'static_dir' in locals() else Path('app/presentation/static/index.html')
+        return FileResponse(str(path))
 
     @app.get("/auth", include_in_schema=False)
     async def auth_page():
-        return FileResponse("app/presentation/static/auth.html")
+        path = Path(static_dir).joinpath('auth.html') if 'static_dir' in locals() else Path('app/presentation/static/auth.html')
+        return FileResponse(str(path))
 
     @app.get("/healthz", tags=["health"])
     async def healthz():

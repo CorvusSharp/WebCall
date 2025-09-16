@@ -924,16 +924,16 @@ async function loadVisitedRooms(){
       div.className = 'list-item';
       const title = it.name || it.room_id;
       const when = new Date(it.last_seen).toLocaleString();
-      div.innerHTML = `
-        <div class="grow">
-          <div class="bold">${title}</div>
-          <div class="muted small">${it.room_id} • ${when}</div>
-        </div>
-        <div style="display:flex; gap:8px;">
-          <button class="btn" data-room="${it.room_id}">Войти</button>
-          <button class="btn ghost danger" data-del="${it.room_id}" title="Удалить из истории">Удалить</button>
-        </div>
-      `;
+      const left = document.createElement('div');
+      left.className = 'grow';
+      const b = document.createElement('div'); b.className = 'bold'; b.textContent = title;
+      const meta = document.createElement('div'); meta.className = 'muted small'; meta.textContent = `${it.room_id} • ${when}`;
+      left.appendChild(b); left.appendChild(meta);
+      const right = document.createElement('div'); right.setAttribute('style', 'display:flex; gap:8px;');
+  const btnJoinInner = document.createElement('button'); btnJoinInner.className = 'btn'; btnJoinInner.dataset.room = it.room_id; btnJoinInner.textContent = 'Войти';
+  const btnDelInner = document.createElement('button'); btnDelInner.className = 'btn ghost danger'; btnDelInner.dataset.del = it.room_id; btnDelInner.title = 'Удалить из истории'; btnDelInner.textContent = 'Удалить';
+      right.appendChild(btnJoin); right.appendChild(btnDelInner);
+      div.appendChild(left); div.appendChild(right);
       const btnJoin = div.querySelector('button[data-room]');
       btnJoin.addEventListener('click', ()=>{
         els.roomId.value = it.room_id;
@@ -1215,14 +1215,12 @@ ensureE2EEKeys().then(()=>{ try { if (currentDirectFriend) tryDecryptVisibleMess
 function renderUserRow(container, u, opts={}){
   const row = document.createElement('div');
   row.className = 'list-item';
-  row.innerHTML = `
-    <div class="grow">
-      <div class="bold">${u.username}</div>
-      <div class="muted small">${u.email} • ${u.id?.slice?.(0,8) || ''}</div>
-    </div>
-    <div style="display:flex; gap:8px;"></div>
-  `;
-  const actions = row.querySelector('div[style]');
+  const left = document.createElement('div'); left.className = 'grow';
+  const bold = document.createElement('div'); bold.className = 'bold'; bold.textContent = u.username;
+  const meta = document.createElement('div'); meta.className = 'muted small'; meta.textContent = `${u.email} • ${u.id?.slice?.(0,8) || ''}`;
+  left.appendChild(bold); left.appendChild(meta);
+  const actions = document.createElement('div'); actions.setAttribute('style', 'display:flex; gap:8px;');
+  row.appendChild(left); row.appendChild(actions);
   (opts.actions || []).forEach(a => actions.appendChild(a));
   if (opts.onSelectDirect){
     row.style.cursor = 'pointer';
@@ -1606,8 +1604,10 @@ function appendDirectMessage(m, isSelf){
   const dt = new Date(m.sent_at || m.sentAt || Date.now());
   const ts = dt.toLocaleTimeString();
   const full = dt.toLocaleString();
-  div.innerHTML = `<span class="who">${isSelf ? 'Я' : (m.from_user_id||m.fromUserId||'--').slice(0,6)}</span> <span class="msg"></span> <span class="time" title="${full}">${ts}</span>`;
-  div.querySelector('.msg').textContent = m.content;
+  const whoSpan = document.createElement('span'); whoSpan.className = 'who'; whoSpan.textContent = isSelf ? 'Я' : (m.from_user_id||m.fromUserId||'--').slice(0,6);
+  const msgSpan = document.createElement('span'); msgSpan.className = 'msg'; msgSpan.textContent = m.content;
+  const timeSpan = document.createElement('span'); timeSpan.className = 'time'; timeSpan.title = full; timeSpan.textContent = ts;
+  div.appendChild(whoSpan); div.appendChild(msgSpan); div.appendChild(timeSpan);
   els.directMessages.appendChild(div);
 }
 
@@ -1785,7 +1785,10 @@ function updatePermBanner(){
       }
     } catch {}
     if (msgs.length){
-      els.permBanner.innerHTML = msgs.map(m=>`<div class="warn">${m}</div>`).join('');
+      els.permBanner.innerHTML = '';
+      msgs.forEach(m=>{
+        const el = document.createElement('div'); el.className = 'warn'; el.textContent = m; els.permBanner.appendChild(el);
+      });
       els.permBanner.style.display = '';
     } else {
       els.permBanner.innerHTML = '';

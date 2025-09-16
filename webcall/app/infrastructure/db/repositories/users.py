@@ -12,6 +12,7 @@ from ....core.domain.values import Email, PasswordHash
 from ....core.ports.repositories import UserRepository
 from ..models import Users
 from ....core.errors import ConflictError
+from ...db.utils import safe_like
 
 
 class PgUserRepository(UserRepository):
@@ -58,8 +59,24 @@ class PgUserRepository(UserRepository):
         await self.session.commit()
 
     async def search(self, query: str, limit: int = 10) -> list[User]:  # type: ignore[override]
-        q = f"%{query.lower()}%"
-        stmt = select(Users).where(or_(Users.username.ilike(q), Users.email.ilike(q))).order_by(Users.username.asc()).limit(limit)
+        pattern = safe_like(query, max_len=100)
+        if not pattern:
+            return []
+
+        stmt = (
+            select(Users)
+            .where(
+                or_(
+                    Users.username.ilike(pattern, escape='\\'),
+                    Users.email.ilike(pattern, escape='\\'),
+                )
+            )
+            .order_by(Users.username.asc())
+            .limit(limit)
+        )
         res = await self.session.execute(stmt)
         rows = res.scalars().all()
-        return [User(id=r.id, email=Email(r.email), username=r.username, password_hash=PasswordHash(r.password_hash), created_at=r.created_at) for r in rows]
+        return [
+            User(id=r.id, email=Email(r.email), username=r.username, password_hash=PasswordHash(r.password_hash), created_at=r.created_at)
+            for r in rows
+        ]
