@@ -1,5 +1,5 @@
 // main.js — вход (исправлено: логируем адрес WS, кнопка диагностики, стабильные presence/инициация)
-import { buildWs, subscribePush, findUsers, listFriends, listFriendRequests, sendFriendRequest, acceptFriend, notifyCall, acceptCall, declineCall, getMe } from './api.js?v=2';
+import { buildWs, subscribePush, findUsers, listFriends, listFriendRequests, sendFriendRequest, acceptFriend, notifyCall, acceptCall, declineCall, getMe, getUserPublicKey, setMyPublicKey } from './api.js?v=2';
 
 // ===== RUNTIME AUTH GUARD =====
 // Если пользователь не авторизован (нет валидного JWT в localStorage) —
