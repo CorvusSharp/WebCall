@@ -68,6 +68,11 @@ let specialRingtone = null;
 let specialRingtoneTimer = null; // больше не используется для повторов, но оставим для совместимости
 let specialRingtoneActive = false; // ожидаем играть (входящий инвайт у спец-email)
 let specialRingtonePlaying = false; // реально играет сейчас
+let specialRingtoneReady = null; // Promise единовременного создания
+
+// Autoplay / user gesture helpers
+let userGestureHappened = false;
+let pendingAutoplayTasks = [];
 
 function getStoredEmail(){ try{ return localStorage.getItem('wc_email') || ''; }catch{ return ''; } }
 function getStoredUsername(){ try{ return localStorage.getItem('wc_username') || ''; }catch{ return ''; } }
@@ -79,37 +84,49 @@ const SPECIAL_RING_EMAILS = new Set([
 ]);
 
 async function ensureSpecialRingtone(){
-  if (specialRingtone) return specialRingtone;
-  const candidates = [
-    // 1) файл с расширением .mp3
-    '/static/js/Sil-a%20%26%20YUNG%20TRAPPA%20-%20%D0%94%D0%B0%D0%B2%D0%B0%D0%B9%20%D0%BA%D0%B8%D0%BD%D0%B5%D0%BC%20%D0%B1%D0%B0%D1%80%D1%8B%D0%B3%D1%83.mp3',
-    // 2) тот же файл БЕЗ расширения (по факту в статике может лежать без .mp3)
-    '/static/js/Sil-a%20%26%20YUNG%20TRAPPA%20-%20%D0%94%D0%B0%D0%B2%D0%B0%D0%B9%20%D0%BA%D0%B8%D0%BD%D0%B5%D0%BC%20%D0%B1%D0%B0%D1%80%D1%8B%D0%B3%D1%83',
-  ];
-  for (const src of candidates){
-    try {
-      const audio = new Audio(src);
-      audio.preload = 'auto';
-      audio.loop = true; // играем пока не ответят/не отклонят
-      audio.volume = 1.0;
-      // Ждём метаданные или canplay, чтобы убедиться, что источник живой
-      const ok = await new Promise((resolve)=>{
-        let done = false;
-        const cleanup = ()=>{ if (done) return; done = true; audio.removeEventListener('loadedmetadata', onMeta); audio.removeEventListener('canplay', onCan); audio.removeEventListener('error', onErr); };
-        const onMeta = ()=>{ cleanup(); resolve(true); };
-        const onCan = ()=>{ cleanup(); resolve(true); };
-        const onErr = ()=>{ cleanup(); resolve(false); };
-        audio.addEventListener('loadedmetadata', onMeta, { once: true });
-        audio.addEventListener('canplay', onCan, { once: true });
-        audio.addEventListener('error', onErr, { once: true });
-        try { audio.load?.(); } catch {}
-        // safety: если readyState уже достаточен
-        setTimeout(()=>{ if (audio.readyState >= 1) { cleanup(); resolve(true); } }, 50);
-      });
-      if (ok){ specialRingtone = audio; return specialRingtone; }
-    } catch {}
-  }
-  return specialRingtone; // может быть null, если не нашли
+  // Singleton creation with concurrency protection
+  if (specialRingtone) return Promise.resolve(specialRingtone);
+  if (specialRingtoneReady) return specialRingtoneReady;
+
+  specialRingtoneReady = (async () => {
+    const candidates = [
+      '/static/js/Sil-a%20%26%20YUNG%20TRAPPA%20-%20%D0%94%D0%B0%D0%B2%D0%B0%D0%B9%20%D0%BA%D0%B8%D0%BD%D0%B5%D0%BC%20%D0%B1%D0%B0%D1%80%D1%8B%D0%B3%D1%83.mp3',
+      '/static/js/Sil-a%20%26%20YUNG%20TRAPPA%20-%20%D0%94%D0%B0%D0%B2%D0%B0%D0%B9%20%D0%BA%D0%B8%D0%BD%D0%B5%D0%BC%20%D0%B1%D0%B0%D1%80%D1%8B%D0%B3%D1%83',
+    ];
+    for (const src of candidates){
+      try{
+        const audio = new Audio(src);
+        audio.preload = 'auto';
+        audio.loop = true;
+        audio.volume = 1.0;
+        const ok = await new Promise((resolve)=>{
+          let done = false;
+          const cleanup = ()=>{ if (done) return; done = true;
+            audio.removeEventListener('loadedmetadata', onMeta);
+            audio.removeEventListener('canplay', onCan);
+            audio.removeEventListener('error', onErr);
+          };
+          const onMeta = ()=>{ cleanup(); resolve(true); };
+          const onCan  = ()=>{ cleanup(); resolve(true); };
+          const onErr  = ()=>{ cleanup(); resolve(false); };
+          audio.addEventListener('loadedmetadata', onMeta, {once:true});
+          audio.addEventListener('canplay',        onCan,  {once:true});
+          audio.addEventListener('error',          onErr,  {once:true});
+          try{ audio.load?.(); }catch{}
+          setTimeout(()=>{ if (audio.readyState >= 1){ cleanup(); resolve(true); } }, 50);
+        });
+        if (ok){
+          specialRingtone = audio;
+          return specialRingtone;
+        }
+      }catch{}
+    }
+    return null;
+  })();
+
+  const a = await specialRingtoneReady;
+  specialRingtoneReady = null;
+  return a;
 }
 
 function startSpecialRingtone(){
@@ -118,6 +135,17 @@ function startSpecialRingtone(){
   // Auto-kill timer to avoid infinite ringing (60 seconds)
   try{ if (specialRingtoneTimer) { clearTimeout(specialRingtoneTimer); specialRingtoneTimer = null; } }catch{}
   try{ specialRingtoneTimer = setTimeout(()=> { try{ stopSpecialRingtone(); }catch{} }, 60000); }catch{}
+  // Если пользовательский жест ещё не случился — отложим запуск до первого жеста
+  if (!userGestureHappened){
+    // Один токен, чтобы не плодить дубликаты
+    if (!pendingAutoplayTasks.some(fn => fn && fn.__ring)){
+      const runner = () => startSpecialRingtone();
+      runner.__ring = true;
+      pendingAutoplayTasks.push(runner);
+    }
+    return;
+  }
+
   // Требуем разблокировки аудио политиками браузера
   unlockAudioPlayback();
   ensureSpecialRingtone().then(audio => {
@@ -163,9 +191,9 @@ function stopSpecialRingtone(){
     // Try to aggressively reset audio so browser won't auto-resume
     try{ specialRingtone.loop = false; }catch{}
     try{ specialRingtone.currentTime = 0; }catch{}
-    try{ specialRingtone.removeAttribute && specialRingtone.removeAttribute('src'); }catch{}
-    try{ specialRingtone.src = ''; }catch{}
-    try{ specialRingtone.load?.(); }catch{}
+    // IMPORTANT: do not clear src or call load() — that can leave the Audio
+    // object in a broken state. Keep the instance cached (singleton) so
+    // subsequent ensureSpecialRingtone() returns a live object.
   }
   if (specialRingtoneTimer) { try{ clearTimeout(specialRingtoneTimer); }catch{} specialRingtoneTimer = null; }
 }
@@ -678,7 +706,7 @@ function safeReleaseMedia(el){
 // Try to unlock browser audio autoplay policies
 function unlockAudioPlayback(){
   try{
-    if (!audioGestureAllowed) return; // do nothing until the user gesture allows audio
+    if (!userGestureHappened) return false; // do nothing until user gesture
     // Create/resume a global AudioContext to satisfy iOS/Safari/Chrome policies
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (Ctx){
@@ -696,7 +724,7 @@ function unlockAudioPlayback(){
     }
     // Attempt to play any existing <audio> elements
     document.querySelectorAll('audio').forEach(a=>{
-      try{ a.muted = false; a.volume = 1.0; a.play().catch(()=>{}); }catch{}
+      try{ a.playsInline = true; a.muted = false; a.volume = 1.0; a.play().catch(()=>{}); }catch{}
     });
     // Если в момент разблокировки у нас есть входящий звонок в статусе invited для спец-email — запустим или перезапустим рингтон
     try {
@@ -774,9 +802,22 @@ function setupUI(){
   }
 
   // Fallback global unlock on any user gesture (first one only)
-  const gestureUnlock = ()=>{ audioGestureAllowed = true; try{ unlockAudioPlayback(); }catch{}; document.removeEventListener('click', gestureUnlock); document.removeEventListener('touchstart', gestureUnlock); };
+  const runPendingAutoplay = ()=>{
+    const tasks = pendingAutoplayTasks.slice();
+    pendingAutoplayTasks = [];
+    for (const t of tasks){ try{ t(); }catch{} }
+  };
+  const gestureUnlock = ()=>{
+    userGestureHappened = true;
+    try{ unlockAudioPlayback(); }catch{};
+    try{ runPendingAutoplay(); }catch{};
+    document.removeEventListener('click', gestureUnlock, { capture: true });
+    document.removeEventListener('touchstart', gestureUnlock, { capture: true });
+    document.removeEventListener('keydown', gestureUnlock, { capture: true });
+  };
   document.addEventListener('click', gestureUnlock, { once: true, capture: true });
   document.addEventListener('touchstart', gestureUnlock, { once: true, capture: true });
+  document.addEventListener('keydown', gestureUnlock, { once: true, capture: true });
 
   // Restore theme
   if (localStorage.getItem('theme') === 'dark') document.body.classList.add('dark');
