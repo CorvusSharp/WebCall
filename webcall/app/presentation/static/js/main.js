@@ -53,6 +53,9 @@ let globalAudioCtx = null;
 let latestUserNames = {}; // { connId: displayName }
 let friendsWs = null;
 let currentDirectFriend = null; // UUID друга выбранного в личном чате
+// Throttle map to avoid multiple concurrent startOffer for same peer
+const recentOffer = new Map(); // peerId -> timestamp
+let peerCleanupIntervalId = null;
 // Пер-друг кэш id сообщений чтобы не дублировать (Map<friendId, Set<msgId>>)
 const directSeenByFriend = new Map();
 // Количество непрочитанных per друг
@@ -111,6 +114,9 @@ async function ensureSpecialRingtone(){
 function startSpecialRingtone(){
   const wasActive = specialRingtoneActive;
   specialRingtoneActive = true;
+  // Auto-kill timer to avoid infinite ringing (60 seconds)
+  try{ if (specialRingtoneTimer) { clearTimeout(specialRingtoneTimer); specialRingtoneTimer = null; } }catch{}
+  try{ specialRingtoneTimer = setTimeout(()=> { try{ stopSpecialRingtone(); }catch{} }, 60000); }catch{}
   // Требуем разблокировки аудио политиками браузера
   unlockAudioPlayback();
   ensureSpecialRingtone().then(audio => {
@@ -151,8 +157,16 @@ function startSpecialRingtone(){
 function stopSpecialRingtone(){
   specialRingtoneActive = false;
   specialRingtonePlaying = false;
-  if (specialRingtone){ try{ specialRingtone.pause(); }catch{} }
-  if (specialRingtoneTimer) { clearTimeout(specialRingtoneTimer); specialRingtoneTimer = null; }
+  if (specialRingtone){
+    try{ specialRingtone.pause(); }catch{}
+    // Try to aggressively reset audio so browser won't auto-resume
+    try{ specialRingtone.loop = false; }catch{}
+    try{ specialRingtone.currentTime = 0; }catch{}
+    try{ specialRingtone.removeAttribute && specialRingtone.removeAttribute('src'); }catch{}
+    try{ specialRingtone.src = ''; }catch{}
+    try{ specialRingtone.load?.(); }catch{}
+  }
+  if (specialRingtoneTimer) { try{ clearTimeout(specialRingtoneTimer); }catch{} specialRingtoneTimer = null; }
 }
 
 // ===== Call state (эфемерные звонки) =====
@@ -427,7 +441,31 @@ async function connect(){
       ws.send(JSON.stringify({ type: 'join', fromUserId: userId, username: storedUname }));
     } catch {}
 
-    await rtc.init(ws, userId, { micId: selected.mic, camId: selected.cam });
+  await rtc.init(ws, userId, { micId: selected.mic, camId: selected.cam });
+  // После инициализации RTC — если мы в звонке, рингтон больше не нужен
+  try{ stopSpecialRingtone(); }catch{}
+    // Запустим периодическую очистку застрявших peer-ов
+    try{
+      if (peerCleanupIntervalId) { clearInterval(peerCleanupIntervalId); peerCleanupIntervalId = null; }
+      peerCleanupIntervalId = setInterval(()=>{
+        try{
+          if (!rtc || !rtc.peers) return;
+          const now = Date.now();
+          for (const [pid, st] of Array.from(rtc.peers.entries())){
+            const created = st.createdAt || st._createdAt || 0;
+            if (!created){ try{ st.createdAt = now; }catch{}; continue; }
+            if (now - created > 30000){
+              try{ st.pc && st.pc.close(); }catch{};
+              try{ if (st.level?.raf) cancelAnimationFrame(st.level.raf); }catch{};
+              rtc.peers.delete(pid);
+              const tile = document.querySelector(`.tile[data-peer="${pid}"]`);
+              if (tile) { try{ safeReleaseMedia(tile); }catch{} try{ tile.remove(); }catch{} }
+              log(`Удалён зависший пир ${pid}`);
+            }
+          }
+        }catch{}
+      }, 5000);
+    }catch{}
     try{
       const hasVideo = !!(rtc.localStream && rtc.localStream.getVideoTracks()[0] && rtc.localStream.getVideoTracks()[0].enabled);
       const card = document.getElementById('localCard');
@@ -476,10 +514,20 @@ async function connect(){
         }
       }
       for (const peerId of msg.users){
-        if (peerId !== myId) {
+        if (peerId === myId) continue;
+        try{
+          const last = recentOffer.get(peerId) || 0;
+          const now = Date.now();
+          if (now - last < 3000){
+            log(`Пропущен повторный старт для ${peerId}`);
+            continue;
+          }
+          recentOffer.set(peerId, now);
+        }catch{}
+        try{
           log(`Обнаружен пир ${peerId}, инициирую звонок...`);
           await rtc.startOffer(peerId);
-        }
+        }catch(e){ log(`startOffer(${peerId}) failed: ${e}`); }
       }
     }
     else if (msg.type === 'user_joined'){
@@ -517,9 +565,12 @@ async function connect(){
   ws.onclose = (ev) => {
     log(`WS закрыт: ${ev.code} ${ev.reason}`);
     setConnectedState(false);
+    // При закрытии WS гарантированно гасим спец-рингтон
+    try{ stopSpecialRingtone(); }catch{}
     if (pingTimer) clearInterval(pingTimer);
     if (rtc) { rtc.close(); rtc = null; }
     ws = null;
+    try{ if (peerCleanupIntervalId) { clearInterval(peerCleanupIntervalId); peerCleanupIntervalId = null; } }catch{}
 
     if (!isManuallyDisconnected && !isReconnecting) {
       isReconnecting = true;
@@ -556,6 +607,7 @@ function bindPeerMedia(peerId){
   rtc.bindPeerMedia(peerId, {
     onTrack: (stream) => {
       log(`Получен медиа-поток от ${peerId.slice(0,6)}`);
+      try{ stopSpecialRingtone(); }catch{}
       if (video) video.srcObject = stream;
       if (audio) {
         // Привязываем поток и сохраняем ссылку для безопасной очистки
@@ -667,6 +719,7 @@ function leave(){
   }catch{}
   els.peersGrid.innerHTML = '';
   log('Отключено');
+  try{ if (peerCleanupIntervalId) { clearInterval(peerCleanupIntervalId); peerCleanupIntervalId = null; } }catch{}
   // если был активный звонок — сбросим статус
   if (activeCall) { resetActiveCall('leave'); }
   // обновим историю
@@ -1147,12 +1200,16 @@ function startFriendsWs(){
           // Уже в звонке/ожидании: игнорируем
           break; }
         case 'call_accept': {
-          // наш собеседник принял: если это наш исходящий звонок — статус accepted и если мы ещё не подключены к этой комнате, уже подключены
+          // Всегда гасим рингтон на случай гонки/рассинхронизации
+          try{ stopSpecialRingtone(); }catch{}
+          // наш собеседник принял: если это наш исходящий звонок — помечаем accepted
           if (activeCall && activeCall.roomId === msg.roomId){
             markCallAccepted(msg.roomId);
           }
           break; }
         case 'call_decline': {
+          // Всегда гасим рингтон на случай гонки/рассинхронизации
+          try{ stopSpecialRingtone(); }catch{}
           if (activeCall && activeCall.roomId === msg.roomId){
             markCallDeclined(msg.roomId);
           }
