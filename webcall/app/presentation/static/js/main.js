@@ -50,6 +50,7 @@ let isReconnecting = false;
 let selected = { mic: null, cam: null, spk: null };
 let audioUnlocked = false;
 let globalAudioCtx = null;
+let audioGestureAllowed = false; // set true after first user gesture
 let latestUserNames = {}; // { connId: displayName }
 let friendsWs = null;
 let currentDirectFriend = null; // UUID друга выбранного в личном чате
@@ -677,6 +678,7 @@ function safeReleaseMedia(el){
 // Try to unlock browser audio autoplay policies
 function unlockAudioPlayback(){
   try{
+    if (!audioGestureAllowed) return; // do nothing until the user gesture allows audio
     // Create/resume a global AudioContext to satisfy iOS/Safari/Chrome policies
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (Ctx){
@@ -772,7 +774,7 @@ function setupUI(){
   }
 
   // Fallback global unlock on any user gesture (first one only)
-  const gestureUnlock = ()=>{ unlockAudioPlayback(); document.removeEventListener('click', gestureUnlock); document.removeEventListener('touchstart', gestureUnlock); };
+  const gestureUnlock = ()=>{ audioGestureAllowed = true; try{ unlockAudioPlayback(); }catch{}; document.removeEventListener('click', gestureUnlock); document.removeEventListener('touchstart', gestureUnlock); };
   document.addEventListener('click', gestureUnlock, { once: true, capture: true });
   document.addEventListener('touchstart', gestureUnlock, { once: true, capture: true });
 
