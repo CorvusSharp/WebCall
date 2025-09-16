@@ -1,5 +1,5 @@
 // main.js — вход (исправлено: логируем адрес WS, кнопка диагностики, стабильные presence/инициация)
-import { buildWs, subscribePush, findUsers, listFriends, listFriendRequests, sendFriendRequest, acceptFriend, notifyCall, acceptCall, declineCall, getMe, getUserPublicKey, setMyPublicKey } from './api.js?v=2';
+import { buildWs, subscribePush, findUsers, listFriends, listFriendRequests, sendFriendRequest, acceptFriend, notifyCall, acceptCall, declineCall, getMe } from './api.js?v=2';
 
 // ===== RUNTIME AUTH GUARD =====
 // Если пользователь не авторизован (нет валидного JWT в localStorage) —
@@ -1010,8 +1010,17 @@ async function ensureE2EEKeys(){
     _e2ee_keypair = await window.crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']);
     const raw = await window.crypto.subtle.exportKey('raw', _e2ee_keypair.publicKey);
     _e2ee_exported_pub = btoa(String.fromCharCode(...new Uint8Array(raw)));
-    // send public key to server
-    try{ await setMyPublicKey(_e2ee_exported_pub); }catch{};
+    // send public key to server — use dynamic import fallback if named import not available
+    try{
+      if (typeof setMyPublicKey === 'function') {
+        await setMyPublicKey(_e2ee_exported_pub);
+      } else {
+        try{
+          const api = await import('./api.js?v=2');
+          if (api && typeof api.setMyPublicKey === 'function') await api.setMyPublicKey(_e2ee_exported_pub);
+        }catch(e){}
+      }
+    }catch{}
     return _e2ee_keypair;
   }catch(e){ console.error('E2EE key gen failed', e); return null; }
 }
