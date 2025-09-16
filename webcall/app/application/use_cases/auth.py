@@ -32,6 +32,8 @@ class LoginUser:
 
     async def execute(self, email: str, password: str) -> str:
         user = await self.users.get_by_email(email)
+        # Keep error message generic (do not leak whether email exists)
+        # Provide a user-friendly message in Russian so frontend can show it directly
         if not user or not self.hasher.verify(password, str(user.password_hash)):
-            raise AuthError("Invalid credentials")
+            raise AuthError("Неверный email или пароль")
         return self.tokens.create_access_token(str(user.id), None)

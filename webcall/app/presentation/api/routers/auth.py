@@ -25,7 +25,9 @@ async def register(
     settings = get_settings()
     provided = data.secret
     if not hmac.compare_digest(provided.encode(), settings.REGISTRATION_SECRET.encode()):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid registration secret")
+        # Keep the word 'secret' in the message because tests assert it appears,
+        # but make the message clearer for users.
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Неверный секретный код (secret)")
 
     use = RegisterUser(users, hasher)
     user = await use.execute(email=data.email, username=data.username, password=data.password)

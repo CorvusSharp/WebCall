@@ -70,12 +70,40 @@ function applyPostLogin(token){
 }
 
 async function doLogin(){
-  const email = els.loginEmail.value.trim();
-  const password = els.loginPassword.value;
+  clearFieldErrors();
+  const email = (els.loginEmail.value || '').trim();
+  const password = els.loginPassword.value || '';
+  if (!email) return fieldError(els.loginEmail, 'Укажите email.');
+  if (!password) return fieldError(els.loginPassword, 'Введите пароль.');
+
+  // Disable buttons while request is running
+  els.btnDoLogin.disabled = true;
   try{
     const data = await login(email, password);
     applyPostLogin(data.access_token);
-  }catch(e){ log(String(e)); }
+  }catch(e){
+    // e may be an Error with message body or a thrown object; normalize to string
+    let raw = '';
+    try { raw = typeof e === 'string' ? e : (e?.message || JSON.stringify(e)); } catch { raw = String(e); }
+    // Try parse JSON body
+    try{
+      if (raw && raw.trim().startsWith('{')){
+        const j = JSON.parse(raw);
+        if (j.detail && typeof j.detail === 'string') raw = j.detail;
+      }
+    }catch{}
+
+    // Map known server messages to field-level errors
+    if (/Неверный email или пароль/i.test(raw) || /invalid credentials/i.test(raw)){
+      fieldError(els.loginEmail, 'Неверный email или пароль.');
+      fieldError(els.loginPassword, 'Неверный email или пароль.');
+    } else {
+      // Fallback: show raw message in log for debugging
+      log(raw || 'Ошибка при входе');
+    }
+  }finally{
+    els.btnDoLogin.disabled = false;
+  }
 }
 
 async function doRegister(){
