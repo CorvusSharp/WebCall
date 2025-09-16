@@ -173,12 +173,12 @@ async def publish_friend_removed(user_a: UUID, user_b: UUID):
     })
 
 
-async def publish_direct_message(from_user: UUID, to_user: UUID, message_id: UUID, plaintext: str, sent_at):
+async def publish_direct_message(from_user: UUID, to_user: UUID, message_id: UUID, ciphertext: str, sent_at):
     payload = {
         'type': 'direct_message',
         'fromUserId': str(from_user),
         'toUserId': str(to_user),
-        'content': plaintext,
+        'content': ciphertext,
         'messageId': str(message_id),
         'sentAt': sent_at.isoformat(),
     }

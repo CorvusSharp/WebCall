@@ -15,11 +15,12 @@ from ....infrastructure.db.repositories.direct_messages import PgDirectMessageRe
 from ....infrastructure.db.repositories.direct_reads import PgDirectReadStateRepository
 from ....infrastructure.db.repositories.push_subs import PgPushSubscriptionRepository
 from ....infrastructure.db.repositories.users import PgUserRepository
+from ..deps.containers import get_user_repo
 from ....infrastructure.db.session import get_session
 from ....infrastructure.services.webpush import WebPushSender, WebPushMessage
 from ....infrastructure.config import get_settings
-from ....infrastructure.services.direct_crypto import encrypt_direct, decrypt_direct
 from ...ws.friends import publish_direct_message, publish_direct_cleared
+from ....infrastructure.db.repositories.users import PgUserRepository
 
 router = APIRouter(prefix='/api/v1/direct', tags=['direct'])
 
@@ -48,6 +49,24 @@ async def get_read_repo(session=Depends(get_db_session)) -> DirectReadStateRepos
     return PgDirectReadStateRepository(session)
 
 
+class PublicKeyIn(BaseModel):
+    public_key: str
+
+
+@router.post('/me/public_key')
+async def set_my_public_key(body: PublicKeyIn, current=Depends(get_current_user), users: PgUserRepository = Depends(get_user_repo)):
+    await users.set_public_key(current.id, body.public_key)
+    return {"ok": True}
+
+
+@router.get('/{friend_id}/public_key')
+async def get_friend_public_key(friend_id: UUID, users: PgUserRepository = Depends(get_user_repo)):
+    u = await users.get_by_id(friend_id)
+    if not u:
+        raise HTTPException(status_code=404, detail='Not found')
+    return {"public_key": u.public_key}
+
+
 @router.get('/{friend_id}/messages', response_model=List[DirectMessageOut])
 async def list_direct_messages(friend_id: UUID, current=Depends(get_current_user), frepo: FriendshipRepository = Depends(get_friend_repo), dms: DirectMessageRepository = Depends(get_dm_repo)):
     f = await frepo.get_pair(current.id, friend_id)
@@ -57,14 +76,10 @@ async def list_direct_messages(friend_id: UUID, current=Depends(get_current_user
     # Возвращаем в прямом порядке по времени (старые -> новые)
     rows = list(reversed(rows))
     result: list[DirectMessageOut] = []
+    # Возвращаем ciphertext; клиенты должны расшифровывать локально
     for dm in rows:
-        # Определяем кому адресовано сообщение
         to_user = friend_id if dm.sender_id == current.id else current.id
-        try:
-            plaintext = decrypt_direct(current.id, friend_id, dm.ciphertext)
-        except Exception:
-            plaintext = '(decrypt error)'
-        result.append(DirectMessageOut(id=dm.id, from_user_id=dm.sender_id, to_user_id=to_user, content=plaintext, sent_at=dm.sent_at.isoformat()))
+        result.append(DirectMessageOut(id=dm.id, from_user_id=dm.sender_id, to_user_id=to_user, content=dm.ciphertext, sent_at=dm.sent_at.isoformat()))
     return result
 
 
@@ -98,17 +113,17 @@ async def post_direct_message(friend_id: UUID, body: DirectMessageIn, background
     content = body.content.strip()
     if not content:
         raise HTTPException(status_code=400, detail='Empty content')
-    # Шифруем
-    ciphertext = encrypt_direct(current.id, friend_id, content)
+    # Ожидаем, что клиент уже прислал ciphertext (E2EE): сохраняем как есть
+    ciphertext = content  # сервер принимает ciphertext
     dm = DirectMessage.create(current.id, friend_id, current.id, ciphertext)
     await dms.add(dm)
-    # Публикация события обеим сторонам (plaintext)
+    # Публикация события обеим сторонам (ciphertext)
     try:
-        await publish_direct_message(current.id, friend_id, dm.id, content, dm.sent_at)
+        await publish_direct_message(current.id, friend_id, dm.id, ciphertext, dm.sent_at)
     except Exception:
         pass
     # Мгновенное пуш-уведомление получателю (не дожидаясь 10 минут)
-    async def _instant_push(sender_id: UUID, to_id: UUID, plaintext: str):
+    async def _instant_push(sender_id: UUID, to_id: UUID, ciphertext: str):
         settings = get_settings()
         if not (settings.VAPID_PUBLIC_KEY and settings.VAPID_PRIVATE_KEY and settings.VAPID_SUBJECT):
             return
@@ -126,7 +141,7 @@ async def post_direct_message(friend_id: UUID, body: DirectMessageIn, background
                 subject=settings.VAPID_SUBJECT,
             )
             title = "Новое сообщение"
-            body_text = f"Вам сообщение от {sender_name}"
+            body_text = f"Вам новое сообщение"  # avoid including plaintext in push
             for s in subs:
                 try:
                     await push_sender.send(
@@ -137,7 +152,7 @@ async def post_direct_message(friend_id: UUID, body: DirectMessageIn, background
                     )
                 except Exception:
                     pass
-    background.add_task(_instant_push, current.id, friend_id, content)
+    background.add_task(_instant_push, current.id, friend_id, ciphertext)
     # Планируем отложенное пуш-уведомление через 10 минут, если получатель не прочитал
     async def _delayed_push_if_unread(sender_id: UUID, to_id: UUID, sent_at_iso: str):
         # Ждём 10 минут, затем проверяем, прочитано ли сообщение (по last_read)
@@ -177,7 +192,7 @@ async def post_direct_message(friend_id: UUID, body: DirectMessageIn, background
                 subject=settings.VAPID_SUBJECT,
             )
             title = "Новое сообщение"
-            body_text = f"Вам сообщение от {sender_name}"
+            body_text = f"Вам новое сообщение"  # do not include message body
             for s in subs:
                 try:
                     await push_sender.send(

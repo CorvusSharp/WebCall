@@ -29,7 +29,7 @@ class PgUserRepository(UserRepository):
     async def get_by_id(self, user_id: UUID) -> Optional[User]:  # type: ignore[override]
         row = await self.session.get(Users, user_id)
         if row:
-            return User(id=row.id, email=Email(row.email), username=row.username, password_hash=PasswordHash(row.password_hash), created_at=row.created_at)
+            return User(id=row.id, email=Email(row.email), username=row.username, password_hash=PasswordHash(row.password_hash), created_at=row.created_at, public_key=row.public_key)
         return None
 
     async def get_by_username(self, username: str) -> Optional[User]:  # type: ignore[override]
@@ -41,13 +41,21 @@ class PgUserRepository(UserRepository):
         return None
 
     async def add(self, user: User) -> None:  # type: ignore[override]
-        self.session.add(Users(id=user.id, email=str(user.email), username=user.username, password_hash=str(user.password_hash), created_at=user.created_at))
+        self.session.add(Users(id=user.id, email=str(user.email), username=user.username, password_hash=str(user.password_hash), public_key=user.public_key if hasattr(user, 'public_key') else None, created_at=user.created_at))
         try:
             await self.session.commit()
         except IntegrityError as e:
             await self.session.rollback()
             # Переводим БД-ошибку в доменную 409
             raise ConflictError("User with same email or username already exists") from e
+
+    async def set_public_key(self, user_id: UUID, public_key: str) -> None:
+        row = await self.session.get(Users, user_id)
+        if not row:
+            return
+        row.public_key = public_key
+        self.session.add(row)
+        await self.session.commit()
 
     async def search(self, query: str, limit: int = 10) -> list[User]:  # type: ignore[override]
         q = f"%{query.lower()}%"

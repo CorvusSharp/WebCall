@@ -996,6 +996,93 @@ function urlBase64ToUint8Array(base64String){
 }
 
 // ===== Friends UI =====
+// ==== E2EE helpers (Web Crypto) ====
+// NOTE: This is a minimal client-side E2EE using ECDH (P-256) to derive a symmetric key and AES-GCM for messages.
+// It's not as feature-rich as Signal (no forward secrecy across sessions, no multi-device key management).
+let _e2ee_keypair = null; // CryptoKeyPair
+let _e2ee_exported_pub = null; // base64 string
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+
+async function ensureE2EEKeys(){
+  if (_e2ee_keypair) return _e2ee_keypair;
+  try{
+    _e2ee_keypair = await window.crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']);
+    const raw = await window.crypto.subtle.exportKey('raw', _e2ee_keypair.publicKey);
+    _e2ee_exported_pub = btoa(String.fromCharCode(...new Uint8Array(raw)));
+    // send public key to server
+    try{ await setMyPublicKey(_e2ee_exported_pub); }catch{};
+    return _e2ee_keypair;
+  }catch(e){ console.error('E2EE key gen failed', e); return null; }
+}
+
+async function importPeerPublicKey(base64){
+  try{
+    const raw = Uint8Array.from(atob(base64), c=>c.charCodeAt(0)).buffer;
+    return await window.crypto.subtle.importKey('raw', raw, { name: 'ECDH', namedCurve: 'P-256' }, true, []);
+  }catch(e){ return null; }
+}
+
+async function deriveSharedKey(peerPubKey, myKeyPair){
+  try{
+    const key = await window.crypto.subtle.deriveKey({ name: 'ECDH', public: peerPubKey }, myKeyPair.privateKey, { name: 'AES-GCM', length: 256 }, false, ['encrypt','decrypt']);
+    return key;
+  }catch(e){ return null; }
+}
+
+async function aesGcmEncrypt(key, plaintext){
+  const iv = window.crypto.getRandomValues(new Uint8Array(12));
+  const ct = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, textEncoder.encode(plaintext));
+  // return base64(iv|ciphertext)
+  const buf = new Uint8Array(iv.byteLength + ct.byteLength);
+  buf.set(iv, 0);
+  buf.set(new Uint8Array(ct), iv.byteLength);
+  return btoa(String.fromCharCode(...buf));
+}
+
+async function aesGcmDecrypt(key, b64){
+  try{
+    const raw = Uint8Array.from(atob(b64), c=>c.charCodeAt(0));
+    const iv = raw.slice(0,12);
+    const ct = raw.slice(12).buffer;
+    const plain = await window.crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+    return textDecoder.decode(plain);
+  }catch(e){ return null; }
+}
+
+// High-level encrypt for peer by friendId (fetch peer public key from server, derive shared key and encrypt)
+async function encryptForFriend(friendId, plaintext){
+  await ensureE2EEKeys();
+  try{
+    const pkResp = await getUserPublicKey(friendId);
+    const pub = pkResp && pkResp.public_key;
+    if (!pub) throw new Error('no peer key');
+    const peerKey = await importPeerPublicKey(pub);
+    if (!peerKey) throw new Error('bad peer key');
+    const shared = await deriveSharedKey(peerKey, _e2ee_keypair);
+    if (!shared) throw new Error('derive failed');
+    const ct = await aesGcmEncrypt(shared, plaintext);
+    return ct;
+  }catch(e){ console.error('encryptForFriend failed', e); return null; }
+}
+
+async function decryptFromFriend(friendId, b64cipher){
+  try{
+    await ensureE2EEKeys();
+    const pkResp = await getUserPublicKey(friendId);
+    const pub = pkResp && pkResp.public_key;
+    if (!pub) return null;
+    const peerKey = await importPeerPublicKey(pub);
+    if (!peerKey) return null;
+    const shared = await deriveSharedKey(peerKey, _e2ee_keypair);
+    if (!shared) return null;
+    const plain = await aesGcmDecrypt(shared, b64cipher);
+    return plain;
+  }catch(e){ console.error('decryptFromFriend failed', e); return null; }
+}
+
+// Ensure keys on initial load (best-effort, non-blocking)
+ensureE2EEKeys().catch(()=>{});
 function renderUserRow(container, u, opts={}){
   const row = document.createElement('div');
   row.className = 'list-item';
@@ -1406,13 +1493,16 @@ function handleIncomingDirect(msg){
     if (!seen){ seen = new Set(); directSeenByFriend.set(currentDirectFriend, seen); }
     if (mid && seen.has(mid)) return; // уже добавили
     if (mid) seen.add(mid);
-    appendDirectMessage({
-      id: mid,
-      from_user_id: msg.fromUserId,
-      content: msg.content,
-      sent_at: msg.sentAt
-    }, msg.fromUserId === acc);
-    scrollDirectToEnd();
+    (async ()=>{
+      let plaintext = msg.content;
+      try{
+        const otherId = msg.fromUserId === acc ? msg.toUserId : msg.fromUserId;
+        const dec = await decryptFromFriend(otherId, msg.content);
+        if (dec) plaintext = dec;
+      }catch(e){ /* ignore */ }
+      appendDirectMessage({ id: mid, from_user_id: msg.fromUserId, content: plaintext, sent_at: msg.sentAt }, msg.fromUserId === acc);
+      scrollDirectToEnd();
+    })();
   } else {
     // Не активный чат: считаем непрочитанные
     if (acc && msg.fromUserId !== acc){
@@ -1469,11 +1559,14 @@ if (els.btnDirectSend){
     const text = (els.directInput?.value || '').trim();
     if (!text) return;
     try{
+      // Encrypt before sending (client-side E2EE)
+      const ct = await encryptForFriend(currentDirectFriend, text);
+      if (!ct) throw new Error('encryption failed');
       const t = localStorage.getItem('wc_token');
       const r = await fetch(`/api/v1/direct/${currentDirectFriend}/messages`, {
         method: 'POST',
         headers: { 'content-type':'application/json', 'Authorization': `Bearer ${t}` },
-        body: JSON.stringify({ content: text })
+        body: JSON.stringify({ content: ct })
       });
       if (r.ok){
         const m = await r.json();
@@ -1481,11 +1574,13 @@ if (els.btnDirectSend){
         if (!seen){ seen = new Set(); directSeenByFriend.set(currentDirectFriend, seen); }
         if (m.id && !seen.has(m.id)){
           seen.add(m.id);
-          appendDirectMessage(m, true);
+          // We encrypted it locally — try to decrypt to display plaintext
+          const dec = await decryptFromFriend(currentDirectFriend, ct);
+          appendDirectMessage({ id: m.id, from_user_id: getAccountId(), content: dec || '(encrypted)', sent_at: m.sent_at || new Date().toISOString() }, true);
           scrollDirectToEnd();
         }
       }
-    }catch{}
+    }catch(e){ console.error('send direct failed', e); }
     els.directInput.value='';
   });
   els.directInput?.addEventListener('keydown', e=>{ if (e.key==='Enter') els.btnDirectSend.click(); });

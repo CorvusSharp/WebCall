@@ -134,3 +134,19 @@ export async function getMe(){
   if (!r.ok) throw new Error(await r.text());
   return await r.json();
 }
+
+// E2EE public key endpoints
+export async function setMyPublicKey(publicKeyStr){
+  const r = await fetch(`${base}/api/v1/direct/me/public_key`, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ public_key: publicKeyStr })
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+
+export async function getUserPublicKey(userId){
+  const r = await fetch(`${base}/api/v1/users/${encodeURIComponent(userId)}/public_key`, { headers: { ...authHeaders() } });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}

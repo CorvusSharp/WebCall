@@ -15,6 +15,7 @@ class Users(Base):
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True, nullable=False)
     username: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    public_key: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
 
     # Связь с созданными пользователем комнатами (users.id -> rooms.owner_id)

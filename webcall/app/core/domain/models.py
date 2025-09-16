@@ -22,6 +22,7 @@ class User:
     username: str
     password_hash: PasswordHash
     created_at: datetime
+    public_key: str | None = None
 
     @staticmethod
     def create(email: str, username: str, password_hash: str) -> "User":
