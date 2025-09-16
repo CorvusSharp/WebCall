@@ -15,6 +15,8 @@ from ..models import Rooms
 class PgRoomRepository(RoomRepository):
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+        # Maximum number of IDs allowed in an IN() clause to avoid very large queries
+        self.MAX_IDS_IN_CLAUSE = 1000
 
     async def add(self, room: Room) -> None:  # type: ignore[override]
         self.session.add(
@@ -40,7 +42,11 @@ class PgRoomRepository(RoomRepository):
     async def get_many(self, ids: Iterable[UUID]) -> list[Room]:  # type: ignore[override]
         if not ids:
             return []
-        stmt = select(Rooms).where(Rooms.id.in_(list(ids)))
+        id_list = list(ids)
+        if len(id_list) > self.MAX_IDS_IN_CLAUSE:
+            # Truncate to safe size; callers should ideally validate earlier
+            id_list = id_list[: self.MAX_IDS_IN_CLAUSE]
+        stmt = select(Rooms).where(Rooms.id.in_(id_list))
         res = await self.session.execute(stmt)
         rows = res.scalars().all()
         return [Room(id=r.id, name=RoomName(r.name), owner_id=r.owner_id, is_private=r.is_private, created_at=r.created_at) for r in rows]
