@@ -1004,19 +1004,83 @@ let _e2ee_exported_pub = null; // base64 string
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
+// Simple IndexedDB helper for storing keypair
+function idbPut(dbName, storeName, key, value){
+  return new Promise((resolve, reject)=>{
+    try{
+      const req = indexedDB.open(dbName, 1);
+      req.onupgradeneeded = ()=>{ req.result.createObjectStore(storeName); };
+      req.onsuccess = ()=>{
+        const db = req.result;
+        const tx = db.transaction(storeName, 'readwrite');
+        const os = tx.objectStore(storeName);
+        os.put(value, key);
+        tx.oncomplete = ()=>{ db.close(); resolve(); };
+        tx.onerror = (e)=>{ db.close(); reject(e); };
+      };
+      req.onerror = (e)=> reject(e);
+    }catch(e){ reject(e); }
+  });
+}
+
+function idbGet(dbName, storeName, key){
+  return new Promise((resolve, reject)=>{
+    try{
+      const req = indexedDB.open(dbName, 1);
+      req.onupgradeneeded = ()=>{ req.result.createObjectStore(storeName); };
+      req.onsuccess = ()=>{
+        const db = req.result;
+        const tx = db.transaction(storeName, 'readonly');
+        const os = tx.objectStore(storeName);
+        const g = os.get(key);
+        g.onsuccess = ()=>{ db.close(); resolve(g.result); };
+        g.onerror = (e)=>{ db.close(); resolve(null); };
+      };
+      req.onerror = (e)=> reject(e);
+    }catch(e){ reject(e); }
+  });
+}
+
+async function saveE2EEKeypairToStorage(privatePk8B64, publicRawB64){
+  try{ await idbPut('wc_keys', 'keys', 'e2ee', { priv: privatePk8B64, pub: publicRawB64 }); }catch(e){}
+}
+
+async function loadE2EEKeypairFromStorage(){
+  try{ const v = await idbGet('wc_keys', 'keys', 'e2ee'); return v || null; }catch(e){ return null; }
+}
+
 async function ensureE2EEKeys(){
   if (_e2ee_keypair) return _e2ee_keypair;
   try{
+    // Try to load existing exported keypair from storage
+    const stored = await loadE2EEKeypairFromStorage();
+    if (stored && stored.priv && stored.pub){
+      try{
+        const rawPub = Uint8Array.from(atob(stored.pub), c=>c.charCodeAt(0)).buffer;
+        const priv = Uint8Array.from(atob(stored.priv), c=>c.charCodeAt(0)).buffer;
+        const publicKey = await window.crypto.subtle.importKey('raw', rawPub, { name: 'ECDH', namedCurve: 'P-256' }, true, []);
+        const privateKey = await window.crypto.subtle.importKey('pkcs8', priv, { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']);
+        _e2ee_keypair = { publicKey, privateKey };
+        _e2ee_exported_pub = stored.pub;
+        return _e2ee_keypair;
+      }catch(e){ /* fallthrough to generate new if import fails */ }
+    }
     _e2ee_keypair = await window.crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']);
     const raw = await window.crypto.subtle.exportKey('raw', _e2ee_keypair.publicKey);
     _e2ee_exported_pub = btoa(String.fromCharCode(...new Uint8Array(raw)));
+    // export private key as pkcs8 and save both in storage
+    try{
+      const pkcs8 = await window.crypto.subtle.exportKey('pkcs8', _e2ee_keypair.privateKey);
+      const pkcs8b64 = btoa(String.fromCharCode(...new Uint8Array(pkcs8)));
+      await saveE2EEKeypairToStorage(pkcs8b64, _e2ee_exported_pub);
+    }catch(e){ /* ignore storage failure */ }
     // send public key to server — use dynamic import fallback if named import not available
     try{
       if (typeof setMyPublicKey === 'function') {
         await setMyPublicKey(_e2ee_exported_pub);
       } else {
         try{
-        const api = await import('./api.js');
+          const api = await import('./api.js');
           if (api && typeof api.setMyPublicKey === 'function') await api.setMyPublicKey(_e2ee_exported_pub);
         }catch(e){}
       }
