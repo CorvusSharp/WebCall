@@ -1042,11 +1042,20 @@ function idbGet(dbName, storeName, key){
 }
 
 async function saveE2EEKeypairToStorage(privatePk8B64, publicRawB64){
-  try{ await idbPut('wc_keys', 'keys', 'e2ee', { priv: privatePk8B64, pub: publicRawB64 }); }catch(e){}
+  try{ await idbPut('wc_keys', 'keys', 'e2ee', { priv: privatePk8B64, pub: publicRawB64 }); return; }catch(e){}
+  // Fallback to localStorage if IndexedDB is not available or blocked (best-effort)
+  try{ localStorage.setItem('wc_e2ee_priv', privatePk8B64); localStorage.setItem('wc_e2ee_pub', publicRawB64); }catch(e){}
 }
 
 async function loadE2EEKeypairFromStorage(){
-  try{ const v = await idbGet('wc_keys', 'keys', 'e2ee'); return v || null; }catch(e){ return null; }
+  try{ const v = await idbGet('wc_keys', 'keys', 'e2ee'); if (v) return v; }catch(e){}
+  // Fallback to localStorage
+  try{
+    const priv = localStorage.getItem('wc_e2ee_priv');
+    const pub = localStorage.getItem('wc_e2ee_pub');
+    if (priv && pub) return { priv, pub };
+  }catch(e){}
+  return null;
 }
 
 async function ensureE2EEKeys(){
@@ -1062,6 +1071,15 @@ async function ensureE2EEKeys(){
         const privateKey = await window.crypto.subtle.importKey('pkcs8', priv, { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']);
         _e2ee_keypair = { publicKey, privateKey };
         _e2ee_exported_pub = stored.pub;
+        // Ensure server has our public key registered (best-effort)
+        try{
+          if (typeof setMyPublicKey === 'function') {
+            setMyPublicKey(_e2ee_exported_pub).catch(()=>{});
+          } else {
+            try{ import('./api.js').then(api => { if (api && typeof api.setMyPublicKey === 'function') api.setMyPublicKey(_e2ee_exported_pub).catch(()=>{}); }).catch(()=>{}); }
+            catch(e){}
+          }
+        }catch{}
         return _e2ee_keypair;
       }catch(e){ /* fallthrough to generate new if import fails */ }
     }
@@ -1547,6 +1565,8 @@ async function selectDirectFriend(friendId, label, opts={}){
         added++;
         appendDirectMessage(m, m.from_user_id === getAccountId());
       });
+      // После полной отрисовки попытаться расшифровать видимые сообщения
+      try { await tryDecryptVisibleMessages(friendId); } catch{}
       if (added === 0){ els.directMessages.innerHTML = '<div class="muted">Пусто</div>'; }
       else scrollDirectToEnd();
     } else {
@@ -1564,6 +1584,8 @@ async function selectDirectFriend(friendId, label, opts={}){
               if (!seen2){ seen2 = new Set(); directSeenByFriend.set(friendId, seen2); }
               let added2 = 0;
               arr2.forEach(m => { if (m.id && !seen2.has(m.id)){ seen2.add(m.id); added2++; appendDirectMessage(m, m.from_user_id === getAccountId()); } });
+            // После отрисовки повторной загрузки — пробуем расшифровать
+            try { await tryDecryptVisibleMessages(friendId); } catch{}
               if (added2 === 0){ els.directMessages.innerHTML = '<div class="muted">Пусто</div>'; } else scrollDirectToEnd();
             }
           }
@@ -1678,7 +1700,7 @@ if (els.btnDirectSend){
         throw new Error('encryption failed');
       }
   // Попытаться расшифровать отображённые сообщения теперь, когда ключи могут быть готовы
-  try { tryDecryptVisibleMessages(friendId).catch(()=>{}); } catch{}
+  try { tryDecryptVisibleMessages(currentDirectFriend).catch(()=>{}); } catch{}
       const t = localStorage.getItem('wc_token');
       const r = await fetch(`/api/v1/direct/${currentDirectFriend}/messages`, {
         method: 'POST',
