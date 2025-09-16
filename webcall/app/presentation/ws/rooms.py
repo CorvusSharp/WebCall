@@ -178,6 +178,14 @@ async def ws_room(
                 # Persist visit in DB for authenticated users
                 if account_uid is not None:
                     try:
+                        # Skip persisting ephemeral call rooms (used for WebRTC calls).
+                        # These rooms have a 'call-' prefix in the original path and
+                        # should not be stored in visited history or created as
+                        # long-lived room records.
+                        if (room_id or "").startswith("call-"):
+                            # Do not create room meta or participant entries for call rooms
+                            # Keep in-memory presence information but skip DB work.
+                            continue
                         # Ensure room exists in DB. If not, auto-create with deterministic id
                         room_meta = await rooms.get(room_uuid)
                         if room_meta is None:
