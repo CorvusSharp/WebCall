@@ -137,9 +137,16 @@ function startSpecialRingtone(){
   try{ specialRingtoneTimer = setTimeout(()=> { try{ stopSpecialRingtone(); }catch{} }, 60000); }catch{}
   // Если пользовательский жест ещё не случился — отложим запуск до первого жеста
   if (!userGestureHappened){
-    // Один токен, чтобы не плодить дубликаты
+    // Один токен, чтобы не плодить дубликаты. Отложенная задача проверяет,
+    // что звонок все ещё в статусе входящего приглашения прежде чем стартовать
     if (!pendingAutoplayTasks.some(fn => fn && fn.__ring)){
-      const runner = () => startSpecialRingtone();
+      const runner = () => {
+        try{
+          if (activeCall && activeCall.direction === 'incoming' && activeCall.status === 'invited') {
+            startSpecialRingtone();
+          }
+        }catch{}
+      };
       runner.__ring = true;
       pendingAutoplayTasks.push(runner);
     }
@@ -237,6 +244,8 @@ function markCallAccepted(roomId){
   }
   // Прекращаем рингтон при ответе и удаляем любые pending приглашения для этого пользователя
   stopSpecialRingtone();
+  // Очистим очередь автоплей-задач — пользователь уже сделал жест/действие
+  try{ pendingAutoplayTasks = []; }catch{}
   try {
     // Если был pending invite от этого пользователя — удалим
     if (activeCall && activeCall.withUserId) pendingIncomingInvites.delete(activeCall.withUserId);
@@ -251,6 +260,7 @@ function markCallDeclined(roomId){
   }
   // Прекращаем рингтон при отклонении и удаляем pending запись
   stopSpecialRingtone();
+  try{ pendingAutoplayTasks = []; }catch{}
   try {
     if (activeCall && activeCall.withUserId) pendingIncomingInvites.delete(activeCall.withUserId);
   } catch {}
