@@ -461,9 +461,8 @@ async function connect(){
       document.querySelectorAll('.tile').forEach(tile => {
         const pid = tile.getAttribute('data-peer');
         if (pid && !allowed.has(pid)){
-          try{ const a = tile.querySelector('audio'); if (a){ a.pause?.(); a.srcObject = null; } }catch{}
-          try{ const v = tile.querySelector('video'); if (v){ v.srcObject = null; } }catch{}
-          tile.remove();
+          try{ safeReleaseMedia(tile); }catch{}
+          try{ tile.remove(); }catch{}
         }
       });
       // 2) закрываем RTCPeerConnection и удаляем из RTC
@@ -559,7 +558,9 @@ function bindPeerMedia(peerId){
       log(`Получен медиа-поток от ${peerId.slice(0,6)}`);
       if (video) video.srcObject = stream;
       if (audio) {
+        // Привязываем поток и сохраняем ссылку для безопасной очистки
         audio.srcObject = stream;
+        try{ audio._peerStream = stream; }catch{}
         audio.muted = false;
   audio.volume = vol ? (Math.min(100, Math.max(0, Number(vol.value)||100)) / 100) : 1.0;
         audio.play().catch((e)=>{
@@ -590,6 +591,36 @@ function bindPeerMedia(peerId){
   // (participants volumes removed)
 }
 
+// Безопасно освобождаем медиаресурсы, связанные с элементом audio/video/tile
+function safeReleaseMedia(el){
+  try{
+    if (!el) return;
+    // Если это контейнер tile — ищем внутри
+    if (el.classList && el.classList.contains && el.classList.contains('tile')){
+      const aud = el.querySelector('audio');
+      const vid = el.querySelector('video');
+      try{ safeReleaseMedia(aud); }catch{};
+      try{ safeReleaseMedia(vid); }catch{};
+      return;
+    }
+    // audio/video element
+    if (el instanceof HTMLMediaElement){
+      // Остановим все треки, если есть сохранённый stream
+      try{
+        const s = el._peerStream || el.srcObject;
+        if (s && s.getTracks){
+          s.getTracks().forEach(t=>{ try{ t.stop(); }catch{} });
+        }
+      }catch{}
+      try{ el.pause(); }catch{}
+      try{ el.srcObject = null; }catch{}
+      try{ el.removeAttribute('src'); }catch{}
+      // Попытка вызвать load() для сброса внутреннего состояния
+      try{ el.load?.(); }catch{}
+    }
+  }catch{}
+}
+
 
 // Try to unlock browser audio autoplay policies
 function unlockAudioPlayback(){
@@ -616,7 +647,8 @@ function unlockAudioPlayback(){
     // Если в момент разблокировки у нас есть входящий звонок в статусе invited для спец-email — запустим или перезапустим рингтон
     try {
       const myEmail = (getStoredEmail() || '').toLowerCase();
-      if (activeCall && activeCall.direction === 'incoming' && activeCall.status === 'invited' && myEmail && SPECIAL_RING_EMAILS.has(myEmail)){
+      // Avoid recursive restart: only start ringtone here if it is not already marked active
+      if (activeCall && activeCall.direction === 'incoming' && activeCall.status === 'invited' && myEmail && SPECIAL_RING_EMAILS.has(myEmail) && !specialRingtoneActive){
         startSpecialRingtone();
       }
     } catch {}
@@ -629,6 +661,10 @@ function leave(){
   if (ws) ws.close();
   if (rtc) { rtc.close(); rtc = null; }
   setConnectedState(false);
+  // Безопасно освободим медиа у всех тайлов перед очисткой
+  try{
+    els.peersGrid.querySelectorAll('.tile').forEach(t => { try{ safeReleaseMedia(t); }catch{} });
+  }catch{}
   els.peersGrid.innerHTML = '';
   log('Отключено');
   // если был активный звонок — сбросим статус
