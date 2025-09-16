@@ -73,6 +73,10 @@ let specialRingtoneReady = null; // Promise единовременного со�
 // Autoplay / user gesture helpers
 let userGestureHappened = false;
 let pendingAutoplayTasks = [];
+// Session id to invalidate late callbacks from previous ringtone attempts
+let ringtoneSession = 0;
+// Basic mobile detection to apply hard-stop semantics on iOS/Android
+const isMobileBrowser = typeof navigator !== 'undefined' && /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
 
 function getStoredEmail(){ try{ return localStorage.getItem('wc_email') || ''; }catch{ return ''; } }
 function getStoredUsername(){ try{ return localStorage.getItem('wc_username') || ''; }catch{ return ''; } }
@@ -155,7 +159,12 @@ function startSpecialRingtone(){
 
   // Требуем разблокировки аудио политиками браузера
   unlockAudioPlayback();
+  // increment session to invalidate previous pending callbacks
+  ringtoneSession += 1;
+  const mySession = ringtoneSession;
+
   ensureSpecialRingtone().then(audio => {
+    if (mySession !== ringtoneSession) return; // stale
     if (!audio) return;
     const START_AT = 1;
     const startPlayback = () => {
@@ -173,11 +182,11 @@ function startSpecialRingtone(){
     }
     const seekAndStart = () => {
       // Установим позицию и дождёмся подтверждения seeked
-      const onSeeked = () => { audio.removeEventListener('seeked', onSeeked); startPlayback(); };
+      const onSeeked = () => { try{ audio.removeEventListener('seeked', onSeeked); }catch{}; if (mySession === ringtoneSession) startPlayback(); };
       audio.addEventListener('seeked', onSeeked, { once: true });
       try { audio.currentTime = START_AT; } catch { /* если не удалось сейчас, попробуем после метаданных */ }
-      // Если уже "похоже" на 28 — запускаем без ожидания
-      try { if (Math.abs((audio.currentTime||0) - START_AT) < 0.5) { audio.removeEventListener('seeked', onSeeked); startPlayback(); } } catch {}
+      // Если уже "похоже" на START_AT — запускаем без ожидания
+      try { if (Math.abs((audio.currentTime||0) - START_AT) < 0.5) { try{ audio.removeEventListener('seeked', onSeeked); }catch{}; if (mySession === ringtoneSession) startPlayback(); } } catch {}
     };
     // Если метаданные уже есть — сразу seek+start, иначе подождём loadedmetadata
     if (audio.readyState >= 1) {
@@ -193,14 +202,20 @@ function startSpecialRingtone(){
 function stopSpecialRingtone(){
   specialRingtoneActive = false;
   specialRingtonePlaying = false;
+  // Invalidate any pending callbacks for previous sessions
+  ringtoneSession += 1;
   if (specialRingtone){
     try{ specialRingtone.pause(); }catch{}
-    // Try to aggressively reset audio so browser won't auto-resume
     try{ specialRingtone.loop = false; }catch{}
     try{ specialRingtone.currentTime = 0; }catch{}
-    // IMPORTANT: do not clear src or call load() — that can leave the Audio
-    // object in a broken state. Keep the instance cached (singleton) so
-    // subsequent ensureSpecialRingtone() returns a live object.
+    // On mobile (iOS) do a hard reset to ensure audio actually stops.
+    if (isMobileBrowser){
+      try{ specialRingtone.removeAttribute && specialRingtone.removeAttribute('src'); }catch{}
+      try{ specialRingtone.src = ''; }catch{}
+      try{ specialRingtone.load?.(); }catch{}
+      try{ specialRingtone = null; }catch{}
+      try{ specialRingtoneReady = null; }catch{}
+    }
   }
   if (specialRingtoneTimer) { try{ clearTimeout(specialRingtoneTimer); }catch{} specialRingtoneTimer = null; }
 }
@@ -828,6 +843,14 @@ function setupUI(){
   document.addEventListener('click', gestureUnlock, { once: true, capture: true });
   document.addEventListener('touchstart', gestureUnlock, { once: true, capture: true });
   document.addEventListener('keydown', gestureUnlock, { once: true, capture: true });
+
+  // If the page becomes hidden or is being unloaded, clear pending autoplay and stop ringtone
+  const onHidden = ()=>{
+    try{ pendingAutoplayTasks = []; }catch{}
+    try{ stopSpecialRingtone(); }catch{}
+  };
+  document.addEventListener('visibilitychange', ()=>{ if (document.hidden) onHidden(); });
+  window.addEventListener('pagehide', onHidden, { capture:true });
 
   // Restore theme
   if (localStorage.getItem('theme') === 'dark') document.body.classList.add('dark');
