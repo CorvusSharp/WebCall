@@ -139,6 +139,24 @@ function transition(phase, patch){
   if (phase==='dialing') scheduleDialTimeout(); else if (prev.phase==='dialing') { if (_dialTimer) { clearTimeout(_dialTimer); _dialTimer=null; } }
   if (['outgoing_ringing','incoming_ringing'].includes(phase)) scheduleRingTimeout(); else if (['outgoing_ringing','incoming_ringing'].includes(prev.phase)) { if (_ringTimer){ clearTimeout(_ringTimer); _ringTimer=null; } }
   if (phase==='ended') scheduleEndedCleanup(); else if (phase!=='ended' && _graceTimer){ clearTimeout(_graceTimer); _graceTimer=null; }
+  // Эфемерные комнаты звонков: автодисконнект из комнаты после завершения
+  try {
+    if (phase === 'ended' && state.roomId && /^call-/.test(state.roomId)) {
+      // Если мы всё ещё подключены к этой же комнате через основной WS – закрываем
+      const input = document.getElementById('roomId');
+      const sameRoom = input && input.value === state.roomId;
+      if (sameRoom && window.appState && window.appState.ws) {
+        log('ephemeral call room ended -> closing WS');
+        // Дадим 150мс на отправку финальных сообщений (например call_end echo)
+        setTimeout(()=>{
+          try { window.appState.ws.onclose = window.appState.ws.onclose; } catch {}
+          try { window.appState.ws.close(); } catch {}
+          try { window.appState.ws = null; } catch {}
+          try { if (input) input.value=''; } catch {}
+        }, 150);
+      }
+    }
+  } catch {}
   emit();
 }
 
@@ -162,6 +180,12 @@ export function initCallSignaling(options){
 /** @param {{user_id:string, username?:string}} friend */
 export function startOutgoingCall(friend){
   if (!friend || !friend.user_id){ warn('invalid friend'); return false; }
+  // Разрешаем мгновенно начинать новый звонок после ended (ещё до авто-очистки)
+  if (state.phase === 'ended') {
+    clearTimers();
+    state = { phase:'idle', sinceTs: Date.now() };
+    emit();
+  }
   if (state.phase !== 'idle'){ warn('call already in progress'); return false; }
   if (deps.getAccountId && String(deps.getAccountId()) === String(friend.user_id)){ warn('self-call blocked'); return false; }
 
