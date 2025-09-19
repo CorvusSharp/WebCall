@@ -2,7 +2,7 @@
 // Изолирует состояние и переходы. Не зависит от старого calls.js.
 
 import { notifyCall, acceptCall, declineCall, cancelCall } from '../api.js';
-import { updateCallUI, bindActions, clearCallUI } from './call_ui.js';
+import { updateCallUI, bindActions, clearCallUI, hideIncoming } from './call_ui.js';
 import { startIncomingRing, startOutgoingRing, stopAllRings, resumeAudio } from './call_audio.js';
 
 // === Диагностическое логирование ===
@@ -136,6 +136,7 @@ function internalDecline(){
   const roomId = state.roomId; const other = state.otherUserId;
   setState({ phase:'ended', finalReason:'declined' });
   if (roomId && other){ declineCall(other, roomId).catch(()=>{}); }
+  hideIncoming();
   setTimeout(()=>{ if (state.phase==='ended') setState({ phase:'idle' }); }, 2000);
 }
 
@@ -144,6 +145,7 @@ function internalCancel(){
   const roomId = state.roomId; const other = state.otherUserId;
   setState({ phase:'ended', finalReason:'cancel' });
   if (roomId && other){ cancelCall(other, roomId).catch(()=>{}); }
+  hideIncoming();
   setTimeout(()=>{ if (state.phase==='ended') setState({ phase:'idle' }); }, 1200);
 }
 
@@ -378,12 +380,14 @@ function _handleWsMessage(msg, acc){
     case 'call_decline': case 'call_cancel': {
       if (state.roomId === msg.roomId && state.phase !== 'idle'){
         setState({ phase:'ended', finalReason:'declined' });
+        hideIncoming();
         setTimeout(()=>{ if (state.phase==='ended') setState({ phase:'idle' }); }, 2000);
       }
       break; }
     case 'call_end': {
       if (state.roomId === msg.roomId && state.phase === 'active'){
         setState({ phase:'ended', finalReason: msg.reason || 'end' });
+        hideIncoming();
         setTimeout(()=>{ if (state.phase==='ended') setState({ phase:'idle' }); }, 1500);
       }
       break; }

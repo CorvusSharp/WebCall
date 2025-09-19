@@ -119,3 +119,5 @@ export function bindActions(onAccept, onDecline, onCancel){
 }
 
 export function clearCallUI(){ updateCallUI({ phase:'idle' }); }
+
+export { hideIncoming };
