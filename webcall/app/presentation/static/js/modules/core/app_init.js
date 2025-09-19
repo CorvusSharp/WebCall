@@ -9,7 +9,10 @@ import { appState } from './state.js';
 import { loadVisitedRooms } from '../visited_rooms.js';
 import { initFriendsModule, loadFriends, scheduleFriendsReload, initFriendsUI } from '../friends_ui.js';
 import { initDirectChatModule, handleIncomingDirect, handleDirectCleared, bindSendDirect } from '../direct_chat.js';
-import { startSpecialRingtone, stopSpecialRingtone, setActiveIncomingCall, setActiveOutgoingCall, markCallAccepted, markCallDeclined, resetActiveCall, getActiveCall, initCallModule } from '../calls.js';
+// Legacy calls.js оставляем временно для обратной совместимости (звук, часть тестов)
+import { startSpecialRingtone, stopSpecialRingtone, resetActiveCall, getActiveCall, initCallModule } from '../calls.js';
+// Новый signaling слой
+import { initCallSignaling, handleWsMessage as handleCallSignal, startOutgoingCall as startOutgoingCallNew } from '../calls_signaling.js';
 import { checkAndRequestPermissionsInitial, updatePermBanner } from '../permissions.js';
 import { initPush } from '../push_subscribe.js';
 import { bus } from './event_bus.js';
@@ -269,54 +272,14 @@ function startFriendsWs(){
       case 'friend_removed': scheduleFriendsReload(); break;
       case 'direct_message': handleIncomingDirect(msg); try { const acc=getAccountId(); const other= msg.fromUserId === acc ? msg.toUserId : msg.fromUserId; const isActiveChat = appState.currentDirectFriend && other === appState.currentDirectFriend; const iAmRecipient = msg.toUserId === acc; if (iAmRecipient && !isActiveChat && 'Notification' in window && Notification.permission==='granted'){ const title = 'Новое сообщение'; const body = msg.fromUsername ? `От ${msg.fromUsername}` : 'Личное сообщение'; const reg = await navigator.serviceWorker.getRegistration('/static/sw.js'); if (reg && reg.showNotification){ reg.showNotification(title, { body, data:{ type:'direct', from: other } }); } else { new Notification(title, { body, data:{ type:'direct', from: other } }); } } } catch {} break;
       case 'direct_cleared': handleDirectCleared(msg); break;
-      case 'call_invite': { 
-        const acc = getAccountId(); 
-        const isForMe = acc && msg.toUserId === acc; 
-        const ac = getActiveCall();
-        const canReplace = !ac || (ac && (ac.roomId !== msg.roomId) && (ac.status === 'declined' || ac.status === 'accepted'));
-        try { log(`call_invite <- room=${msg.roomId} from=${msg.fromUserId} to=${msg.toUserId} acc=${acc} isForMe=${!!isForMe} hasActive=${!!ac} canReplace=${!!canReplace}`); } catch {}
-        if (isForMe && ( !ac || (ac.direction==='incoming' && ac.status==='invited' && ac.roomId===msg.roomId) || canReplace)){
-          setActiveIncomingCall(msg.fromUserId, msg.fromUsername, msg.roomId);
-        } else if (!ac && acc && msg.fromUserId === acc){
-          setActiveOutgoingCall({ user_id: msg.toUserId, username: msg.toUsername || msg.toUserId }, msg.roomId);
-        }
-        break; }
-      case 'call_accept': {
-        stopSpecialRingtone();
-        const ac = getActiveCall();
-        if (ac && ac.roomId === msg.roomId){
-          const wasOutgoing = ac.direction === 'outgoing';
-            markCallAccepted(msg.roomId);
-            // Если мы были инициатором (outgoing) и ещё не в комнате — теперь подключаемся.
-            if (wasOutgoing){
-              try {
-                if (els.roomId && els.roomId.value !== msg.roomId) els.roomId.value = msg.roomId;
-                if (!appState.ws){ unlockAudioPlayback(); connectRoom(); }
-              } catch {}
-            }
-        }
-        break; }
-      case 'call_decline': stopSpecialRingtone(); if (getActiveCall() && getActiveCall().roomId === msg.roomId) markCallDeclined(msg.roomId); break;
-      case 'call_cancel': stopSpecialRingtone(); if (getActiveCall() && getActiveCall().roomId === msg.roomId) markCallDeclined(msg.roomId); break;
+      case 'call_invite':
+      case 'call_accept':
+      case 'call_decline':
+      case 'call_cancel':
       case 'call_end': {
-        const ac = getActiveCall();
-        if (ac && ac.roomId === msg.roomId && ac.status === 'accepted'){
-          const reason = (msg.reason||'hangup');
-          const reasonMap = {
-            hangup: 'Собеседник завершил звонок',
-            leave: 'Собеседник покинул комнату',
-            disconnect: 'Соединение прервано',
-            timeout: 'Звонок завершён по таймауту',
-            failed: 'Звонок завершён (ошибка)',
-            'remote-end': 'Звонок завершён'
-          };
-          const text = reasonMap[reason] || 'Звонок завершён';
-          try { showToast(text, { type: reason==='failed' ? 'error' : 'info' }); } catch {}
-          resetActiveCall('remote-end');
-          try { if (els.roomId && els.roomId.value === msg.roomId && msg.roomId.startsWith('call-')) { leaveRoom(); } } catch {}
-        }
-        break;
-      }
+        // Делегируем в новый signaling слой
+        try { handleCallSignal(msg); } catch {}
+        break; }
       default: break;
     } } catch {}
   };
@@ -376,6 +339,13 @@ export async function appInit(){
 
   // Инициализация модуля звонков (хуки для подключения комнаты и аудио)
   try { initCallModule({ reloadFriends: loadFriends, unlockAudioPlayback, connectRoom }); } catch {}
+  try {
+    initCallSignaling({
+      getAccountId,
+      connectRoom: ()=>{ if (!appState.ws) connectRoom(); },
+      unlockAudio: unlockAudioPlayback,
+    });
+  } catch {}
 
   initDirectChatModule({ log, getAccountId });
   try { bindSendDirect(); } catch {}

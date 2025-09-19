@@ -2,7 +2,7 @@ name: Security Scans
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
 
 permissions:
@@ -14,12 +14,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: returntocorp/semgrep-action@v1
+      - name: Run Semgrep
+        uses: returntocorp/semgrep-action@v1
         with:
-          config: >-
-            p/ci
-          generateSarif: true
-          uploadSarif: true
+          config: p/ci
+          # Генерируем SARIF напрямую через параметры cli (semgrep-action передаст аргументы).
+          args: >-
+            --sarif --output=semgrep.sarif
+      - name: Ensure semgrep.sarif exists
+        if: always()
+        run: |
+          if [ ! -s semgrep.sarif ]; then
+            echo 'Создаём пустой semgrep.sarif (fallback)'
+            echo '{"version":"2.1.0","runs":[]}' > semgrep.sarif
+          fi
       - name: Upload SARIF (redundant safety)
         if: always()
         uses: github/codeql-action/upload-sarif@v3
@@ -33,7 +41,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
       - name: Install bandit
         run: pip install bandit bandit-sarif-formatter
       - name: Run bandit
@@ -41,6 +49,13 @@ jobs:
           bandit -r webcall/app -x webcall/app/alembic -f json -o bandit.json || true
       - name: Convert to SARIF
         run: bandit-sarif-formatter -i bandit.json -o bandit.sarif || true
+      - name: Ensure bandit.sarif exists
+        if: always()
+        run: |
+          if [ ! -s bandit.sarif ]; then
+            echo 'Создаём пустой bandit.sarif (fallback)'
+            echo '{"version":"2.1.0","runs":[]}' > bandit.sarif
+          fi
       - name: Upload SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@v3

@@ -4,7 +4,8 @@
 import { els, makeBtn } from './core/dom.js';
 import { appState } from './core/state.js';
 import { notifyCall, acceptCall, declineCall, cancelCall, findUsers, listFriends, listFriendRequests, sendFriendRequest, acceptFriend } from '../api.js';
-import { setActiveOutgoingCall, markCallAccepted, markCallDeclined, getActiveCall, getPendingIncomingInvites } from './calls.js';
+import { getActiveCall, getPendingIncomingInvites } from './calls.js'; // legacy (activeCall пока может использоваться)
+import { startOutgoingCall as startOutgoingCallNew } from './calls_signaling.js';
 import { selectDirectFriend } from './direct_chat.js';
 
 let hooks = {
@@ -65,16 +66,7 @@ export async function loadFriends(){
       if (!isActiveWith){
         const btnCall = makeBtn('Позвонить','btn primary', async (ev)=>{
           ev?.stopPropagation?.();
-          if (getActiveCall()) return;
-          const rnd = crypto.randomUUID().slice(0,8);
-          const friendTag = (f.username || f.user_id).replace(/[^a-zA-Z0-9]+/g,'').slice(0,6) || 'user';
-          const room = `call-${rnd}-${friendTag}`;
-          if (els.roomId) els.roomId.value = room;
-          setActiveOutgoingCall(f, room);
-          try { notifyCall(f.user_id, room).catch(()=>{}); } catch {}
-          // Больше НЕ подключаемся к комнате сразу. Ждём подтверждения (call_accept).
-          // Рингтон/статус остаются в состоянии "исходящий" пока другая сторона не примет.
-          hooks.unlockAudioPlayback();
+          startOutgoingCallNew(f);
         });
         callControls.push(btnCall);
       } else {
