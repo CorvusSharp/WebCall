@@ -174,15 +174,26 @@ export function startOutgoingCall(friend){
       if (ws.readyState === WebSocket.CONNECTING) {
         try {
           if (typeof window !== 'undefined' && window.showToast) {
-            window.showToast('Подключение устанавливается. Попробуйте через пару секунд.', 'info');
+            window.showToast('Подключение устанавливается. Подождите...', 'info');
           } else {
-            alert('Подключение устанавливается. Попробуйте позже.');
+            alert('Подключение устанавливается. Подождите...');
+          }
+        } catch {}
+      } else if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        // При закрытом соединении пытаемся переподключиться
+        try {
+          if (typeof window !== 'undefined' && window.startFriendsWs) {
+            window.appState.friendsWs = null;
+            window.startFriendsWs();
+            if (typeof window !== 'undefined' && window.showToast) {
+              window.showToast('Восстанавливаем соединение. Попробуйте через несколько секунд.', 'info');
+            }
           }
         } catch {}
       } else {
         try {
           if (typeof window !== 'undefined' && window.showToast) {
-            window.showToast('Подключение не готово. Попробуйте позже.', 'warning');
+            window.showToast(`Подключение в состоянии ${stateName}. Попробуйте позже.`, 'warning');
           } else {
             alert('Подключение не готово. Попробуйте позже.');
           }

@@ -261,12 +261,19 @@ export function leaveRoom(){
 
 // ===== Friends WS =====
 function startFriendsWs(){
-  if (appState.friendsWs) return; 
+  // Предотвращаем множественные одновременные подключения
+  if (appState.friendsWs || appState.friendsWsConnecting) {
+    log('Friends WS: уже подключается или подключен');
+    return; 
+  }
+  
   const t = localStorage.getItem('wc_token'); 
   if (!t) {
     log('Friends WS: токен не найден, пропуск подключения');
     return;
   }
+  
+  appState.friendsWsConnecting = true;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const url = new URL(`${proto}://${location.host}/ws/friends`); url.searchParams.set('token', t);
   log(`Friends WS: подключение к ${url.toString()}`);
@@ -275,6 +282,10 @@ function startFriendsWs(){
     appState.friendsWs = new WebSocket(url.toString());
     appState.friendsWs.onopen = ()=>{ 
       log('WS друзей открыт'); 
+      // Сбрасываем счетчик попыток и флаг подключения при успешном подключении
+      appState.wsReconnectAttempts = 0;
+      appState.friendsWsConnecting = false;
+      
       try { 
         appState.friendsWs.send(JSON.stringify({ type:'ping' })); 
         log('Friends WS: ping отправлен');
@@ -302,7 +313,39 @@ function startFriendsWs(){
     appState.friendsWs.onclose = (event)=>{ 
       log(`Friends WS закрыт: код=${event.code}, причина=${event.reason}`);
       appState.friendsWs = null; 
-      setTimeout(()=>{ try { startFriendsWs(); } catch {} }, 5000); 
+      appState.friendsWsConnecting = false;
+      
+      // Не переподключаемся если:
+      // - страница выгружается (beforeunload/unload)
+      // - код закрытия 1000 (нормальное закрытие) или 1001 (going away)
+      // - нет токена авторизации
+      // - слишком много попыток переподключения
+      const maxReconnectAttempts = 10;
+      if (document.visibilityState === 'hidden' || 
+          event.code === 1000 || 
+          event.code === 1001 ||
+          !localStorage.getItem('wc_token') ||
+          (appState.wsReconnectAttempts || 0) >= maxReconnectAttempts) {
+        log('Friends WS: не переподключаемся, причина:', { 
+          visibilityState: document.visibilityState, 
+          code: event.code,
+          hasToken: !!localStorage.getItem('wc_token'),
+          attempts: appState.wsReconnectAttempts || 0,
+          maxAttempts: maxReconnectAttempts
+        });
+        return;
+      }
+      
+      // Увеличиваем интервал переподключения для предотвращения спама
+      const reconnectDelay = Math.min(30000, 5000 * (appState.wsReconnectAttempts || 1));
+      appState.wsReconnectAttempts = (appState.wsReconnectAttempts || 0) + 1;
+      
+      log(`Friends WS: переподключение через ${reconnectDelay}ms (попытка ${appState.wsReconnectAttempts}/${maxReconnectAttempts})`);
+      setTimeout(()=>{ 
+        if (!appState.friendsWs && !appState.friendsWsConnecting && localStorage.getItem('wc_token')) {
+          try { startFriendsWs(); } catch {} 
+        }
+      }, reconnectDelay); 
     };
     appState.friendsWs.onerror = (error)=>{ 
       log('Friends WS ошибка:', error);
@@ -311,8 +354,20 @@ function startFriendsWs(){
   } catch (error) {
     log('Friends WS: ошибка создания соединения:', error);
     appState.friendsWs = null;
-    // Повторяем попытку через 10 секунд
-    setTimeout(()=>{ try { startFriendsWs(); } catch {} }, 10000);
+    appState.friendsWsConnecting = false;
+    appState.wsReconnectAttempts = (appState.wsReconnectAttempts || 0) + 1;
+    
+    // Повторяем попытку через 10 секунд только если не достигли лимита
+    const maxReconnectAttempts = 10;
+    if ((appState.wsReconnectAttempts || 0) < maxReconnectAttempts) {
+      setTimeout(()=>{ 
+        if (!appState.friendsWs && !appState.friendsWsConnecting) {
+          try { startFriendsWs(); } catch {} 
+        }
+      }, 10000);
+    } else {
+      log('Friends WS: достигнут лимит попыток переподключения');
+    }
   }
 }
 
@@ -401,13 +456,36 @@ export async function appInit(){
         hasToken: !!token,
         hasWebSocket: !!ws,
         wsState: ws ? states[ws.readyState] || ws.readyState : 'не создан',
-        url: ws ? ws.url : 'нет'
+        url: ws ? ws.url : 'нет',
+        reconnectAttempts: window.appState?.wsReconnectAttempts || 0,
+        visibilityState: document.visibilityState
       };
       console.log('WebSocket диагностика:', info);
-      showToast(`WS: ${info.wsState}, Token: ${info.hasToken ? 'есть' : 'нет'}`, 'info');
+      showToast(`WS: ${info.wsState}, Token: ${info.hasToken ? 'есть' : 'нет'}, Попыток: ${info.reconnectAttempts}`, 'info');
       return info;
     };
+    
+    // Функция для принудительного переподключения
+    window.forceReconnectWebSocket = () => {
+      if (window.appState?.friendsWs) {
+        window.appState.friendsWs.onclose = null;
+        window.appState.friendsWs.close();
+      }
+      window.appState.friendsWs = null;
+      window.appState.friendsWsConnecting = false;
+      window.appState.wsReconnectAttempts = 0;
+      startFriendsWs();
+      showToast('Принудительное переподключение WebSocket', 'info');
+    };
   } catch {}
+  
+  // Предотвращаем переподключения при закрытии страницы
+  window.addEventListener('beforeunload', () => {
+    if (appState.friendsWs) {
+      appState.friendsWs.onclose = null; // Отключаем автопереподключение
+      appState.friendsWs.close(1000, 'Page unload');
+    }
+  });
   
   startFriendsWs();
   try { await loadFriends(); } catch {}
