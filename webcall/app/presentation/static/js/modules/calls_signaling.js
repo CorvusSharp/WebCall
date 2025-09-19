@@ -4,6 +4,10 @@
 import { notifyCall, acceptCall, declineCall, cancelCall } from '../api.js';
 import { updateCallUI, bindActions, clearCallUI } from './call_ui.js';
 
+// === Диагностическое логирование ===
+const LOG_PREFIX = '[call-signal]';
+function dbg(...a){ try { console.debug(LOG_PREFIX, ...a); } catch {} }
+
 /** @typedef {'idle'|'incoming_invite'|'outgoing_invite'|'active'|'ended'} CallPhase */
 
 /** @typedef {Object} CallState
@@ -16,6 +20,7 @@ import { updateCallUI, bindActions, clearCallUI } from './call_ui.js';
 
 /** @type {CallState} */
 let state = { phase: 'idle' };
+let lastStateChangeTs = Date.now();
 
 const listeners = new Set();
 
@@ -24,7 +29,13 @@ function emit(){
   updateCallUI(state);
 }
 
-function setState(patch){ state = { ...state, ...patch }; emit(); }
+function setState(patch){
+  const prev = state;
+  state = { ...state, ...patch };
+  lastStateChangeTs = Date.now();
+  dbg('state change', { from: prev.phase, to: state.phase, roomId: state.roomId });
+  emit();
+}
 export function getCallState(){ return state; }
 export function onCallState(fn){ listeners.add(fn); return ()=> listeners.delete(fn); }
 
@@ -37,6 +48,7 @@ let deps = {
 export function initCallSignaling(options){
   deps = { ...deps, ...(options||{}) };
   bindActions(()=>{ if (state.phase==='incoming_invite') internalAccept(); }, ()=>{ if (state.phase==='incoming_invite') internalDecline(); });
+  dbg('initialized signaling');
 }
 
 function internalAccept(){
@@ -73,7 +85,8 @@ export function startOutgoingCall(friend){
   const room = `call-${rnd}-${tag}`;
   try { const roomInput = document.getElementById('roomId'); if (roomInput && 'value' in roomInput) roomInput.value = room; } catch {}
   setState({ phase:'outgoing_invite', roomId: room, otherUserId: friend.user_id, otherUsername: friend.username });
-  notifyCall(friend.user_id, room).catch(()=>{});
+  dbg('notifyCall ->', friend.user_id, room);
+  notifyCall(friend.user_id, room).then(()=> dbg('notifyCall ok')).catch(e=> dbg('notifyCall error', e));
   try { deps.unlockAudio(); } catch {}
   return true;
 }
@@ -82,9 +95,35 @@ export function cancelOutgoing(){ internalCancel(); }
 export function declineIncoming(){ internalDecline(); }
 export function acceptIncoming(){ internalAccept(); }
 
+// Буфер сообщений если accountId ещё не доступен
+const _pendingQueue = [];
+let _replayTimer = null;
+function scheduleReplay(){
+  if (_replayTimer) return;
+  _replayTimer = setTimeout(()=>{
+    _replayTimer = null;
+    const acc = deps.getAccountId();
+    if (!acc){ scheduleReplay(); return; }
+    if (_pendingQueue.length){ dbg('replaying queued messages', _pendingQueue.length); }
+    for (const m of _pendingQueue.splice(0)){ _handleWsMessage(m, acc); }
+  }, 400);
+}
+
 export function handleWsMessage(msg){
-  const acc = deps.getAccountId();
   if (!msg || typeof msg !== 'object') return;
+  const acc = deps.getAccountId();
+  if (!acc){
+    // Кладём в очередь до появления accountId
+    _pendingQueue.push(msg);
+    dbg('queued (no accountId yet)', msg.type);
+    scheduleReplay();
+    return;
+  }
+  _handleWsMessage(msg, acc);
+}
+
+function _handleWsMessage(msg, acc){
+  dbg('ws msg', msg.type, { roomId: msg.roomId, from: msg.fromUserId, to: msg.toUserId, acc });
   switch(msg.type){
     case 'call_invite': {
       const isForMe = acc && msg.toUserId === acc;
