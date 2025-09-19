@@ -256,8 +256,18 @@ function startFriendsWs(){
       case 'friend_removed': scheduleFriendsReload(); break;
       case 'direct_message': handleIncomingDirect(msg); try { const acc=getAccountId(); const other= msg.fromUserId === acc ? msg.toUserId : msg.fromUserId; const isActiveChat = appState.currentDirectFriend && other === appState.currentDirectFriend; const iAmRecipient = msg.toUserId === acc; if (iAmRecipient && !isActiveChat && 'Notification' in window && Notification.permission==='granted'){ const title = 'Новое сообщение'; const body = msg.fromUsername ? `От ${msg.fromUsername}` : 'Личное сообщение'; const reg = await navigator.serviceWorker.getRegistration('/static/sw.js'); if (reg && reg.showNotification){ reg.showNotification(title, { body, data:{ type:'direct', from: other } }); } else { new Notification(title, { body, data:{ type:'direct', from: other } }); } } } catch {} break;
       case 'direct_cleared': handleDirectCleared(msg); break;
-      case 'call_invite': { const acc = getAccountId(); const isForMe = acc && msg.toUserId === acc; if (isForMe && !getActiveCall()){ // Унифицированный входящий тон: внутренний startIncomingTone вызывается в setActiveIncomingCall
-        setActiveIncomingCall(msg.fromUserId, msg.fromUsername, msg.roomId); } else if (!getActiveCall() && acc && msg.fromUserId === acc){ setActiveOutgoingCall({ user_id: msg.toUserId, username: msg.toUsername || msg.toUserId }, msg.roomId); } break; }
+      case 'call_invite': { 
+        const acc = getAccountId(); 
+        const isForMe = acc && msg.toUserId === acc; 
+        const ac = getActiveCall();
+        const canReplace = !ac || (ac && (ac.roomId !== msg.roomId) && (ac.status === 'declined' || ac.status === 'accepted'));
+        if (isForMe && ( !ac || (ac.direction==='incoming' && ac.status==='invited' && ac.roomId===msg.roomId) || canReplace)){
+          // Если приходит новый инвайт — перезаписываем.
+          setActiveIncomingCall(msg.fromUserId, msg.fromUsername, msg.roomId);
+        } else if (!ac && acc && msg.fromUserId === acc){
+          setActiveOutgoingCall({ user_id: msg.toUserId, username: msg.toUsername || msg.toUserId }, msg.roomId);
+        }
+        break; }
       case 'call_accept': {
         stopSpecialRingtone();
         const ac = getActiveCall();

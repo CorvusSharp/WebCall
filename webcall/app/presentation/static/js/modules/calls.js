@@ -29,17 +29,45 @@ function renderCallContext(){
   /** @type {ActiveCallState|null} */
   const c = appState.activeCall;
   if (!c){ els.callContext.textContent = ''; return; }
+  // Очищаем контейнер перед рендером
+  els.callContext.innerHTML = '';
+  const wrap = document.createElement('div');
+  const title = document.createElement('span');
+  title.className = 'muted';
   if (c.direction === 'outgoing' && c.status === 'invited'){
-    els.callContext.textContent = `Исходящий звонок: ${c.username || c.withUserId}`;
+    title.textContent = `Исходящий звонок: ${c.username || c.withUserId}`;
   } else if (c.direction === 'incoming' && c.status === 'invited') {
-    els.callContext.textContent = `Входящий звонок от: ${c.username || c.withUserId}`;
+    title.textContent = `Входящий звонок от: ${c.username || c.withUserId}`;
   } else if (c.status === 'accepted') {
-    els.callContext.textContent = `Звонок с: ${c.username || c.withUserId}`;
+    title.textContent = `Звонок с: ${c.username || c.withUserId}`;
   } else if (c.status === 'declined') {
-    els.callContext.textContent = `Отклонён`; // кратко, быстро исчезнет после reset
+    title.textContent = 'Отклонён';
   } else {
-    els.callContext.textContent = '';
+    title.textContent = '';
   }
+  wrap.appendChild(title);
+  // Кнопки действий в состояниях invited
+  if (c.status === 'invited'){
+    const btns = document.createElement('span'); btns.style.marginLeft='8px'; btns.style.display='inline-flex'; btns.style.gap='6px';
+    if (c.direction === 'outgoing'){
+      const btnCancel = document.createElement('button'); btnCancel.className='btn danger ghost'; btnCancel.textContent='Отменить';
+      btnCancel.addEventListener('click', async ()=>{
+        try { if (c.withUserId && c.roomId){ await (await import('../api.js')).cancelCall(c.withUserId, c.roomId); } } catch {}
+        try { resetActiveCall('cancel'); } catch {}
+      });
+      btns.appendChild(btnCancel);
+    } else if (c.direction === 'incoming') {
+      const btnAccept = document.createElement('button'); btnAccept.className='btn success'; btnAccept.textContent='Принять';
+      btnAccept.addEventListener('click', async ()=>{
+        try { markCallAccepted(c.roomId); await (await import('../api.js')).acceptCall(c.withUserId, c.roomId); if (els.roomId && 'value' in els.roomId) els.roomId.value = c.roomId; if (typeof hooks?.unlockAudioPlayback==='function') hooks.unlockAudioPlayback(); if (typeof hooks?.connectRoom==='function') hooks.connectRoom(); } catch {}
+      });
+      const btnDecline = document.createElement('button'); btnDecline.className='btn ghost'; btnDecline.textContent='Отклонить';
+      btnDecline.addEventListener('click', async ()=>{ try { await (await import('../api.js')).declineCall(c.withUserId, c.roomId); } catch {}; try { markCallDeclined(c.roomId); } catch {}; });
+      btns.appendChild(btnAccept); btns.appendChild(btnDecline);
+    }
+    wrap.appendChild(btns);
+  }
+  els.callContext.appendChild(wrap);
 }
 
 function touchFriends(){

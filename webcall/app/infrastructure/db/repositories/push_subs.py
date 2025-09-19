@@ -4,6 +4,10 @@ from typing import List
 from uuid import UUID
 
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+import logging
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ....core.domain.models import PushSubscription
@@ -16,8 +20,20 @@ class PgPushSubscriptionRepository(PushSubscriptionRepository):
         self.session = session
 
     async def add(self, sub: PushSubscription) -> None:  # type: ignore[override]
-        self.session.add(
-            PushSubscriptions(
+        """Атомарная регистрация push-подписки.
+
+        Используем PostgreSQL ON CONFLICT для устранения гонок при
+        одновременных (или повторных) подписках одного и того же endpoint.
+
+        Поведение: если (user_id, endpoint) уже существует, обновляем ключи.
+        Замечание: поле created_at перезаписывается – трактуем его как
+        'момент актуализации'. Если важно сохранять первоначальный момент,
+        нужно завести отдельное поле updated_at (не делаем сейчас, чтобы не
+        добавлять миграцию в рамках быстрого фикса)."""
+
+        stmt = (
+            pg_insert(PushSubscriptions)
+            .values(
                 id=sub.id,
                 user_id=sub.user_id,
                 endpoint=sub.endpoint,
@@ -25,28 +41,24 @@ class PgPushSubscriptionRepository(PushSubscriptionRepository):
                 auth=sub.auth,
                 created_at=sub.created_at,
             )
+            .on_conflict_do_update(
+                index_elements=[PushSubscriptions.user_id, PushSubscriptions.endpoint],
+                set_
+                ={
+                    "p256dh": sub.p256dh,
+                    "auth": sub.auth,
+                    "created_at": sub.created_at,
+                },
+            )
         )
-        try:
-            await self.session.commit()
-        except Exception:
-            await self.session.rollback()
-            # try upsert-like: remove existing and add again
-            await self.session.execute(
-                delete(PushSubscriptions).where(
-                    (PushSubscriptions.user_id == sub.user_id) & (PushSubscriptions.endpoint == sub.endpoint)
-                )
-            )
-            self.session.add(
-                PushSubscriptions(
-                    id=sub.id,
-                    user_id=sub.user_id,
-                    endpoint=sub.endpoint,
-                    p256dh=sub.p256dh,
-                    auth=sub.auth,
-                    created_at=sub.created_at,
-                )
-            )
-            await self.session.commit()
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        # rowcount == 1 всегда, но можем логировать сам факт upsert.
+        # Для более тонкого различения вставка/обновление нужен триггер или
+        # добавление столбца updated_at. Здесь достаточно отладочного сообщения.
+        logger.debug(
+            "push_subscriptions upsert: user_id=%s endpoint_hash=%s", sub.user_id, hash(sub.endpoint)
+        )
 
     async def remove(self, user_id: UUID, endpoint: str) -> None:  # type: ignore[override]
         await self.session.execute(
