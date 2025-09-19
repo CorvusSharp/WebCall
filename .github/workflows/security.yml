@@ -5,59 +5,79 @@ on:
     branches: [main]
   pull_request:
 
+# Глобальные права для загрузки SARIF
 permissions:
   contents: read
   security-events: write
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   semgrep:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Semgrep: генерим SARIF (через args ок)
       - name: Run Semgrep
         uses: returntocorp/semgrep-action@v1
         with:
           config: p/ci
-          # Генерируем SARIF напрямую через параметры cli (semgrep-action передаст аргументы).
-          args: >-
-            --sarif --output=semgrep.sarif
+          args: --sarif --output=semgrep.sarif
+        env:
+          SEMGREP_DISABLE_VERSION_CHECK: "1"
+
       - name: Ensure semgrep.sarif exists
         if: always()
         run: |
-          if [ ! -s semgrep.sarif ]; then
-            echo 'Создаём пустой semgrep.sarif (fallback)'
-            echo '{"version":"2.1.0","runs":[]}' > semgrep.sarif
-          fi
-      - name: Upload SARIF (redundant safety)
-        if: always()
+          test -s semgrep.sarif || echo '{"version":"2.1.0","runs":[]}' > semgrep.sarif
+
+      # Защита: если PR из форка — пропускаем загрузку SARIF (нет прав)
+      - name: Upload SARIF
+        if: >
+          always() &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository)
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
+          category: semgrep
 
   bandit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install bandit
-        run: pip install bandit bandit-sarif-formatter
-      - name: Run bandit
+          cache: pip
+
+      - name: Install bandit + sarif formatter
+        run: pip install --upgrade pip && pip install bandit bandit-sarif-formatter
+
+      - name: Run bandit (JSON)
         run: |
+          # скорректируй путь, если надо
           bandit -r webcall/app -x webcall/app/alembic -f json -o bandit.json || true
+
       - name: Convert to SARIF
         run: bandit-sarif-formatter -i bandit.json -o bandit.sarif || true
+
       - name: Ensure bandit.sarif exists
         if: always()
         run: |
-          if [ ! -s bandit.sarif ]; then
-            echo 'Создаём пустой bandit.sarif (fallback)'
-            echo '{"version":"2.1.0","runs":[]}' > bandit.sarif
-          fi
+          test -s bandit.sarif || echo '{"version":"2.1.0","runs":[]}' > bandit.sarif
+
       - name: Upload SARIF
-        if: always()
+        if: >
+          always() &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository)
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: bandit.sarif
+          category: bandit

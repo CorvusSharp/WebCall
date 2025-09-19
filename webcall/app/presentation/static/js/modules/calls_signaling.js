@@ -3,6 +3,7 @@
 
 import { notifyCall, acceptCall, declineCall, cancelCall } from '../api.js';
 import { updateCallUI, bindActions, clearCallUI } from './call_ui.js';
+import { startIncomingRing, startOutgoingRing, stopAllRings, resumeAudio } from './call_audio.js';
 
 // === Диагностическое логирование ===
 const LOG_PREFIX = '[call-signal]';
@@ -34,6 +35,13 @@ function setState(patch){
   state = { ...state, ...patch };
   lastStateChangeTs = Date.now();
   dbg('state change', { from: prev.phase, to: state.phase, roomId: state.roomId });
+  try {
+    if (state.phase==='incoming_invite' && prev.phase!=='incoming_invite'){ resumeAudio(); startIncomingRing(); }
+    if (state.phase==='outgoing_invite' && prev.phase!=='outgoing_invite'){ resumeAudio(); startOutgoingRing(); }
+    if (prev.phase==='incoming_invite' && state.phase!=='incoming_invite'){ stopAllRings(); }
+    if (prev.phase==='outgoing_invite' && state.phase!=='outgoing_invite'){ stopAllRings(); }
+    if (state.phase==='active' || state.phase==='ended'){ stopAllRings(); }
+  } catch {}
   emit();
 }
 export function getCallState(){ return state; }
@@ -43,11 +51,16 @@ let deps = {
   getAccountId: ()=> null,
   connectRoom: ()=>{},
   unlockAudio: ()=>{},
+  navigateToRoom: (roomId)=>{ try { window.location.href = `/call/${roomId}`; } catch {} },
 };
 
 export function initCallSignaling(options){
   deps = { ...deps, ...(options||{}) };
-  bindActions(()=>{ if (state.phase==='incoming_invite') internalAccept(); }, ()=>{ if (state.phase==='incoming_invite') internalDecline(); });
+  bindActions(
+    ()=>{ if (state.phase==='incoming_invite') internalAccept(); },
+    ()=>{ if (state.phase==='incoming_invite') internalDecline(); },
+    ()=>{ if (state.phase==='outgoing_invite') internalCancel(); }
+  );
   dbg('initialized signaling');
 }
 
@@ -55,11 +68,9 @@ function internalAccept(){
   if (state.phase !== 'incoming_invite') return;
   const roomId = state.roomId; const other = state.otherUserId;
   setState({ phase:'active' });
-  // Отправляем accept
   if (roomId && other){ acceptCall(other, roomId).catch(()=>{}); }
-  try { deps.unlockAudio(); } catch {}
-  try { if (roomId){ const roomInput = document.getElementById('roomId'); if (roomInput && 'value' in roomInput) roomInput.value = roomId; } } catch {}
-  try { deps.connectRoom(); } catch {}
+  try { deps.unlockAudio(); resumeAudio(); } catch {}
+  if (roomId) deps.navigateToRoom(roomId);
 }
 
 function internalDecline(){
@@ -113,7 +124,6 @@ export function handleWsMessage(msg){
   if (!msg || typeof msg !== 'object') return;
   const acc = deps.getAccountId();
   if (!acc){
-    // Кладём в очередь до появления accountId
     _pendingQueue.push(msg);
     dbg('queued (no accountId yet)', msg.type);
     scheduleReplay();
@@ -129,15 +139,12 @@ function _handleWsMessage(msg, acc){
       const isForMe = acc && msg.toUserId === acc;
       const isMine = acc && msg.fromUserId === acc;
       if (isForMe){
-        // Если уже есть исходящий — игнорируем, если активный — тоже игнорируем
         if (['incoming_invite','outgoing_invite','active'].includes(state.phase)){
-          // Возможный дубликат — если тот же roomId и статус входящий, просто обновим имя
           if (state.roomId === msg.roomId && state.phase==='incoming_invite') setState({ otherUsername: msg.fromUsername });
         } else {
           setState({ phase:'incoming_invite', roomId: msg.roomId, otherUserId: msg.fromUserId, otherUsername: msg.fromUsername });
         }
       } else if (isMine){
-        // Подтверждение исходящего инвайта (сам себе зеркало) — если idle
         if (state.phase==='idle'){
           setState({ phase:'outgoing_invite', roomId: msg.roomId, otherUserId: msg.toUserId, otherUsername: msg.toUsername });
         }
@@ -146,7 +153,8 @@ function _handleWsMessage(msg, acc){
     case 'call_accept': {
       if (state.roomId === msg.roomId && ['outgoing_invite','incoming_invite'].includes(state.phase)){
         setState({ phase:'active' });
-        try { if (state.phase==='active'){ deps.unlockAudio(); deps.connectRoom(); } } catch {}
+        try { deps.unlockAudio(); resumeAudio(); } catch {}
+        if (msg.roomId) deps.navigateToRoom(msg.roomId);
       }
       break; }
     case 'call_decline': case 'call_cancel': {
