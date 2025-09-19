@@ -10,14 +10,18 @@ from ..config import get_settings
 
 
 _settings = get_settings()
-# Настройка пула соединений: 5 постоянных, до 10 сверх (итого 15), таймаут ожидания 30с
-ENGINE: AsyncEngine = create_async_engine(
-    _settings.DATABASE_URL,
-    pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=10,
-    pool_timeout=30,
-)
+db_url = _settings.DATABASE_URL
+
+engine_kwargs = {"pool_pre_ping": True}
+# Для sqlite (особенно :memory: или aiosqlite) параметры пула не поддерживаются — пропустим
+if not db_url.startswith("sqlite"):
+    engine_kwargs.update({
+        "pool_size": 5,
+        "max_overflow": 10,
+        "pool_timeout": 30,
+    })
+
+ENGINE: AsyncEngine = create_async_engine(db_url, **engine_kwargs)
 AsyncSessionLocal = sessionmaker(bind=ENGINE, class_=AsyncSession, expire_on_commit=False)
 
 

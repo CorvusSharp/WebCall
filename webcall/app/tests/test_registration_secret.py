@@ -10,7 +10,7 @@ from app.bootstrap.asgi import app  # use absolute import; asgi instantiates app
 @pytest.mark.skipif('DATABASE_URL' not in os.environ, reason='DATABASE_URL not configured')
 async def test_register_forbidden_without_or_wrong_secret(monkeypatch):
     monkeypatch.setenv('REGISTRATION_SECRET', 'abc123')
-    from ..infrastructure.config import get_settings
+    from app.infrastructure.config import get_settings
     get_settings.cache_clear()  # type: ignore[attr-defined]
     assert get_settings().REGISTRATION_SECRET == 'abc123'
 
@@ -32,7 +32,7 @@ async def test_register_forbidden_without_or_wrong_secret(monkeypatch):
 @pytest.mark.skipif('DATABASE_URL' not in os.environ, reason='DATABASE_URL not configured')
 async def test_register_success_with_secret(monkeypatch):
     monkeypatch.setenv('REGISTRATION_SECRET', 'abc123')
-    from ..infrastructure.config import get_settings
+    from app.infrastructure.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
