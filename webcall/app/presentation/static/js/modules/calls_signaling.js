@@ -355,6 +355,7 @@ function _handleWsMessage(msg, acc){
             }
           } catch {}
           setState({ phase:'incoming_invite', roomId: msg.roomId, otherUserId: msg.fromUserId, otherUsername: msg.fromUsername });
+          updateCallUI(getCallState());
           dbg('✅ Set incoming_invite state');
         }
       } else if (isMine){
