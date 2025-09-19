@@ -485,6 +485,64 @@ function setupUI(){
   if (localStorage.getItem('theme')==='dark') document.body.classList.add('dark');
   const u = new URL(location.href); if (u.searchParams.has('room')) els.roomId.value = u.searchParams.get('room');
   showPreJoin();
+
+  // === Панель настроек отображения ===
+  try {
+    // Вставляем кнопку-шестерёнку рядом с кнопкой выхода
+    if (els.btnLogout && !document.getElementById('btnUiSettings')){
+      const gearBtn = document.createElement('button');
+      gearBtn.id='btnUiSettings';
+      gearBtn.title='Настройки отображения';
+      gearBtn.textContent='⚙';
+      gearBtn.style.marginLeft='6px';
+      gearBtn.className='btn btn-sm btn-secondary';
+      els.btnLogout.parentElement?.insertBefore(gearBtn, els.btnLogout);
+      const panel = document.createElement('div');
+      panel.id='uiSettingsPanel';
+      panel.style.position='fixed';
+      panel.style.top='50px';
+      panel.style.right='20px';
+      panel.style.background='#202124';
+      panel.style.color='#fff';
+      panel.style.padding='14px 16px';
+      panel.style.borderRadius='10px';
+      panel.style.boxShadow='0 8px 24px rgba(0,0,0,.35)';
+      panel.style.display='none';
+      panel.style.zIndex='2000';
+      panel.style.minWidth='220px';
+      panel.innerHTML = '<div style="font-weight:600;margin-bottom:8px">Отображение</div>';
+      const groups = [
+        { id:'logs', label:'Логи' },
+        { id:'stats', label:'Статистика' },
+        { id:'chat', label:'Чат' },
+        { id:'friendsCard', label:'Друзья' },
+        { id:'visitedCard', label:'Недавние' },
+        { id:'statusCard', label:'Статус' },
+        { id:'directChatCard', label:'Личные сообщения' },
+      ];
+      const prefsKey = 'wc_ui_panels_v1';
+      const loadPrefs = ()=>{ try { return JSON.parse(localStorage.getItem(prefsKey)||'{}'); } catch { return {}; } };
+      const savePrefs = (p)=>{ try { localStorage.setItem(prefsKey, JSON.stringify(p)); } catch {} };
+      const apply = (prefs)=>{
+        groups.forEach(g=>{
+          const el = els[g.id] || document.getElementById(g.id);
+          if (el){ el.style.display = prefs[g.id] === false ? 'none' : ''; }
+        });
+      };
+      const prefs = loadPrefs();
+      groups.forEach(g=>{
+        const row = document.createElement('label');
+        row.style.display='flex'; row.style.alignItems='center'; row.style.fontSize='13px'; row.style.marginBottom='4px';
+        const cb = document.createElement('input'); cb.type='checkbox'; cb.checked = prefs[g.id] !== false; cb.style.marginRight='6px';
+        cb.addEventListener('change', ()=>{ const p=loadPrefs(); p[g.id] = cb.checked; savePrefs(p); apply(p); });
+        row.appendChild(cb); row.appendChild(document.createTextNode(g.label)); panel.appendChild(row);
+      });
+      document.body.appendChild(panel);
+      gearBtn.addEventListener('click', ()=>{ panel.style.display = panel.style.display==='none' ? 'block' : 'none'; });
+      document.addEventListener('click', (e)=>{ if (!panel.contains(e.target) && e.target!==gearBtn){ if (panel.style.display==='block') panel.style.display='none'; } }, { capture:true });
+      apply(prefs);
+    }
+  } catch {}
 }
 
 // ===== Public init =====

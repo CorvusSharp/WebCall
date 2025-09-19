@@ -57,14 +57,27 @@ function showOutgoing(peer, statusText){
   if (!modal){
     modal = document.createElement('div');
     modal.id='outgoingCallModal';
-    modal.style.position='fixed'; modal.style.top='20px'; modal.style.left='20px';
-    modal.style.background='#202124'; modal.style.color='#fff'; modal.style.padding='16px'; modal.style.borderRadius='10px'; modal.style.boxShadow='0 4px 16px rgba(0,0,0,.3)'; modal.style.zIndex='10000';
+    modal.style.position='fixed';
+    modal.style.top='50%';
+    modal.style.left='50%';
+    modal.style.transform='translate(-50%, -50%)';
+    modal.style.minWidth='260px';
+    modal.style.background='#202124';
+    modal.style.color='#fff';
+    modal.style.padding='22px 26px 20px';
+    modal.style.borderRadius='14px';
+    modal.style.boxShadow='0 12px 32px rgba(0,0,0,.45)';
+    modal.style.zIndex='10000';
+    modal.style.display='flex';
+    modal.style.flexDirection='column';
+    modal.style.alignItems='center';
+    modal.style.textAlign='center';
     modal.innerHTML = `
-      <div style="font-weight:600;margin-bottom:4px">Исходящий звонок</div>
-      <div id="outgoingCallTo" style="opacity:.85"></div>
-      <div id="outgoingCallStatus" style="font-size:12px;margin-top:4px;color:#9fa8b1"></div>
-      <div style="margin-top:10px;display:flex;gap:8px">
-        <button id="btnOutgoingCancel" class="btn btn-sm btn-secondary">Отменить</button>
+      <div style="font-weight:600;font-size:16px;margin-bottom:6px">Исходящий звонок</div>
+      <div id="outgoingCallTo" style="opacity:.9;font-size:14px;margin-bottom:2px"></div>
+      <div id="outgoingCallStatus" style="font-size:12px;margin-top:4px;color:#9fa8b1;min-height:16px"></div>
+      <div style="margin-top:18px;display:flex;justify-content:center;width:100%">
+        <button id="btnOutgoingCancel" class="btn btn-sm btn-secondary" style="min-width:120px">Отменить</button>
       </div>`;
     document.body.appendChild(modal);
     const cbtn = modal.querySelector('#btnOutgoingCancel');
@@ -72,7 +85,7 @@ function showOutgoing(peer, statusText){
   }
   const toEl = qs('outgoingCallTo'); if (toEl) toEl.textContent = peer || '';
   const st = qs('outgoingCallStatus'); if (st) st.textContent = statusText || 'Набор…';
-  modal.style.display='';
+  modal.style.display='flex';
 }
 function hideOutgoing(){ const m = qs('outgoingCallModal'); if (m) m.style.display='none'; }
 
