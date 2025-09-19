@@ -31,7 +31,7 @@ try {
   }
 }
 
-import { appInit, connectRoom, unlockAudioPlayback } from './modules/app_init.js';
+import { appInit, connectRoom, unlockAudioPlayback } from './modules/core/app_init.js';
 import { bus } from './modules/core/event_bus.js';
 
 // Запуск приложения (инициализация модулей, подписки и т.д.)
