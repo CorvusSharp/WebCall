@@ -1,28 +1,24 @@
 from __future__ import annotations
 
-"""WebSocket канал для событий дружбы и личных сообщений.
+"""WebSocket канал для событий дружбы, личных сообщений и личных звонков.
 
-Форматы входящих сообщений (пока не требуются — канал read-only):
- - ping
+Форматы входящих (клиент -> сервер):
+ - {"type":"ping"}
+ - {"type":"call_end","roomId":str,"toUserId":str,"reason"?:str} (когда завершаем активный звонок)
 
- Форматы исходящих сообщений:
- - {"type":"friend_request","fromUserId":str, "username":str|null}
- - {"type":"friend_accepted","userId":str, "username":str|null}
- - {"type":"friend_cancelled","userId":str}
- - {"type":"friend_removed","userId":str}  # дружба удалена (обоим рассылается)
- - {"type":"direct_message","fromUserId":str,"toUserId":str,"content":str,"messageId":str,"sentAt":iso8601}
- - {"type":"call_invite","fromUserId":str,"toUserId":str,"roomId":str}
- - {"type":"call_accept","fromUserId":str,"toUserId":str,"roomId":str}
- - {"type":"call_decline","fromUserId":str,"toUserId":str,"roomId":str}
- - {"type":"call_cancel","fromUserId":str,"toUserId":str,"roomId":str}  # инициатор отменил до принятия
- - {"type":"call_end","fromUserId":str,"toUserId":str,"roomId":str,"reason":str}  # завершение уже принятого личного звонка
+Форматы исходящих (сервер -> клиент):
+ - friend_request / friend_accepted / friend_cancelled / friend_removed
+ - direct_message / direct_cleared
+ - call_invite / call_accept / call_decline / call_cancel / call_end
 
-Авторизация: query param token=<JWT> (аналогично rooms WS). Если token отсутствует и среда не dev/test — 4401.
+Авторизация: JWT в query param `token`. В средах dev,test разрешён guest режим.
+Политика: одно активное friends WebSocket соединение на пользователя. Предыдущее закрывается с кодом 4000.
 """
 
 import asyncio
 import contextlib
 import json
+import logging
 from typing import Dict, Set
 from uuid import UUID
 
@@ -30,44 +26,45 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 
 from ...infrastructure.config import get_settings
 from ...core.ports.repositories import UserRepository
-from ..api.deps.containers import get_user_repo, get_token_provider
-from ...core.ports.services import TokenProvider
+from ..api.deps.containers import get_user_repo, get_token_provider, get_call_invite_service
+from ...core.ports.services import TokenProvider, CallInviteService
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _friend_clients: Dict[UUID, Set[WebSocket]] = {}
 _ws_to_user: Dict[WebSocket, UUID] = {}
 
-# Pending call invites stored in-memory until accepted/declined
-# Keyed by room_id -> payload dict
-# NOTE: Pending инвайты теперь управляются CallInviteService (InMemoryCallInviteService).
-# Локальная структура оставлена для обратной совместимости publish_* функций,
-# но источник истины — сервис. Publish функции продолжают очищать/добавлять сюда,
-# чтобы существующий фронт, ожидающий ретрансляцию при реконнекте, работал.
+# Локальный кэш pending (дополнительно к сервису) для обратной совместимости
 _pending_calls: Dict[str, dict] = {}
 
+try:  # метрики опциональны
+    from prometheus_client import Counter, Gauge
+    FRIENDS_WS_ACTIVE = Gauge('ws_active_friends', 'Active friends WS connections')
+    CALL_EVENTS = Counter('call_signal_events_total', 'Call signaling events', ['event'])
+except Exception:  # pragma: no cover
+    FRIENDS_WS_ACTIVE = None
+    CALL_EVENTS = None
 
-def _register(user_id: UUID, ws: WebSocket):
-    # Политика: только одно активное соединение на пользователя для friends WS.
-    # Закрываем предыдущие, чтобы не плодить дублирующую рассылку событий.
+
+async def _register(user_id: UUID, ws: WebSocket) -> None:
     existing = _friend_clients.get(user_id)
     if existing:
         for old in list(existing):
             try:
-                # Отправляем причину закрытия в коде 4000 (приватный код)
-                import anyio  # noqa: F401 (для совместимости если нужен await context)
+                logger.info("WS_REPLACE user=%s old_ws=%s new_ws=%s", user_id, id(old), id(ws))
                 try:
-                    # WebSocket сервер FastAPI/Starlette: close(code) — reason опционал.
-                    old.close(code=4000)
-                except Exception:
-                    pass
+                    await old.close(code=4000)
+                except Exception as e:  # pragma: no cover
+                    logger.warning("WS_CLOSE_OLD_FAILED user=%s err=%s", user_id, e)
             finally:
                 _unregister(old)
     _friend_clients.setdefault(user_id, set()).add(ws)
     _ws_to_user[ws] = user_id
+    logger.info("WS_REGISTER user=%s ws=%s active=%s", user_id, id(ws), len(_friend_clients.get(user_id, set())))
 
 
-def _unregister(ws: WebSocket):
+def _unregister(ws: WebSocket) -> None:
     uid = _ws_to_user.pop(ws, None)
     if uid is not None:
         s = _friend_clients.get(uid)
@@ -75,10 +72,10 @@ def _unregister(ws: WebSocket):
             s.discard(ws)
             if not s:
                 _friend_clients.pop(uid, None)
+        logger.info("WS_UNREGISTER user=%s ws=%s", uid, id(ws))
 
 
 async def broadcast_user(user_id: UUID, payload: dict):
-    """Отправить событие всем WebSocket клиента данного пользователя."""
     for ws in list(_friend_clients.get(user_id, set())):
         with contextlib.suppress(Exception):
             await ws.send_json(payload)
@@ -89,29 +86,19 @@ async def broadcast_users(user_ids: Set[UUID] | list[UUID], payload: dict):
         await broadcast_user(uid, payload)
 
 
-from ..api.deps.containers import get_call_invite_service
-from ...core.ports.services import CallInviteService
-try:  # метрики опциональны
-    from prometheus_client import Counter, Gauge
-    FRIENDS_WS_ACTIVE = Gauge('ws_active_friends', 'Active friends WS connections')
-    CALL_EVENTS = Counter('call_signal_events_total', 'Call signaling events', ['event'])
-except Exception:  # pragma: no cover
-    FRIENDS_WS_ACTIVE = None
-    CALL_EVENTS = None
-
-
 @router.websocket('/ws/friends')
 async def ws_friends(
     websocket: WebSocket,
     tokens: TokenProvider = Depends(get_token_provider),  # type: ignore[arg-type]
-    users: UserRepository = Depends(get_user_repo),  # noqa: F841 (оставлено на будущее)
+    users: UserRepository = Depends(get_user_repo),  # noqa: F841
     call_invites: CallInviteService = Depends(get_call_invite_service),  # type: ignore[arg-type]
-):  # type: ignore[override]
+):
     settings = get_settings()
     token = websocket.query_params.get('token')
     await websocket.accept()
     allow_unauth = settings.APP_ENV in {'dev', 'test'}
     user_id: UUID | None = None
+
     if token:
         try:
             payload = tokens.decode_token(token)
@@ -127,29 +114,23 @@ async def ws_friends(
             await websocket.close(code=4401, reason='Unauthorized')
             return
 
-    # В неавторизованном режиме не храним подписку, только echo/ping
     if user_id is not None:
-        _register(user_id, websocket)
+        await _register(user_id, websocket)
         if FRIENDS_WS_ACTIVE:
-            try: FRIENDS_WS_ACTIVE.inc()
-            except Exception: pass
-        # На новое подключение отправляем все ожидающие инвайты для этого пользователя
-        # Запрашиваем pending через сервис (источник истины)
-        try:
+            with contextlib.suppress(Exception):
+                FRIENDS_WS_ACTIVE.inc()
+        # Ретрансляция ожидающих инвайтов через сервис
+        with contextlib.suppress(Exception):
             pending = await call_invites.list_pending_for(user_id)
             for p in pending:
-                room_id = p['roomId']
-                with contextlib.suppress(Exception):
-                    await websocket.send_json({
-                        'type': 'call_invite',
-                        'fromUserId': p['fromUserId'],
-                        'toUserId': p['toUserId'],
-                        'roomId': room_id,
-                        'fromUsername': p.get('fromUsername'),
-                        'fromEmail': p.get('fromEmail'),
-                    })
-        except Exception:
-            pass
+                await websocket.send_json({
+                    'type': 'call_invite',
+                    'fromUserId': p['fromUserId'],
+                    'toUserId': p['toUserId'],
+                    'roomId': p['roomId'],
+                    'fromUsername': p.get('fromUsername'),
+                    'fromEmail': p.get('fromEmail'),
+                })
 
     try:
         while True:
@@ -159,45 +140,40 @@ async def ws_friends(
                 break
             except Exception:
                 break
-            # Поддерживаем ping/pong
             with contextlib.suppress(Exception):
                 data = json.loads(msg)
-                if isinstance(data, dict) and data.get('type') == 'ping':
-                    await websocket.send_json({'type': 'pong'})
-                elif isinstance(data, dict) and data.get('type') == 'call_end':
-                    # Инициатор завершает уже принятый звонок.
-                    # Требования: авторизован, указаны roomId и toUserId
-                    if user_id is None:
-                        continue
-                    room_id = data.get('roomId')
-                    other_raw = data.get('toUserId')
-                    reason = data.get('reason') or 'hangup'
-                    if not room_id or not other_raw:
-                        continue
-                    try:
-                        other_uid = UUID(other_raw)
-                    except Exception:
-                        continue
-                    # Публикуем обеим сторонам
-                    payload = {
-                        'type': 'call_end',
-                        'fromUserId': str(user_id),
-                        'toUserId': str(other_uid),
-                        'roomId': room_id,
-                        'reason': reason,
-                    }
-                    await broadcast_users({user_id, other_uid}, payload)
-                    if CALL_EVENTS:
-                        try: CALL_EVENTS.labels('end').inc()
-                        except Exception: pass
+                if isinstance(data, dict):
+                    t = data.get('type')
+                    if t == 'ping':
+                        await websocket.send_json({'type': 'pong'})
+                    elif t == 'call_end' and user_id is not None:
+                        room_id = data.get('roomId')
+                        other_raw = data.get('toUserId')
+                        reason = data.get('reason') or 'hangup'
+                        if room_id and other_raw:
+                            try:
+                                other_uid = UUID(other_raw)
+                            except Exception:
+                                continue
+                            payload = {
+                                'type': 'call_end',
+                                'fromUserId': str(user_id),
+                                'toUserId': str(other_uid),
+                                'roomId': room_id,
+                                'reason': reason,
+                            }
+                            await broadcast_users({user_id, other_uid}, payload)
+                            if CALL_EVENTS:
+                                with contextlib.suppress(Exception):
+                                    CALL_EVENTS.labels('end').inc()
     finally:
         _unregister(websocket)
         if FRIENDS_WS_ACTIVE:
-            try: FRIENDS_WS_ACTIVE.dec()
-            except Exception: pass
+            with contextlib.suppress(Exception):
+                FRIENDS_WS_ACTIVE.dec()
 
 
-# === Хелперы публикации событий (используются из REST слоёв) ===
+# === Friend events ===
 
 async def publish_friend_request(from_user_id: UUID, to_user_id: UUID, from_username: str | None):
     await broadcast_user(to_user_id, {
@@ -208,7 +184,6 @@ async def publish_friend_request(from_user_id: UUID, to_user_id: UUID, from_user
 
 
 async def publish_friend_accepted(user_a: UUID, user_b: UUID, username_a: str | None, username_b: str | None):
-    # Оба получают событие
     await broadcast_user(user_a, {
         'type': 'friend_accepted',
         'userId': str(user_b),
@@ -222,7 +197,6 @@ async def publish_friend_accepted(user_a: UUID, user_b: UUID, username_a: str | 
 
 
 async def publish_friend_cancelled(requester: UUID, other: UUID):
-    # Оба получают уведомление для синхронизации (фронт просто перезагрузит списки)
     await broadcast_users({requester, other}, {
         'type': 'friend_cancelled',
         'userId': str(other),
@@ -230,13 +204,9 @@ async def publish_friend_cancelled(requester: UUID, other: UUID):
 
 
 async def publish_friend_removed(user_a: UUID, user_b: UUID):
-    """Оповестить обе стороны что дружба удалена.
-
-    Клиент при получении события просто перезагружает списки друзей/заявок.
-    """
     await broadcast_users({user_a, user_b}, {
         'type': 'friend_removed',
-        'userId': str(user_a),  # поле userId не критично; фронт всё равно делает reload
+        'userId': str(user_a),
     })
 
 
@@ -253,7 +223,6 @@ async def publish_direct_message(from_user: UUID, to_user: UUID, message_id: UUI
 
 
 async def publish_direct_cleared(user_a: UUID, user_b: UUID):
-    """Оповестить обе стороны, что их переписка очищена."""
     payload = {
         'type': 'direct_cleared',
         'userIds': [str(user_a), str(user_b)],
@@ -261,58 +230,69 @@ async def publish_direct_cleared(user_a: UUID, user_b: UUID):
     await broadcast_users({user_a, user_b}, payload)
 
 
-# === Звонки (эфемерные комнаты) ===
+# === Call signaling events ===
+
+def _inc_call_metric(name: str):  # helper
+    if CALL_EVENTS:
+        with contextlib.suppress(Exception):
+            CALL_EVENTS.labels(name).inc()
+
 
 async def publish_call_invite(from_user: UUID, to_user: UUID, room_id: str, from_username: str | None = None, from_email: str | None = None):
-    # Persist pending invite so it survives reconnects until accepted/declined
     _pending_calls[room_id] = {
         'fromUserId': str(from_user),
         'toUserId': str(to_user),
         'fromUsername': from_username,
         'fromEmail': from_email,
+        'roomId': room_id,
     }
-    await broadcast_users({from_user, to_user}, {
+    payload = {
         'type': 'call_invite',
         'fromUserId': str(from_user),
         'toUserId': str(to_user),
         'roomId': room_id,
         'fromUsername': from_username,
         'fromEmail': from_email,
-    })
+    }
+    logger.info("CALL_INVITE_SEND from=%s to=%s room=%s", from_user, to_user, room_id)
+    _inc_call_metric('invite')
+    await broadcast_users({from_user, to_user}, payload)
 
 
 async def publish_call_accept(from_user: UUID, to_user: UUID, room_id: str):
-    # Clear pending invite on accept
     _pending_calls.pop(room_id, None)
-    await broadcast_users({from_user, to_user}, {
+    payload = {
         'type': 'call_accept',
         'fromUserId': str(from_user),
         'toUserId': str(to_user),
         'roomId': room_id,
-    })
+    }
+    logger.info("CALL_ACCEPT_SEND from=%s to=%s room=%s", from_user, to_user, room_id)
+    _inc_call_metric('accept')
+    await broadcast_users({from_user, to_user}, payload)
 
 
 async def publish_call_decline(from_user: UUID, to_user: UUID, room_id: str):
-    # Clear pending invite on decline
     _pending_calls.pop(room_id, None)
-    await broadcast_users({from_user, to_user}, {
+    payload = {
         'type': 'call_decline',
         'fromUserId': str(from_user),
         'toUserId': str(to_user),
         'roomId': room_id,
-    })
+    }
+    logger.info("CALL_DECLINE_SEND from=%s to=%s room=%s", from_user, to_user, room_id)
+    _inc_call_metric('decline')
+    await broadcast_users({from_user, to_user}, payload)
 
 
 async def publish_call_cancel(from_user: UUID, to_user: UUID, room_id: str):
-    """Отмена инициатором (семантически отличается от decline принимающего).
-
-    Для клиентов можно отображать как "Отменён" на стороне инициатора и как
-    "Собеседник отменил" на стороне получателя. По сути — тоже очистка pending.
-    """
     _pending_calls.pop(room_id, None)
-    await broadcast_users({from_user, to_user}, {
+    payload = {
         'type': 'call_cancel',
         'fromUserId': str(from_user),
         'toUserId': str(to_user),
         'roomId': room_id,
-    })
+    }
+    logger.info("CALL_CANCEL_SEND from=%s to=%s room=%s", from_user, to_user, room_id)
+    _inc_call_metric('cancel')
+    await broadcast_users({from_user, to_user}, payload)
