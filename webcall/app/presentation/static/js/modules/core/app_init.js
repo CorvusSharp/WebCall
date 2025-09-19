@@ -290,6 +290,19 @@ async function ensureProfile(){
   try { const t = localStorage.getItem('wc_token'); const hasEmail = !!localStorage.getItem('wc_email'); const hasName = !!localStorage.getItem('wc_username'); if (t && (!hasEmail || !hasName)){ const me = await getMe(); if (me?.email) localStorage.setItem('wc_email', me.email); if (me?.username) localStorage.setItem('wc_username', me.username); } } catch {}
 }
 
+// ===== User badge (header current user) =====
+function updateUserBadge(){
+  try {
+    const name = localStorage.getItem('wc_username');
+    if (name && els.currentUserBadge && els.currentUsername){
+      els.currentUsername.textContent = name;
+      els.currentUserBadge.style.display = 'inline-flex';
+    } else if (els.currentUserBadge){
+      els.currentUserBadge.style.display = 'none';
+    }
+  } catch {}
+}
+
 // ===== UI Setup =====
 function setupUI(){
   els.btnConnect?.addEventListener('click', ()=>{ unlockAudioPlayback(); connectRoom(); });
@@ -330,6 +343,7 @@ export async function appInit(){
   checkAndRequestPermissionsInitial();
   try { initPush(); } catch {}
   await ensureProfile();
+  try { updateUserBadge(); } catch {}
   startFriendsWs();
   try { await loadFriends(); } catch {}
   // Подписка на статистику

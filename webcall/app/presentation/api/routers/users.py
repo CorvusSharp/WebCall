@@ -41,4 +41,5 @@ class UserShort(BaseModel):
 @router.get("/find", response_model=List[UserShort])
 async def find_users(q: str = Query(..., min_length=1), users: UserRepository = Depends(get_user_repo), current=Depends(get_current_user)):
     items = await users.search(q, limit=10)
-    return [UserShort(id=str(u.id), username=u.username, email=str(u.email)) for u in items]
+    # u.username является value object Username -> приводим к str
+    return [UserShort(id=str(u.id), username=str(u.username), email=str(u.email)) for u in items]

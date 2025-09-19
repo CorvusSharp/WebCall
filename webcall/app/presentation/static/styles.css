@@ -120,6 +120,29 @@ body,html{background-attachment:fixed}
 @keyframes spin-slow { to { transform: rotate(360deg) } }
 .title{font-weight:800;letter-spacing:.4px}
 
+/* ===== USER BADGE ===== */
+.actions{display:flex;align-items:center;gap:10px}
+.user-badge{
+  --ub-bg: linear-gradient(160deg, rgba(255,255,255,.10), rgba(255,255,255,.04));
+  display:inline-flex; align-items:center; gap:6px;
+  padding:6px 10px 6px 8px;
+  border-radius: 40px;
+  font-size:13px; font-weight:500;
+  background: var(--ub-bg);
+  border:1px solid color-mix(in srgb, var(--border) 70%, var(--primary) 30%);
+  position:relative;
+  line-height:1.1;
+  box-shadow: 0 4px 14px rgba(0,0,0,.30), inset 0 0 0 1px rgba(255,255,255,.05);
+  backdrop-filter: blur(6px) saturate(140%);
+  -webkit-backdrop-filter: blur(6px) saturate(140%);
+  letter-spacing:.2px;
+  animation: badge-in .35s cubic-bezier(.32,1.4,.32,1);
+}
+@keyframes badge-in { from { opacity:0; transform: translateY(-4px) scale(.92); } to { opacity:1; transform:none; } }
+.user-badge__icon{ font-size:15px; filter: drop-shadow(0 0 6px rgba(124,58,237,.55)); }
+.user-badge__name{ max-width:140px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+@media (max-width:640px){ .user-badge__name{ max-width:90px } }
+
 /* ======= LAYOUT ======= */
 .app-main{display:flex;flex-direction:column;gap:16px}
 .panel{background:transparent;border-radius:var(--radius)}
@@ -148,6 +171,7 @@ body,html{background-attachment:fixed}
   padding:1px;
   background: linear-gradient(140deg, rgba(124,58,237,.45), rgba(6,182,212,.35));
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor; mask-composite: exclude;
 }
 

@@ -22,6 +22,8 @@ export const els = {
   btnDiag: document.getElementById('btnDiag'),
   btnToggleTheme: document.getElementById('btnToggleTheme'),
   btnLogout: document.getElementById('btnLogout'),
+  currentUserBadge: document.getElementById('currentUserBadge'),
+  currentUsername: document.getElementById('currentUsername'),
   membersList: document.getElementById('membersList'),
   visitedRooms: document.getElementById('visitedRooms'),
   friendsCard: document.getElementById('friendsCard'),
