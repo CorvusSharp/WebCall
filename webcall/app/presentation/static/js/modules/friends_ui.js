@@ -72,7 +72,9 @@ export async function loadFriends(){
           if (els.roomId) els.roomId.value = room;
           setActiveOutgoingCall(f, room);
           try { notifyCall(f.user_id, room).catch(()=>{}); } catch {}
-          hooks.unlockAudioPlayback(); hooks.connectRoom();
+          // Больше НЕ подключаемся к комнате сразу. Ждём подтверждения (call_accept).
+          // Рингтон/статус остаются в состоянии "исходящий" пока другая сторона не примет.
+          hooks.unlockAudioPlayback();
         });
         callControls.push(btnCall);
       } else {

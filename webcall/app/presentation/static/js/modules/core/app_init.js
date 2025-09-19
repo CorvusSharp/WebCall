@@ -258,7 +258,21 @@ function startFriendsWs(){
       case 'direct_cleared': handleDirectCleared(msg); break;
       case 'call_invite': { const acc = getAccountId(); const isForMe = acc && msg.toUserId === acc; if (isForMe && !getActiveCall()){ // Унифицированный входящий тон: внутренний startIncomingTone вызывается в setActiveIncomingCall
         setActiveIncomingCall(msg.fromUserId, msg.fromUsername, msg.roomId); } else if (!getActiveCall() && acc && msg.fromUserId === acc){ setActiveOutgoingCall({ user_id: msg.toUserId, username: msg.toUsername || msg.toUserId }, msg.roomId); } break; }
-      case 'call_accept': stopSpecialRingtone(); if (getActiveCall() && getActiveCall().roomId === msg.roomId) markCallAccepted(msg.roomId); break;
+      case 'call_accept': {
+        stopSpecialRingtone();
+        const ac = getActiveCall();
+        if (ac && ac.roomId === msg.roomId){
+          const wasOutgoing = ac.direction === 'outgoing';
+            markCallAccepted(msg.roomId);
+            // Если мы были инициатором (outgoing) и ещё не в комнате — теперь подключаемся.
+            if (wasOutgoing){
+              try {
+                if (els.roomId && els.roomId.value !== msg.roomId) els.roomId.value = msg.roomId;
+                if (!appState.ws){ unlockAudioPlayback(); connectRoom(); }
+              } catch {}
+            }
+        }
+        break; }
       case 'call_decline': stopSpecialRingtone(); if (getActiveCall() && getActiveCall().roomId === msg.roomId) markCallDeclined(msg.roomId); break;
       case 'call_cancel': stopSpecialRingtone(); if (getActiveCall() && getActiveCall().roomId === msg.roomId) markCallDeclined(msg.roomId); break;
       case 'call_end': {
