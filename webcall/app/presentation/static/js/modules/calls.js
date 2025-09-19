@@ -187,19 +187,25 @@ function ensureGenericAudio(kind){
  * @param {()=>void} [onDone]
  */
 function fadeVolume(audio, target, ms, onDone){
-  target = Math.max(0, Math.min(1, target));
-  const startVol = audio.volume;
-  const delta = target - startVol;
-  if (Math.abs(delta) < 0.005){ audio.volume = target; onDone && onDone(); return; }
-  const start = performance.now();
-  /** @param {number} now */
-  function step(now){
-    const t = Math.min(1, (now - start)/ms);
-    audio.volume = startVol + delta * t;
-    if (t < 1){ requestAnimationFrame(step); } else { onDone && onDone(); }
-  }
-  requestAnimationFrame(step);
+  try {
+    target = clamp01(target);
+    const startVol = clamp01(audio.volume ?? 0);
+    const delta = target - startVol;
+    if (Math.abs(delta) < 0.005){ audio.volume = target; onDone && onDone(); return; }
+    const start = performance.now();
+    /** @param {number} now */
+    function step(now){
+      const t = Math.min(1, (now - start)/ms);
+      const v = clamp01(startVol + delta * t);
+      try { audio.volume = v; } catch {}
+      if (t < 1){ requestAnimationFrame(step); } else { onDone && onDone(); }
+    }
+    requestAnimationFrame(step);
+  } catch { onDone && onDone(); }
 }
+
+/** @param {number} v @returns {number} */
+function clamp01(v){ return v < 0 ? 0 : v > 1 ? 1 : v; }
 
 /**
  * Запуск c fade-in
