@@ -14,39 +14,8 @@ let _lastClick = 0;
 function qs(id){ return /** @type {HTMLElement|null} */(document.getElementById(id)); }
 
 // ---- Создание/кеш UI элементов ----
-function ensureButtons(){
-  let ctx = qs('callContext');
-  if (!ctx){
-    // Создаём плавающую панель, если основной контейнер отсутствует
-    let floating = document.getElementById('callContextFloating');
-    if (!floating){
-      floating = document.createElement('div');
-      floating.id='callContextFloating';
-      floating.style.position='fixed';
-      floating.style.bottom='16px';
-      floating.style.left='16px';
-      floating.style.background='rgba(32,33,36,0.92)';
-      floating.style.color='#fff';
-      floating.style.padding='10px 14px';
-      floating.style.borderRadius='10px';
-      floating.style.fontSize='14px';
-      floating.style.boxShadow='0 4px 18px rgba(0,0,0,.35)';
-      floating.style.zIndex='9999';
-      floating.innerHTML = '<div id="callContext" style="margin-bottom:6px"></div>';
-      document.body.appendChild(floating);
-    }
-    ctx = qs('callContext');
-  }
-  if (!ctx) return; // если даже fallback не удался
-  if (!qs('btnCallCancel')){
-    const b = document.createElement('button'); b.id='btnCallCancel'; b.textContent='Отменить'; b.className='btn btn-sm'; ctx.appendChild(b);
-    b.addEventListener('click', ()=>actionGuard(()=>_handlers.cancel && _handlers.cancel()));
-  }
-  if (!qs('btnCallHangup')){
-    const b2 = document.createElement('button'); b2.id='btnCallHangup'; b2.textContent='Завершить'; b2.className='btn btn-sm btn-danger'; b2.style.marginLeft='6px'; ctx.appendChild(b2);
-    b2.addEventListener('click', ()=>actionGuard(()=>_handlers.hangup && _handlers.hangup()));
-  }
-}
+// Удаляем старую плавающую панель. Оставляем только входящую модалку и новую исходящую.
+function ensureButtons(){}
 
 function actionGuard(fn){
   const now = Date.now();
@@ -82,6 +51,31 @@ function showIncoming(name, statusText){
 
 function hideIncoming(){ const m = qs('incomingCallModal'); if (m) m.style.display='none'; }
 
+// ---- Outgoing modal ----
+function showOutgoing(peer, statusText){
+  let modal = qs('outgoingCallModal');
+  if (!modal){
+    modal = document.createElement('div');
+    modal.id='outgoingCallModal';
+    modal.style.position='fixed'; modal.style.top='20px'; modal.style.left='20px';
+    modal.style.background='#202124'; modal.style.color='#fff'; modal.style.padding='16px'; modal.style.borderRadius='10px'; modal.style.boxShadow='0 4px 16px rgba(0,0,0,.3)'; modal.style.zIndex='10000';
+    modal.innerHTML = `
+      <div style="font-weight:600;margin-bottom:4px">Исходящий звонок</div>
+      <div id="outgoingCallTo" style="opacity:.85"></div>
+      <div id="outgoingCallStatus" style="font-size:12px;margin-top:4px;color:#9fa8b1"></div>
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button id="btnOutgoingCancel" class="btn btn-sm btn-secondary">Отменить</button>
+      </div>`;
+    document.body.appendChild(modal);
+    const cbtn = modal.querySelector('#btnOutgoingCancel');
+    if (cbtn && !cbtn.__bound){ cbtn.__bound=true; cbtn.addEventListener('click', ()=> actionGuard(()=> _handlers.cancel && _handlers.cancel())); }
+  }
+  const toEl = qs('outgoingCallTo'); if (toEl) toEl.textContent = peer || '';
+  const st = qs('outgoingCallStatus'); if (st) st.textContent = statusText || 'Набор…';
+  modal.style.display='';
+}
+function hideOutgoing(){ const m = qs('outgoingCallModal'); if (m) m.style.display='none'; }
+
 function bindModalButtons(){
   const a = qs('btnCallAccept');
   const d = qs('btnCallDecline');
@@ -92,8 +86,7 @@ function bindModalButtons(){
 // ---- Banner / status area ----
 function render(state){
   ensureButtons();
-  const banner = qs('callContext');
-  if (!banner) return;
+  // Больше не используем нижнюю панель — только модалки
   /** @type {UICallState} */
   const s = state || { phase:'idle' };
   let text = '';
@@ -108,30 +101,19 @@ function render(state){
     case 'ended': text = formatEndedReason(s); break;
     default: text = s.phase;
   }
-  banner.textContent = text;
-
-  // Управление видимостью кнопок
-  const btnCancel = qs('btnCallCancel');
-  const btnHang = qs('btnCallHangup');
-  if (btnCancel){
-    btnCancel.style.display = ['dialing','outgoing_ringing'].includes(s.phase) ? '' : 'none';
-    btnCancel.disabled = s.phase==='ended';
-  }
-  if (btnHang){
-    btnHang.style.display = ['active','connecting','incoming_ringing'].includes(s.phase) ? '' : (s.phase==='ended' ? '' : 'none');
-    btnHang.disabled = s.phase==='ended';
-    if (s.phase==='ended') btnHang.textContent='Закрыть'; else btnHang.textContent='Завершить';
-  }
-
-  // Incoming modal logic
+  // Управление модалками
   if (s.phase === 'incoming_ringing'){
-    showIncoming(peer, 'Звонит…');
-  } else if (s.phase === 'connecting'){
-    if (s.incoming) showIncoming(peer, 'Подключение…'); else hideIncoming();
-  } else if (s.phase === 'active'){
-    hideIncoming();
-  } else if (s.phase === 'ended'){
-    hideIncoming();
+    hideOutgoing(); showIncoming(peer, 'Звонит…');
+  } else if (['dialing','outgoing_ringing'].includes(s.phase)) {
+    hideIncoming(); showOutgoing(peer, s.phase==='dialing' ? 'Соединение…' : 'Идёт звонок…');
+  } else if (s.phase === 'connecting') {
+    if (s.incoming){ hideOutgoing(); showIncoming(peer, 'Подключение…'); } else { hideIncoming(); showOutgoing(peer, 'Подключение…'); }
+  } else if (s.phase === 'active') {
+    hideIncoming(); hideOutgoing();
+  } else if (s.phase === 'ended') {
+    hideIncoming(); hideOutgoing();
+  } else if (s.phase === 'idle'){
+    hideIncoming(); hideOutgoing();
   }
 }
 
@@ -153,9 +135,10 @@ export function updateCallUI(state){ try { render(state); } catch(e){ console.wa
 
 export function bindActions(onAccept, onDecline, onCancel, onHangup){
   _handlers.accept = onAccept; _handlers.decline = onDecline; _handlers.cancel = onCancel; _handlers.hangup = onHangup;
-  bindModalButtons(); ensureButtons();
+  bindModalButtons();
 }
 
 export function clearCallUI(){ updateCallUI({ phase:'idle' }); }
 
-export { hideIncoming };
+export { hideIncoming }; 
+export { hideOutgoing }; 
