@@ -116,9 +116,6 @@ function scheduleEndedCleanup(){
 function emit(){
   try { updateCallUI(/** @type {UICallState} */({...state})); } catch(e){ warn('UI update failed', e); }
   for (const fn of [...listeners]){ try { fn({...state}); } catch{} }
-  if (window.debugPanel){
-    try { window.debugPanel.logCallEvent('STATE', { ...state }); } catch{}
-  }
   try {
     window.appState && (window.appState.callPhase = state.phase);
   } catch{}
@@ -286,7 +283,7 @@ function internalHandle(msg, acc){
     window.__CALL_DEBUG.push({ ts:Date.now(), phase:state.phase, msg });
     if (window.__CALL_DEBUG.length>300) window.__CALL_DEBUG.splice(0, window.__CALL_DEBUG.length-300);
   } catch{}
-  if (window.debugPanel){ try { window.debugPanel.logCallEvent('MSG', { type: msg.type, ...msg, phase: state.phase }); } catch{} }
+  // debugPanel отключён
   const t = msg.type;
   switch(t){
     case 'call_invite': return onInvite(msg, acc);

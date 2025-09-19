@@ -367,18 +367,13 @@ function startFriendsWs(){
         case 'direct_message': handleIncomingDirect(msg); try { const acc=getAccountId(); const other= msg.fromUserId === acc ? msg.toUserId : msg.fromUserId; const isActiveChat = appState.currentDirectFriend && other === appState.currentDirectFriend; const iAmRecipient = msg.toUserId === acc; if (iAmRecipient && !isActiveChat && 'Notification' in window && Notification.permission==='granted'){ const title = 'Новое сообщение'; const body = msg.fromUsername ? `От ${msg.fromUsername}` : 'Личное сообщение'; const reg = await navigator.serviceWorker.getRegistration('/static/sw.js'); if (reg && reg.showNotification){ reg.showNotification(title, { body, data:{ type:'direct', from: other } }); } else { new Notification(title, { body, data:{ type:'direct', from: other } }); } } } catch {} break;
         case 'direct_cleared': handleDirectCleared(msg); break;
         case 'call_invite':
-          try { showToast && showToast(`(debug) Входящий call_invite from=${msg.fromUserId?.slice(0,8)} to=${msg.toUserId?.slice(0,8)}`, 'info'); } catch {}
         case 'call_accept':
         case 'call_decline':
         case 'call_cancel':
         case 'call_end': {
-          // Логируем звонковые сообщения
           log(`📞 Call signal: ${msg.type} from ${msg.fromUserId} to ${msg.toUserId}`);
-          // Делегируем в новый signaling слой
-          try { handleCallSignal(msg); } catch (e) {
-            log(`❌ Error handling call signal: ${e.message}`);
-          }
-          break; 
+          try { handleCallSignal(msg); } catch (e) { log(`❌ Error handling call signal: ${e.message}`); }
+          break;
         }
         default: 
           log(`❓ Unknown message type: ${msg.type}`);
@@ -510,7 +505,11 @@ function setupUI(){
       panel.style.display='none';
       panel.style.zIndex='2000';
       panel.style.minWidth='220px';
-      panel.innerHTML = '<div style="font-weight:600;margin-bottom:8px">Отображение</div>';
+  panel.innerHTML = '<div style="font-weight:600;margin-bottom:8px">Отображение</div>';
+  const container = document.createElement('div');
+  container.style.display='flex';
+  container.style.flexWrap='wrap';
+  container.style.gap='6px';
       const groups = [
         { id:'logs', label:'Логи' },
         { id:'stats', label:'Статистика' },
@@ -525,18 +524,46 @@ function setupUI(){
       const savePrefs = (p)=>{ try { localStorage.setItem(prefsKey, JSON.stringify(p)); } catch {} };
       const apply = (prefs)=>{
         groups.forEach(g=>{
-          const el = els[g.id] || document.getElementById(g.id);
-          if (el){ el.style.display = prefs[g.id] === false ? 'none' : ''; }
+          // Базовый элемент (например logs, stats, chat)
+            const base = els[g.id] || document.getElementById(g.id);
+            // Альтернативный элемент c суффиксом Card (например logsCard)
+            const alt = document.getElementById(g.id + 'Card');
+            // Если базовый элемент вложен в card/panel – найдём ближайшего родителя
+            const containers = [];
+            if (base) containers.push(base);
+            if (alt && alt !== base) containers.push(alt);
+            // Собираем потенциальные обёртки
+            const wrappers = new Set();
+            for (const node of containers){
+              if (!node) continue;
+              // Ищем ближайшего родителя с классом card или panel
+              let p = node;
+              while (p && p !== document.body){
+                if (p.classList && (p.classList.contains('card') || p.classList.contains('panel'))){ wrappers.add(p); break; }
+                p = p.parentElement;
+              }
+            }
+            const shouldShow = prefs[g.id] !== false;
+            // Применяем display для всех собранных элементов
+            [...wrappers, ...containers].forEach(el=>{ if (el) el.style.display = shouldShow ? '' : 'none'; });
         });
       };
       const prefs = loadPrefs();
       groups.forEach(g=>{
-        const row = document.createElement('label');
-        row.style.display='flex'; row.style.alignItems='center'; row.style.fontSize='13px'; row.style.marginBottom='4px';
-        const cb = document.createElement('input'); cb.type='checkbox'; cb.checked = prefs[g.id] !== false; cb.style.marginRight='6px';
+        const wrap = document.createElement('label');
+        wrap.style.display='inline-flex';
+        wrap.style.alignItems='center';
+        wrap.style.border='1px solid #404449';
+        wrap.style.borderRadius='18px';
+        wrap.style.padding='4px 10px 4px 8px';
+        wrap.style.fontSize='12px';
+        wrap.style.background='#2a2d31';
+        wrap.style.cursor='pointer';
+        const cb = document.createElement('input'); cb.type='checkbox'; cb.checked = prefs[g.id] !== false; cb.style.marginRight='6px'; cb.style.accentColor='#4fa3ff';
         cb.addEventListener('change', ()=>{ const p=loadPrefs(); p[g.id] = cb.checked; savePrefs(p); apply(p); });
-        row.appendChild(cb); row.appendChild(document.createTextNode(g.label)); panel.appendChild(row);
+        wrap.appendChild(cb); wrap.appendChild(document.createTextNode(g.label)); container.appendChild(wrap);
       });
+      panel.appendChild(container);
       document.body.appendChild(panel);
       gearBtn.addEventListener('click', ()=>{ panel.style.display = panel.style.display==='none' ? 'block' : 'none'; });
       document.addEventListener('click', (e)=>{ if (!panel.contains(e.target) && e.target!==gearBtn){ if (panel.style.display==='block') panel.style.display='none'; } }, { capture:true });
