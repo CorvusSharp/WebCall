@@ -184,6 +184,19 @@ export async function connectRoom(){
       for (const peerId of msg.users){ if (peerId === myId) continue; try { const last = appState.recentOffer.get(peerId) || 0; const now=Date.now(); if (now - last < 3000){ log(`Пропущен повторный старт для ${peerId}`); continue; } appState.recentOffer.set(peerId, now); } catch {}
         try { log(`Обнаружен пир ${peerId}, инициирую звонок...`); await appState.rtc.startOffer(peerId); } catch(e){ log(`startOffer(${peerId}) failed: ${e}`); }
       }
+      // Авто-выход из личной комнаты звонка если остались одни
+      try {
+        const roomId = els.roomId?.value || '';
+        if (/^call-/.test(roomId)) {
+          // Если в presence только наш connId -> другой вышел
+            if (msg.users.length <= 1) {
+              log('call-room solitary: auto hangup + leave');
+              try { window.getCallState && window.getCallState().phase==='active' && window.hangup?.(); } catch {}
+              // Небольшая задержка чтобы дать пройти возможному call_end
+              setTimeout(()=>{ try { leaveRoom(); } catch {} }, 120);
+            }
+        }
+      } catch {}
     } else if (msg.type === 'user_joined'){ log(`Присоединился: ${msg.userId}`); }
     else if (msg.type === 'user_left'){ log(`Отключился: ${msg.userId}`); const tile=document.querySelector(`.tile[data-peer="${msg.userId}"]`); if (tile) tile.remove(); }
     else if (msg.type === 'chat'){
