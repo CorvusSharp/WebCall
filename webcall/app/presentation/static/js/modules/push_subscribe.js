@@ -18,7 +18,25 @@ export async function initPush(){
     sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey: vapidKey });
   }
   const payload = { endpoint: sub.endpoint, keys: sub.toJSON().keys };
-  await subscribePush(payload);
+  // Идемпотентность: вычисляем fingerprint на основе endpoint + ключей и сравниваем с сохранённым.
+  try {
+    const keys = payload.keys || {};
+    const fpSource = payload.endpoint + '|' + (keys.p256dh || '') + '|' + (keys.auth || '');
+    const enc = new TextEncoder();
+    const digest = await crypto.subtle.digest('SHA-256', enc.encode(fpSource));
+    const fpArr = Array.from(new Uint8Array(digest));
+    const fingerprint = fpArr.map(b=>b.toString(16).padStart(2,'0')).join('');
+    const stored = localStorage.getItem('pushSubFingerprint');
+    if (stored === fingerprint) {
+      // Ничего не изменилось — не дергаем сервер заново.
+      return;
+    }
+    await subscribePush(payload);
+    localStorage.setItem('pushSubFingerprint', fingerprint);
+  } catch(e){
+    // В случае ошибки fallback на прежнее поведение
+    await subscribePush(payload);
+  }
 }
 
 function urlBase64ToUint8Array(base64String){
