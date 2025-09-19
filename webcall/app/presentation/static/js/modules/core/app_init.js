@@ -9,7 +9,7 @@ import { appState } from './state.js';
 import { loadVisitedRooms } from '../visited_rooms.js';
 import { initFriendsModule, loadFriends, scheduleFriendsReload, initFriendsUI } from '../friends_ui.js';
 import { initDirectChatModule, handleIncomingDirect, handleDirectCleared, bindSendDirect } from '../direct_chat.js';
-import { startSpecialRingtone, stopSpecialRingtone, setActiveIncomingCall, setActiveOutgoingCall, markCallAccepted, markCallDeclined, resetActiveCall, getActiveCall } from '../calls.js';
+import { startSpecialRingtone, stopSpecialRingtone, setActiveIncomingCall, setActiveOutgoingCall, markCallAccepted, markCallDeclined, resetActiveCall, getActiveCall, initCallModule } from '../calls.js';
 import { checkAndRequestPermissionsInitial, updatePermBanner } from '../permissions.js';
 import { initPush } from '../push_subscribe.js';
 import { bus } from './event_bus.js';
@@ -26,8 +26,21 @@ function getStableConnId(){
     return id;
   } catch { return crypto.randomUUID(); }
 }
+// Корректное декодирование JWT payload c base64url → JSON
+function b64urlDecode(str){
+  try {
+    // Преобразуем base64url в base64
+    str = str.replace(/-/g,'+').replace(/_/g,'/');
+    const pad = str.length % 4; if (pad) str += '='.repeat(4-pad);
+    return atob(str);
+  } catch { return ''; }
+}
 function getAccountId(){
-  try { const t = localStorage.getItem('wc_token'); if (!t) return null; const payload = JSON.parse(atob(t.split('.')[1])); return payload.sub; } catch { return null; }
+  try {
+    const t = localStorage.getItem('wc_token'); if (!t) return null; const part = t.split('.')[1]; if (!part) return null;
+    const raw = b64urlDecode(part); if (!raw) return null; const payload = JSON.parse(raw);
+    return payload.sub || null;
+  } catch { return null; }
 }
 
 // ====== Audio unlock ======
@@ -261,8 +274,8 @@ function startFriendsWs(){
         const isForMe = acc && msg.toUserId === acc; 
         const ac = getActiveCall();
         const canReplace = !ac || (ac && (ac.roomId !== msg.roomId) && (ac.status === 'declined' || ac.status === 'accepted'));
+        try { log(`call_invite <- room=${msg.roomId} from=${msg.fromUserId} to=${msg.toUserId} acc=${acc} isForMe=${!!isForMe} hasActive=${!!ac} canReplace=${!!canReplace}`); } catch {}
         if (isForMe && ( !ac || (ac.direction==='incoming' && ac.status==='invited' && ac.roomId===msg.roomId) || canReplace)){
-          // Если приходит новый инвайт — перезаписываем.
           setActiveIncomingCall(msg.fromUserId, msg.fromUsername, msg.roomId);
         } else if (!ac && acc && msg.fromUserId === acc){
           setActiveOutgoingCall({ user_id: msg.toUserId, username: msg.toUsername || msg.toUserId }, msg.roomId);
@@ -360,6 +373,9 @@ export async function appInit(){
   setupUI();
   refreshDevices();
   log('Приложение инициализировано');
+
+  // Инициализация модуля звонков (хуки для подключения комнаты и аудио)
+  try { initCallModule({ reloadFriends: loadFriends, unlockAudioPlayback, connectRoom }); } catch {}
 
   initDirectChatModule({ log, getAccountId });
   try { bindSendDirect(); } catch {}
