@@ -254,7 +254,15 @@ async def publish_call_invite(from_user: UUID, to_user: UUID, room_id: str, from
         'fromUsername': from_username,
         'fromEmail': from_email,
     }
-    logger.info("CALL_INVITE_SEND from=%s to=%s room=%s", from_user, to_user, room_id)
+    # Диагностика: сколько активных WS у отправителя и получателя на момент рассылки
+    try:
+        from_count = len(_friend_clients.get(from_user, set()))
+        to_count = len(_friend_clients.get(to_user, set()))
+        logger.info(
+            "CALL_INVITE_SEND from=%s(to_ws=%s) to=%s(to_ws=%s) room=%s", from_user, from_count, to_user, to_count, room_id
+        )
+    except Exception:
+        logger.info("CALL_INVITE_SEND from=%s to=%s room=%s", from_user, to_user, room_id)
     _inc_call_metric('invite')
     await broadcast_users({from_user, to_user}, payload)
 

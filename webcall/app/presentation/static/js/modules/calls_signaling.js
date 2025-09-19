@@ -134,7 +134,13 @@ export function handleWsMessage(msg){
 }
 
 function _handleWsMessage(msg, acc){
-  dbg('ws msg', msg.type, { roomId: msg.roomId, from: msg.fromUserId, to: msg.toUserId, acc });
+  try {
+    // Сохраняем в глобальный буфер для ручной диагностики в консоли
+    if (!window.__CALL_DEBUG) window.__CALL_DEBUG = [];
+    window.__CALL_DEBUG.push({ ts: Date.now(), phase: state.phase, acc, msg });
+    if (window.__CALL_DEBUG.length > 200) window.__CALL_DEBUG.splice(0, window.__CALL_DEBUG.length - 200);
+  } catch {}
+  dbg('ws msg', msg.type, { roomId: msg.roomId, from: msg.fromUserId, to: msg.toUserId, acc, curPhase: state.phase });
   switch(msg.type){
     case 'call_invite': {
       const isForMe = acc && msg.toUserId === acc;
@@ -143,6 +149,24 @@ function _handleWsMessage(msg, acc){
         if (['incoming_invite','outgoing_invite','active'].includes(state.phase)){
           if (state.roomId === msg.roomId && state.phase==='incoming_invite') setState({ otherUsername: msg.fromUsername });
         } else {
+          // Fallback: если нет DOM элементов модалки — создаём упрощённый баннер
+          try {
+            if (!document.getElementById('incomingCallModal')){
+              const fallback = document.getElementById('callFallbackModal') || document.createElement('div');
+              fallback.id = 'callFallbackModal';
+              fallback.style.position='fixed'; fallback.style.bottom='16px'; fallback.style.right='16px';
+              fallback.style.background='#222'; fallback.style.color='#fff'; fallback.style.padding='12px 16px';
+              fallback.style.borderRadius='8px'; fallback.style.zIndex='9999';
+              fallback.innerHTML = '';
+              const title = document.createElement('div'); title.textContent = 'Входящий звонок'; title.style.fontWeight='600'; fallback.appendChild(title);
+              const from = document.createElement('div'); from.textContent = msg.fromUsername || msg.fromUserId || 'Пользователь'; fallback.appendChild(from);
+              const row = document.createElement('div'); row.style.marginTop='8px'; fallback.appendChild(row);
+              const mkBtn = (text, handler)=>{ const b=document.createElement('button'); b.textContent=text; b.style.marginRight='6px'; b.onclick=()=>{ try { handler(); } catch {}; try { fallback.remove(); } catch {}; }; row.appendChild(b); return b; };
+              mkBtn('Принять', ()=> acceptIncoming());
+              mkBtn('Отклонить', ()=> declineIncoming());
+              document.body.appendChild(fallback);
+            }
+          } catch {}
           setState({ phase:'incoming_invite', roomId: msg.roomId, otherUserId: msg.fromUserId, otherUsername: msg.fromUsername });
         }
       } else if (isMine){
@@ -175,3 +199,8 @@ function _handleWsMessage(msg, acc){
 }
 
 export function resetCallSystem(){ state = { phase:'idle' }; clearCallUI(); emit(); }
+
+// Утилита для ручной диагностики из консоли
+try {
+  window.__debugCallState = ()=> ({ state: { ...state }, log: (window.__CALL_DEBUG||[]).slice() });
+} catch {}
