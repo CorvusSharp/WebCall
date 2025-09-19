@@ -8,7 +8,7 @@ import { els, appendLog, appendChat, setText, setEnabled, showToast } from './do
 import { appState } from './state.js';
 import { loadVisitedRooms } from '../visited_rooms.js';
 import { initFriendsModule, loadFriends, scheduleFriendsReload, initFriendsUI } from '../friends_ui.js';
-import { initDirectChatModule, handleIncomingDirect, handleDirectCleared } from '../direct_chat.js';
+import { initDirectChatModule, handleIncomingDirect, handleDirectCleared, bindSendDirect } from '../direct_chat.js';
 import { startSpecialRingtone, stopSpecialRingtone, setActiveIncomingCall, setActiveOutgoingCall, markCallAccepted, markCallDeclined, resetActiveCall, getActiveCall } from '../calls.js';
 import { checkAndRequestPermissionsInitial, updatePermBanner } from '../permissions.js';
 import { initPush } from '../push_subscribe.js';
@@ -352,6 +352,7 @@ export async function appInit(){
   log('Приложение инициализировано');
 
   initDirectChatModule({ log, getAccountId });
+  try { bindSendDirect(); } catch {}
   initFriendsModule({ log, unlockAudioPlayback, connectRoom });
   try { initFriendsUI(); } catch {}
 
