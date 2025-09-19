@@ -291,7 +291,9 @@ function _handleWsMessage(msg, acc){
     case 'call_invite': {
       const isForMe = acc && msg.toUserId === acc;
       const isMine = acc && msg.fromUserId === acc;
+      dbg('call_invite analysis', { isForMe, isMine, acc, fromUserId: msg.fromUserId, toUserId: msg.toUserId });
       if (isForMe){
+        dbg('📞 Incoming call for me!', { fromUser: msg.fromUsername, roomId: msg.roomId, currentPhase: state.phase });
         if (['incoming_invite','outgoing_invite','active'].includes(state.phase)){
           if (state.roomId === msg.roomId && state.phase==='incoming_invite') setState({ otherUsername: msg.fromUsername });
         } else {
@@ -314,8 +316,10 @@ function _handleWsMessage(msg, acc){
             }
           } catch {}
           setState({ phase:'incoming_invite', roomId: msg.roomId, otherUserId: msg.fromUserId, otherUsername: msg.fromUsername });
+          dbg('✅ Set incoming_invite state');
         }
       } else if (isMine){
+        dbg('📞 Outgoing call confirmation for me!');
         if (state.phase==='idle'){
           setState({ phase:'outgoing_invite', roomId: msg.roomId, otherUserId: msg.toUserId, otherUsername: msg.toUsername });
         } else if (state.phase==='outgoing_invite' && state.roomId === msg.roomId){
@@ -352,4 +356,12 @@ export function resetCallSystem(){ state = { phase:'idle' }; clearCallUI(); emit
 // Утилита для ручной диагностики из консоли
 try {
   window.__debugCallState = ()=> ({ state: { ...state }, log: (window.__CALL_DEBUG||[]).slice() });
+  window.getCallState = () => state;
+  window.getCallDebug = () => ({
+    state: state,
+    lastMessages: (window.__CALL_DEBUG||[]).slice(-5),
+    phase: state.phase,
+    roomId: state.roomId,
+    otherUser: state.otherUserId
+  });
 } catch {}

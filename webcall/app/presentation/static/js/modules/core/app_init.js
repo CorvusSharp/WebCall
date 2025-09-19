@@ -320,7 +320,7 @@ function startFriendsWs(){
     
     appState.friendsWs.onopen = ()=>{ 
       const connectTime = Date.now() - connectStartTime;
-      log(`WS друзей открыт за ${connectTime}ms`); 
+      log(`✅ WS друзей открыт за ${connectTime}ms`); 
       clearTimeout(connectTimeout);
       // Сбрасываем счетчик попыток и флаг подключения при успешном подключении
       appState.wsReconnectAttempts = 0;
@@ -328,27 +328,49 @@ function startFriendsWs(){
       
       try { 
         appState.friendsWs.send(JSON.stringify({ type:'ping' })); 
-        log('Friends WS: ping отправлен');
+        log('📤 Friends WS: ping отправлен');
       } catch (e) {
-        log('Friends WS: ошибка отправки ping:', e);
+        log('❌ Friends WS: ошибка отправки ping:', e);
       }
     };
   appState.friendsWs.onmessage = async (ev)=>{
-    try { const msg = JSON.parse(ev.data); if (!msg || typeof msg !== 'object') return; switch(msg.type){
-      case 'friend_request': case 'friend_accepted': case 'friend_cancelled': scheduleFriendsReload(); break;
-      case 'friend_removed': scheduleFriendsReload(); break;
-      case 'direct_message': handleIncomingDirect(msg); try { const acc=getAccountId(); const other= msg.fromUserId === acc ? msg.toUserId : msg.fromUserId; const isActiveChat = appState.currentDirectFriend && other === appState.currentDirectFriend; const iAmRecipient = msg.toUserId === acc; if (iAmRecipient && !isActiveChat && 'Notification' in window && Notification.permission==='granted'){ const title = 'Новое сообщение'; const body = msg.fromUsername ? `От ${msg.fromUsername}` : 'Личное сообщение'; const reg = await navigator.serviceWorker.getRegistration('/static/sw.js'); if (reg && reg.showNotification){ reg.showNotification(title, { body, data:{ type:'direct', from: other } }); } else { new Notification(title, { body, data:{ type:'direct', from: other } }); } } } catch {} break;
-      case 'direct_cleared': handleDirectCleared(msg); break;
-      case 'call_invite':
-      case 'call_accept':
-      case 'call_decline':
-      case 'call_cancel':
-      case 'call_end': {
-        // Делегируем в новый signaling слой
-        try { handleCallSignal(msg); } catch {}
-        break; }
-      default: break;
-    } } catch {}
+    try { 
+      const msg = JSON.parse(ev.data); 
+      if (!msg || typeof msg !== 'object') return; 
+      
+      // Подсчитываем сообщения
+      if (!window.__FRIENDS_WS_STATS) window.__FRIENDS_WS_STATS = { total: 0, byType: {} };
+      window.__FRIENDS_WS_STATS.total++;
+      window.__FRIENDS_WS_STATS.byType[msg.type] = (window.__FRIENDS_WS_STATS.byType[msg.type] || 0) + 1;
+      
+      // Логируем все входящие сообщения
+      log(`📥 Friends WS message: ${msg.type} (всего: ${window.__FRIENDS_WS_STATS.total})`);
+      
+      switch(msg.type){
+        case 'friend_request': case 'friend_accepted': case 'friend_cancelled': scheduleFriendsReload(); break;
+        case 'friend_removed': scheduleFriendsReload(); break;
+        case 'direct_message': handleIncomingDirect(msg); try { const acc=getAccountId(); const other= msg.fromUserId === acc ? msg.toUserId : msg.fromUserId; const isActiveChat = appState.currentDirectFriend && other === appState.currentDirectFriend; const iAmRecipient = msg.toUserId === acc; if (iAmRecipient && !isActiveChat && 'Notification' in window && Notification.permission==='granted'){ const title = 'Новое сообщение'; const body = msg.fromUsername ? `От ${msg.fromUsername}` : 'Личное сообщение'; const reg = await navigator.serviceWorker.getRegistration('/static/sw.js'); if (reg && reg.showNotification){ reg.showNotification(title, { body, data:{ type:'direct', from: other } }); } else { new Notification(title, { body, data:{ type:'direct', from: other } }); } } } catch {} break;
+        case 'direct_cleared': handleDirectCleared(msg); break;
+        case 'call_invite':
+        case 'call_accept':
+        case 'call_decline':
+        case 'call_cancel':
+        case 'call_end': {
+          // Логируем звонковые сообщения
+          log(`📞 Call signal: ${msg.type} from ${msg.fromUserId} to ${msg.toUserId}`);
+          // Делегируем в новый signaling слой
+          try { handleCallSignal(msg); } catch (e) {
+            log(`❌ Error handling call signal: ${e.message}`);
+          }
+          break; 
+        }
+        default: 
+          log(`❓ Unknown message type: ${msg.type}`);
+          break;
+      } 
+    } catch (e) {
+      log(`❌ Error parsing Friends WS message: ${e.message}`);
+    }
   };
     appState.friendsWs.onclose = (event)=>{ 
       log(`Friends WS закрыт: код=${event.code}, причина=${event.reason}`);
@@ -544,6 +566,51 @@ export async function appInit(){
       window.appState.wsReconnectAttempts = 0;
       startFriendsWs();
       showToast('Принудительное переподключение WebSocket', 'info');
+    };
+    
+    // Функция для тестирования Friends WebSocket
+    window.testFriendsWS = () => {
+      const ws = window.appState?.friendsWs;
+      if (!ws) {
+        console.log('❌ Friends WebSocket не создан');
+        return false;
+      }
+      
+      const states = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
+      const state = states[ws.readyState] || 'UNKNOWN';
+      console.log(`🔍 Friends WebSocket состояние: ${state} (${ws.readyState})`);
+      
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(JSON.stringify({ type: 'test_message', timestamp: Date.now() }));
+          console.log('📤 Тестовое сообщение отправлено');
+          return true;
+        } catch (e) {
+          console.log(`❌ Ошибка отправки: ${e.message}`);
+          return false;
+        }
+      } else {
+        console.log('⚠️ WebSocket не в состоянии OPEN');
+        return false;
+      }
+    };
+    
+    // Функция для получения статистики Friends WebSocket
+    window.getFriendsWSStats = () => {
+      const ws = window.appState?.friendsWs;
+      const stats = window.__FRIENDS_WS_STATS || { total: 0, byType: {} };
+      
+      return {
+        websocket: {
+          exists: !!ws,
+          state: ws ? ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][ws.readyState] : 'NOT_CREATED',
+          url: ws?.url || null,
+          connecting: window.appState?.friendsWsConnecting || false,
+          reconnectAttempts: window.appState?.wsReconnectAttempts || 0
+        },
+        messages: stats,
+        token: !!localStorage.getItem('wc_token')
+      };
     };
   } catch {}
   
