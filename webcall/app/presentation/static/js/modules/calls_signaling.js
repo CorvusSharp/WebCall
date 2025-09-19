@@ -283,9 +283,21 @@ function internalHandle(msg, acc){
   }
 }
 
+// Унифицированное сравнение userId с игнорированием регистра и дефисов (на случай разных форматов sub)
+function _normId(v){ return (v||'').toString().toLowerCase().replace(/[^a-f0-9]/g,''); }
+function _eqId(a,b){ if (!a||!b) return false; return _normId(a) === _normId(b); }
+
 function onInvite(m, acc){
-  const isForMe = m.toUserId === acc;
-  const isMine = m.fromUserId === acc;
+  // Дополнительная гибкость: поддержим альтернативные поля (snake_case) если когда-то появятся
+  if (!m.fromUserId && m.from_user_id) m.fromUserId = m.from_user_id;
+  if (!m.toUserId && m.to_user_id) m.toUserId = m.to_user_id;
+  if (!m.roomId && m.room_id) m.roomId = m.room_id;
+  const isForMe = _eqId(m.toUserId, acc);
+  const isMine = _eqId(m.fromUserId, acc);
+  if (!isForMe && !isMine){
+    log('ignore call_invite (not for me)', { acc, from:m.fromUserId, to:m.toUserId, room:m.roomId });
+    return;
+  }
   if (isMine){
     // Echo подтверждение: если мы в dialing -> переходим в outgoing_ringing
     if (state.phase==='dialing' && state.roomId === m.roomId){
@@ -309,7 +321,7 @@ function onInvite(m, acc){
   }
 }
 function onAccept(m, acc){
-  if (state.roomId !== m.roomId) return;
+  if (state.roomId !== m.roomId) { log('ignore call_accept (room mismatch)', { have: state.roomId, got: m.roomId }); return; }
   if (['outgoing_ringing','incoming_ringing','dialing','connecting'].includes(state.phase)){
     transition('active', {});
     try { deps.unlockAudio(); resumeAudio(); } catch{}
@@ -317,15 +329,15 @@ function onAccept(m, acc){
   }
 }
 function onDecline(m, acc){
-  if (state.roomId !== m.roomId) return;
+  if (state.roomId !== m.roomId){ log('ignore call_decline (room mismatch)', { have: state.roomId, got: m.roomId }); return; }
   if (state.phase !== 'idle') transition('ended', { reason:'declined' });
 }
 function onCancel(m, acc){
-  if (state.roomId !== m.roomId) return;
+  if (state.roomId !== m.roomId){ log('ignore call_cancel (room mismatch)', { have: state.roomId, got: m.roomId }); return; }
   if (state.phase !== 'idle') transition('ended', { reason:'cancel' });
 }
 function onEnd(m, acc){
-  if (state.roomId !== m.roomId) return;
+  if (state.roomId !== m.roomId){ log('ignore call_end (room mismatch)', { have: state.roomId, got: m.roomId }); return; }
   if (state.phase === 'active') transition('ended', { reason: m.reason||'end' });
 }
 

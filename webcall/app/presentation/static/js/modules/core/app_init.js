@@ -337,6 +337,12 @@ function startFriendsWs(){
     try { 
       const msg = JSON.parse(ev.data); 
       if (!msg || typeof msg !== 'object') return; 
+      // Глобальный сырой лог входящих сообщений друзей
+      try {
+        if (!window.__WS_RAW_MESSAGES) window.__WS_RAW_MESSAGES = [];
+        window.__WS_RAW_MESSAGES.push({ ts: Date.now(), msg });
+        if (window.__WS_RAW_MESSAGES.length > 500) window.__WS_RAW_MESSAGES.splice(0, window.__WS_RAW_MESSAGES.length-500);
+      } catch {}
       
       // Подсчитываем сообщения
       if (!window.__FRIENDS_WS_STATS) window.__FRIENDS_WS_STATS = { total: 0, byType: {} };

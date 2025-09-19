@@ -77,8 +77,17 @@ def _unregister(ws: WebSocket) -> None:
 
 async def broadcast_user(user_id: UUID, payload: dict):
     for ws in list(_friend_clients.get(user_id, set())):
-        with contextlib.suppress(Exception):
+        try:
             await ws.send_json(payload)
+            try:
+                logger.info("WS_SEND user=%s ws=%s type=%s", user_id, id(ws), payload.get('type'))
+            except Exception:
+                pass
+        except Exception as e:  # pragma: no cover
+            try:
+                logger.warning("WS_SEND_FAIL user=%s ws=%s type=%s err=%s", user_id, id(ws), payload.get('type'), e)
+            except Exception:
+                pass
 
 
 async def broadcast_users(user_ids: Set[UUID] | list[UUID], payload: dict):
