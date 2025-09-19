@@ -126,24 +126,73 @@ function internalCancel(){
 
 export function startOutgoingCall(friend){
   if (state.phase !== 'idle') return false;
-  // Gate: ждём готовности friends WS (если не открыт — отклоняем с уведомлением)
+  
+  // Проверяем готовность friends WebSocket
   try {
-    const ws = window?.appState?.friendsWs; // если глобально доступен
-    if (!ws || ws.readyState !== WebSocket.OPEN){
-      dbg('friends WS not ready, abort startOutgoingCall');
-      try { window.__CALL_DEBUG && window.__CALL_DEBUG.push({ ts:Date.now(), warn:'friends_ws_not_ready' }); } catch {}
-      
-      // Показываем уведомление пользователю
+    const ws = window?.appState?.friendsWs;
+    const wsState = ws ? ws.readyState : 'not_exists';
+    const token = localStorage.getItem('wc_token');
+    
+    dbg('WS check:', { exists: !!ws, state: wsState, hasToken: !!token });
+    
+    if (!token) {
       try {
         if (typeof window !== 'undefined' && window.showToast) {
-          window.showToast('Подключение не готово. Попробуйте позже.', 'warning');
+          window.showToast('Необходимо войти в систему для совершения звонков', 'warning');
         } else {
-          alert('Подключение не готово. Попробуйте позже.');
+          alert('Необходимо войти в систему');
         }
       } catch {}
       return false;
     }
-  } catch {}
+    
+    if (!ws) {
+      // Попытаемся инициировать подключение если WebSocket не создан
+      try {
+        if (typeof window !== 'undefined' && window.startFriendsWs) {
+          window.startFriendsWs();
+        }
+      } catch {}
+      
+      try {
+        if (typeof window !== 'undefined' && window.showToast) {
+          window.showToast('Устанавливается соединение. Попробуйте через несколько секунд.', 'info');
+        } else {
+          alert('Устанавливается соединение. Попробуйте позже.');
+        }
+      } catch {}
+      return false;
+    }
+    
+    if (ws.readyState !== WebSocket.OPEN){
+      const stateNames = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
+      const stateName = stateNames[ws.readyState] || 'UNKNOWN';
+      
+      dbg('friends WS not ready, state:', stateName);
+      try { window.__CALL_DEBUG && window.__CALL_DEBUG.push({ ts:Date.now(), warn:'friends_ws_not_ready', state: stateName }); } catch {}
+      
+      if (ws.readyState === WebSocket.CONNECTING) {
+        try {
+          if (typeof window !== 'undefined' && window.showToast) {
+            window.showToast('Подключение устанавливается. Попробуйте через пару секунд.', 'info');
+          } else {
+            alert('Подключение устанавливается. Попробуйте позже.');
+          }
+        } catch {}
+      } else {
+        try {
+          if (typeof window !== 'undefined' && window.showToast) {
+            window.showToast('Подключение не готово. Попробуйте позже.', 'warning');
+          } else {
+            alert('Подключение не готово. Попробуйте позже.');
+          }
+        } catch {}
+      }
+      return false;
+    }
+  } catch (e) {
+    dbg('WS check error:', e);
+  }
   const rnd = crypto.randomUUID().slice(0,8);
   const tag = (friend.username || friend.user_id || 'user').replace(/[^a-zA-Z0-9]+/g,'').slice(0,6) || 'user';
   const room = `call-${rnd}-${tag}`;

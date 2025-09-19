@@ -261,11 +261,27 @@ export function leaveRoom(){
 
 // ===== Friends WS =====
 function startFriendsWs(){
-  if (appState.friendsWs) return; const t = localStorage.getItem('wc_token'); if (!t) return;
+  if (appState.friendsWs) return; 
+  const t = localStorage.getItem('wc_token'); 
+  if (!t) {
+    log('Friends WS: токен не найден, пропуск подключения');
+    return;
+  }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const url = new URL(`${proto}://${location.host}/ws/friends`); url.searchParams.set('token', t);
-  appState.friendsWs = new WebSocket(url.toString());
-  appState.friendsWs.onopen = ()=>{ log('WS друзей открыт'); try { appState.friendsWs.send(JSON.stringify({ type:'ping' })); } catch {} };
+  log(`Friends WS: подключение к ${url.toString()}`);
+  
+  try {
+    appState.friendsWs = new WebSocket(url.toString());
+    appState.friendsWs.onopen = ()=>{ 
+      log('WS друзей открыт'); 
+      try { 
+        appState.friendsWs.send(JSON.stringify({ type:'ping' })); 
+        log('Friends WS: ping отправлен');
+      } catch (e) {
+        log('Friends WS: ошибка отправки ping:', e);
+      }
+    };
   appState.friendsWs.onmessage = async (ev)=>{
     try { const msg = JSON.parse(ev.data); if (!msg || typeof msg !== 'object') return; switch(msg.type){
       case 'friend_request': case 'friend_accepted': case 'friend_cancelled': scheduleFriendsReload(); break;
@@ -283,8 +299,21 @@ function startFriendsWs(){
       default: break;
     } } catch {}
   };
-  appState.friendsWs.onclose = ()=>{ appState.friendsWs = null; setTimeout(()=>{ try { startFriendsWs(); } catch {} }, 5000); };
-  appState.friendsWs.onerror = ()=>{ try { appState.friendsWs.close(); } catch {}; };
+    appState.friendsWs.onclose = (event)=>{ 
+      log(`Friends WS закрыт: код=${event.code}, причина=${event.reason}`);
+      appState.friendsWs = null; 
+      setTimeout(()=>{ try { startFriendsWs(); } catch {} }, 5000); 
+    };
+    appState.friendsWs.onerror = (error)=>{ 
+      log('Friends WS ошибка:', error);
+      try { appState.friendsWs.close(); } catch {}; 
+    };
+  } catch (error) {
+    log('Friends WS: ошибка создания соединения:', error);
+    appState.friendsWs = null;
+    // Повторяем попытку через 10 секунд
+    setTimeout(()=>{ try { startFriendsWs(); } catch {} }, 10000);
+  }
 }
 
 async function ensureProfile(){
@@ -358,8 +387,27 @@ export async function appInit(){
   await ensureProfile();
   try { updateUserBadge(); } catch {}
   
-  // Делаем showToast доступной глобально для удобства использования из других модулей
-  try { window.showToast = showToast; } catch {}
+  // Делаем showToast и startFriendsWs доступными глобально для удобства использования из других модулей
+  try { 
+    window.showToast = showToast; 
+    window.startFriendsWs = startFriendsWs;
+    
+    // Добавляем функцию диагностики WebSocket (для отладки)
+    window.debugWebSocket = () => {
+      const ws = window.appState?.friendsWs;
+      const token = localStorage.getItem('wc_token');
+      const states = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
+      const info = {
+        hasToken: !!token,
+        hasWebSocket: !!ws,
+        wsState: ws ? states[ws.readyState] || ws.readyState : 'не создан',
+        url: ws ? ws.url : 'нет'
+      };
+      console.log('WebSocket диагностика:', info);
+      showToast(`WS: ${info.wsState}, Token: ${info.hasToken ? 'есть' : 'нет'}`, 'info');
+      return info;
+    };
+  } catch {}
   
   startFriendsWs();
   try { await loadFriends(); } catch {}

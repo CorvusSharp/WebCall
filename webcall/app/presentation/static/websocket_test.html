@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Connection Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .warning { background: #fff3cd; color: #856404; }
+        .info { background: #d1ecf1; color: #0c5460; }
+        button { padding: 10px 15px; margin: 5px; }
+        pre { background: #f8f9fa; padding: 10px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>WebSocket Connection Test</h1>
+    <div id="status"></div>
+    <button onclick="testConnection()">Тест подключения</button>
+    <button onclick="testToken()">Проверить токен</button>
+    <button onclick="testManualConnect()">Ручное подключение</button>
+    <button onclick="clearLogs()">Очистить логи</button>
+    
+    <h3>Логи:</h3>
+    <pre id="logs"></pre>
+
+    <script>
+        let logs = [];
+        
+        function addLog(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            logs.push(`[${timestamp}] ${message}`);
+            document.getElementById('logs').textContent = logs.join('\n');
+        }
+
+        function showStatus(message, type = 'info') {
+            const div = document.createElement('div');
+            div.className = `status ${type}`;
+            div.textContent = message;
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerHTML = '';
+            statusDiv.appendChild(div);
+            addLog(`STATUS [${type}]: ${message}`);
+        }
+
+        function testToken() {
+            const token = localStorage.getItem('wc_token');
+            if (!token) {
+                showStatus('Токен не найден. Необходимо войти в систему.', 'error');
+                return;
+            }
+            
+            try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                const exp = new Date(payload.exp * 1000);
+                const now = new Date();
+                
+                if (exp < now) {
+                    showStatus(`Токен истек: ${exp.toLocaleString()}`, 'error');
+                } else {
+                    showStatus(`Токен действителен до: ${exp.toLocaleString()}`, 'success');
+                }
+                addLog(`Токен пользователя: ${payload.sub}`);
+            } catch (e) {
+                showStatus('Ошибка при разборе токена: ' + e.message, 'error');
+            }
+        }
+
+        function testConnection() {
+            const token = localStorage.getItem('wc_token');
+            if (!token) {
+                showStatus('Сначала проверьте токен!', 'warning');
+                return;
+            }
+
+            const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+            const url = `${proto}://${location.host}/ws/friends?token=${token}`;
+            
+            addLog(`Подключение к: ${url}`);
+            showStatus('Подключение...', 'info');
+
+            const ws = new WebSocket(url);
+            
+            ws.onopen = () => {
+                showStatus('WebSocket подключен успешно!', 'success');
+                addLog('WebSocket открыт');
+                ws.send(JSON.stringify({ type: 'ping' }));
+                addLog('Ping отправлен');
+            };
+
+            ws.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+                addLog(`Получено: ${JSON.stringify(msg)}`);
+                if (msg.type === 'pong') {
+                    showStatus('Ping-Pong успешен! Соединение работает.', 'success');
+                }
+            };
+
+            ws.onclose = (event) => {
+                showStatus(`WebSocket закрыт: код=${event.code}, причина=${event.reason}`, 'warning');
+                addLog(`WebSocket закрыт: ${event.code} - ${event.reason}`);
+            };
+
+            ws.onerror = (error) => {
+                showStatus('Ошибка WebSocket подключения', 'error');
+                addLog(`WebSocket ошибка: ${error}`);
+            };
+
+            // Закрываем тестовое соединение через 10 секунд
+            setTimeout(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.close();
+                    addLog('Тестовое соединение закрыто');
+                }
+            }, 10000);
+        }
+
+        function testManualConnect() {
+            // Тестируем создание WebSocket как в реальном приложении
+            window.appState = window.appState || {};
+            const token = localStorage.getItem('wc_token');
+            
+            if (!token) {
+                showStatus('Токен не найден', 'error');
+                return;
+            }
+
+            const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+            const url = new URL(`${proto}://${location.host}/ws/friends`);
+            url.searchParams.set('token', token);
+            
+            try {
+                window.appState.friendsWs = new WebSocket(url.toString());
+                
+                window.appState.friendsWs.onopen = () => {
+                    showStatus('Friends WebSocket готов для звонков!', 'success');
+                    addLog('Friends WS: подключен и готов');
+                    
+                    // Тест ping
+                    window.appState.friendsWs.send(JSON.stringify({ type: 'ping' }));
+                };
+                
+                window.appState.friendsWs.onmessage = (ev) => {
+                    const msg = JSON.parse(ev.data);
+                    addLog(`Friends WS получил: ${JSON.stringify(msg)}`);
+                };
+                
+                window.appState.friendsWs.onclose = (event) => {
+                    showStatus(`Friends WebSocket закрыт: ${event.code}`, 'warning');
+                };
+                
+                window.appState.friendsWs.onerror = (error) => {
+                    showStatus('Ошибка Friends WebSocket', 'error');
+                };
+                
+                showStatus('Friends WebSocket создается...', 'info');
+                
+            } catch (e) {
+                showStatus('Ошибка создания WebSocket: ' + e.message, 'error');
+            }
+        }
+
+        function clearLogs() {
+            logs = [];
+            document.getElementById('logs').textContent = '';
+            document.getElementById('status').innerHTML = '';
+        }
+
+        // Автоматически проверяем токен при загрузке
+        window.onload = () => {
+            addLog('Страница загружена');
+            testToken();
+        };
+    </script>
+</body>
+</html>
