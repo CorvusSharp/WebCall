@@ -146,18 +146,41 @@ export async function getMe(){
 
 // E2EE public key endpoints
 export async function setMyPublicKey(publicKeyStr){
-  const r = await fetch(`${base}/api/v1/direct/me/public_key`, {
-    method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ public_key: publicKeyStr })
-  });
+  try {
+    // Избегаем лишних POST, если ключ тот же в течение 12h
+    const prev = localStorage.getItem('wc_my_pubkey');
+    const prevTs = Number(localStorage.getItem('wc_my_pubkey_ts')||'0');
+    const same = prev && prev === publicKeyStr && (Date.now() - prevTs) < 1000*60*60*12;
+    if (same) return { ok:true, cached:true };
+  } catch {}
+  const r = await fetch(`${base}/api/v1/direct/me/public_key`, { method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders() }, body: JSON.stringify({ public_key: publicKeyStr }) });
   if (!r.ok) throw new Error(await r.text());
-  return await r.json();
+  const json = await r.json();
+  try { localStorage.setItem('wc_my_pubkey', publicKeyStr); localStorage.setItem('wc_my_pubkey_ts', String(Date.now())); } catch {}
+  return json;
 }
 
 export async function getUserPublicKey(userId){
-  const r = await fetch(`${base}/api/v1/users/${encodeURIComponent(userId)}/public_key`, { headers: { ...authHeaders() } });
-  if (!r.ok) throw new Error(await r.text());
-  return await r.json();
+  // Кэширование на 10 минут + дедупликация параллельных запросов
+  if (!getUserPublicKey._cache) { getUserPublicKey._cache = new Map(); }
+  if (!getUserPublicKey._inflight) { getUserPublicKey._inflight = new Map(); }
+  const key = String(userId);
+  const cached = getUserPublicKey._cache.get(key);
+  if (cached && (Date.now() - cached.ts) < 1000*60*10) {
+    return cached.value;
+  }
+  if (getUserPublicKey._inflight.has(key)) {
+    return await getUserPublicKey._inflight.get(key);
+  }
+  const p = (async ()=>{
+    const r = await fetch(`${base}/api/v1/users/${encodeURIComponent(userId)}/public_key`, { headers: { ...authHeaders() } });
+    if (!r.ok) throw new Error(await r.text());
+    const json = await r.json();
+    getUserPublicKey._cache.set(key, { ts: Date.now(), value: json });
+    return json;
+  })();
+  getUserPublicKey._inflight.set(key, p);
+  try { return await p; } finally { getUserPublicKey._inflight.delete(key); }
 }
 
 // Backwards-compatibility: expose functions on window for clients that for some reason

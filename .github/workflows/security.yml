@@ -1,0 +1,48 @@
+name: Security Scans
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/ci
+          generateSarif: true
+          uploadSarif: true
+      - name: Upload SARIF (redundant safety)
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+
+  bandit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install bandit
+        run: pip install bandit bandit-sarif-formatter
+      - name: Run bandit
+        run: |
+          bandit -r webcall/app -x webcall/app/alembic -f json -o bandit.json || true
+      - name: Convert to SARIF
+        run: bandit-sarif-formatter -i bandit.json -o bandit.sarif || true
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: bandit.sarif

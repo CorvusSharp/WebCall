@@ -214,6 +214,36 @@ Use `.env` only for dev. For prod:
 | No metrics in Grafana | Prometheus target state, network, `api:8000/metrics` |
 | WebRTC fails to connect | TURN credentials / firewall ports |
 | High latency | CPU saturation, gunicorn workers too low |
+| Redis warning Memory overcommit | Set `vm.overcommit_memory=1` and reboot |
+| duplicate key uq_push_user_endpoint | Frontend sent duplicate subscribe; now handled idempotently (ensure updated image) |
+| Unexpected EOF on client connection with open transaction | Client disconnected mid-request; investigate long-running handlers / network stability |
+
+### Redis Overcommit Memory Warning
+If you see: `WARNING Memory overcommit must be enabled!` inside Redis logs, enable it on the host:
+```
+echo 'vm.overcommit_memory=1' | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+```
+Reboot for persistence (or keep sysctl -p). This avoids background save failures.
+
+### Postgres `unexpected EOF on client connection with an open transaction`
+Indicates a client dropped connection before completing / rolling back a transaction. Common causes:
+- Browser tab closed mid-request
+- Reverse proxy timeout (adjust idle/read timeouts)
+- Application crash or network blip
+Mitigation: ensure short transactions, add timeout / cancellation handling in async tasks.
+
+### Coturn Configuration & Metrics
+The compose setup now mounts `docker/turnserver.conf`. To enable Prometheus metrics, uncomment the metrics port mapping (`9641:9641`) and ensure `prometheus` scrape job is added:
+```
+- job_name: turn
+  static_configs:
+    - targets: ['coturn:9641']
+```
+Provide TLS certs by mounting a `certs` directory and uncommenting `cert`/`pkey` lines in `turnserver.conf`.
+
+### Push Subscription Idempotency
+Backend uses PostgreSQL `ON CONFLICT` upsert; frontend caches a fingerprint (endpoint + keys) for 12h. Duplicate subscribe calls should no longer spam logs.
 
 ## 11. Hardening Checklist
 - Non-root container user (prod Dockerfile uses `app`).

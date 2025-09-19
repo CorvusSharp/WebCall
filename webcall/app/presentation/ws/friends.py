@@ -48,6 +48,21 @@ _pending_calls: Dict[str, dict] = {}
 
 
 def _register(user_id: UUID, ws: WebSocket):
+    # Политика: только одно активное соединение на пользователя для friends WS.
+    # Закрываем предыдущие, чтобы не плодить дублирующую рассылку событий.
+    existing = _friend_clients.get(user_id)
+    if existing:
+        for old in list(existing):
+            try:
+                # Отправляем причину закрытия в коде 4000 (приватный код)
+                import anyio  # noqa: F401 (для совместимости если нужен await context)
+                try:
+                    # WebSocket сервер FastAPI/Starlette: close(code) — reason опционал.
+                    old.close(code=4000)
+                except Exception:
+                    pass
+            finally:
+                _unregister(old)
     _friend_clients.setdefault(user_id, set()).add(ws)
     _ws_to_user[ws] = user_id
 

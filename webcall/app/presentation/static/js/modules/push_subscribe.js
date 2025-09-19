@@ -27,12 +27,17 @@ export async function initPush(){
     const fpArr = Array.from(new Uint8Array(digest));
     const fingerprint = fpArr.map(b=>b.toString(16).padStart(2,'0')).join('');
     const stored = localStorage.getItem('pushSubFingerprint');
-    if (stored === fingerprint) {
-      // Ничего не изменилось — не дергаем сервер заново.
+    const tsRaw = localStorage.getItem('pushSubFingerprintTs');
+    let expired = true;
+    try { const ts = Number(tsRaw); if (ts && (Date.now() - ts) < 1000*60*60*12) expired = false; } catch {}
+    if (stored === fingerprint && !expired) {
+      // Ничего не изменилось и TTL (12h) ещё не истёк — не дергаем сервер заново.
       return;
     }
-    await subscribePush(payload);
+    await subscribePush(payload); // upsert на бэкенде
     localStorage.setItem('pushSubFingerprint', fingerprint);
+    localStorage.setItem('pushSubFingerprintTs', String(Date.now()));
+    try { console.debug('[push] subscription sent (updated or new)'); } catch {}
   } catch(e){
     // В случае ошибки fallback на прежнее поведение
     await subscribePush(payload);

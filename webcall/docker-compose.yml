@@ -37,23 +37,22 @@ services:
   coturn:
     image: coturn/coturn:latest
     restart: unless-stopped
-    command:
-      - -n
-      - --log-file=stdout
-      - --min-port=49152
-      - --max-port=49200
-      - --realm=${TURN_REALM}
-      - --listening-ip=0.0.0.0
-      - --relay-ip=0.0.0.0
-      - --listening-port=3478
-      - --external-ip=${TURN_PUBLIC_IP}
-      - --lt-cred-mech
-      - --user=${TURN_USERNAME}:${TURN_PASSWORD}
-      - --fingerprint
+    environment:
+      - TURN_REALM=${TURN_REALM}
+      - TURN_USERNAME=${TURN_USERNAME}
+      - TURN_PASSWORD=${TURN_PASSWORD}
+      - TURN_PUBLIC_IP=${TURN_PUBLIC_IP}
+      - TURN_CLI_PASSWORD=${TURN_CLI_PASSWORD:-changeme}
+    # Используем файл конфигурации вместо длинной командной строки
+    command: ["turnserver", "-c", "/etc/coturn/turnserver.conf", "--log-file=stdout", "-n"]
     ports:
       - "3478:3478/udp"
       - "3478:3478/tcp"
       - "49152-49200:49152-49200/udp"
+      # - "9641:9641" # (опционально) Prometheus metrics if enabled
+    volumes:
+      - ./docker/turnserver.conf:/etc/coturn/turnserver.conf:ro
+      # - ./certs:/certs:ro  # (опционально) TLS certs for TURN
 
   prometheus:
     image: prom/prometheus:v2.53.0
