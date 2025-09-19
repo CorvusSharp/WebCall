@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Call Signaling Test</title>
+    <script>
+        // Простой тест для проверки наших исправлений
+        window.addEventListener('load', async () => {
+            console.log('Testing call signaling fixes...');
+            
+            // Мок зависимостей
+            window.appState = {
+                friendsWs: { readyState: 1 } // WebSocket.OPEN
+            };
+            
+            window.showToast = (message, type) => {
+                console.log(`Toast [${type}]: ${message}`);
+                const div = document.createElement('div');
+                div.textContent = `[${type}] ${message}`;
+                div.style.padding = '10px';
+                div.style.margin = '5px';
+                div.style.background = type === 'error' ? '#f88' : '#8f8';
+                document.body.appendChild(div);
+            };
+            
+            // Мок API
+            window.fetch = (url, options) => {
+                console.log('Mock fetch:', url, options);
+                return Promise.resolve({
+                    ok: true,
+                    json: () => Promise.resolve({ room_id: 'call-test-room' })
+                });
+            };
+            
+            try {
+                // Загружаем наш исправленный модуль
+                const { initCallSignaling, startOutgoingCall, handleWsMessage, getCallState } = await import('./modules/calls_signaling.js');
+                
+                // Инициализация
+                initCallSignaling({
+                    getAccountId: () => 'user123',
+                    connectRoom: () => console.log('connectRoom called'),
+                    unlockAudio: () => console.log('unlockAudio called'),
+                });
+                
+                console.log('Module initialized');
+                
+                // Тест 1: Исходящий звонок
+                console.log('\n--- Test 1: Outgoing call ---');
+                const friend = { user_id: 'friend456', username: 'TestFriend' };
+                const result = startOutgoingCall(friend);
+                console.log('startOutgoingCall result:', result);
+                
+                // Симулируем получение call_invite обратно от сервера (это исправляет первую проблему)
+                setTimeout(() => {
+                    console.log('Simulating call_invite from server...');
+                    const callInviteMsg = {
+                        type: 'call_invite',
+                        fromUserId: 'user123',
+                        toUserId: 'friend456', 
+                        roomId: 'call-test-room',
+                        fromUsername: 'Me',
+                        toUsername: 'TestFriend'
+                    };
+                    
+                    handleWsMessage(callInviteMsg);
+                    console.log('State after call_invite:', getCallState());
+                }, 1000);
+                
+                // Тест 2: Входящий звонок
+                setTimeout(() => {
+                    console.log('\n--- Test 2: Incoming call ---');
+                    const incomingCallMsg = {
+                        type: 'call_invite',
+                        fromUserId: 'caller789',
+                        toUserId: 'user123',
+                        roomId: 'call-incoming-room',
+                        fromUsername: 'Caller',
+                        toUsername: 'Me'
+                    };
+                    
+                    handleWsMessage(incomingCallMsg);
+                    console.log('State after incoming call:', getCallState()); 
+                }, 2000);
+                
+                // Тест 3: WebSocket не готов
+                setTimeout(() => {
+                    console.log('\n--- Test 3: WebSocket not ready ---');
+                    window.appState.friendsWs.readyState = 0; // CONNECTING
+                    const result2 = startOutgoingCall(friend);
+                    console.log('startOutgoingCall result (WS not ready):', result2);
+                    window.appState.friendsWs.readyState = 1; // Reset
+                }, 3000);
+                
+            } catch (error) {
+                console.error('Test error:', error);
+                document.body.innerHTML += `<div style="color: red;">Error: ${error.message}</div>`;
+            }
+        });
+    </script>
+</head>
+<body>
+    <h1>Call Signaling Test</h1>
+    <p>Open browser console to see test results.</p>
+    <div id="output"></div>
+</body>
+</html>

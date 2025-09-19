@@ -357,6 +357,10 @@ export async function appInit(){
   try { initPush(); } catch {}
   await ensureProfile();
   try { updateUserBadge(); } catch {}
+  
+  // Делаем showToast доступной глобально для удобства использования из других модулей
+  try { window.showToast = showToast; } catch {}
+  
   startFriendsWs();
   try { await loadFriends(); } catch {}
   // Подписка на статистику

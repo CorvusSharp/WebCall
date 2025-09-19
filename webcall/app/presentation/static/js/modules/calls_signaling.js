@@ -42,10 +42,44 @@ function setState(patch){
     if (prev.phase==='outgoing_invite' && state.phase!=='outgoing_invite'){ stopAllRings(); }
     if (state.phase==='active' || state.phase==='ended'){ stopAllRings(); }
   } catch {}
+  
+  // Синхронизируем с legacy calls.js для совместимости UI
+  try {
+    syncWithLegacyCalls(state, prev);
+  } catch (e) {
+    dbg('legacy sync error', e);
+  }
+  
   emit();
 }
 export function getCallState(){ return state; }
 export function onCallState(fn){ listeners.add(fn); return ()=> listeners.delete(fn); }
+
+// Синхронизация с legacy calls.js для совместимости UI
+async function syncWithLegacyCalls(currentState, prevState) {
+  if (typeof window === 'undefined' || !window.appState) return;
+  
+  try {
+    const { setActiveOutgoingCall, setActiveIncomingCall, markCallAccepted, markCallDeclined, resetActiveCall } = await import('./calls.js');
+    
+    if (currentState.phase === 'outgoing_invite' && prevState.phase !== 'outgoing_invite' && currentState.otherUserId && currentState.roomId) {
+      setActiveOutgoingCall(
+        { user_id: currentState.otherUserId, username: currentState.otherUsername }, 
+        currentState.roomId
+      );
+    } else if (currentState.phase === 'incoming_invite' && prevState.phase !== 'incoming_invite' && currentState.otherUserId && currentState.roomId) {
+      setActiveIncomingCall(currentState.otherUserId, currentState.otherUsername, currentState.roomId);
+    } else if (currentState.phase === 'active' && prevState.phase !== 'active' && currentState.roomId) {
+      markCallAccepted(currentState.roomId);
+    } else if (currentState.phase === 'ended' && prevState.phase !== 'ended' && currentState.roomId) {
+      markCallDeclined(currentState.roomId);
+    } else if (currentState.phase === 'idle' && prevState.phase !== 'idle') {
+      resetActiveCall('idle');
+    }
+  } catch (e) {
+    // Игнорируем ошибки import для совместимости
+  }
+}
 
 let deps = {
   getAccountId: ()=> null,
@@ -98,6 +132,15 @@ export function startOutgoingCall(friend){
     if (!ws || ws.readyState !== WebSocket.OPEN){
       dbg('friends WS not ready, abort startOutgoingCall');
       try { window.__CALL_DEBUG && window.__CALL_DEBUG.push({ ts:Date.now(), warn:'friends_ws_not_ready' }); } catch {}
+      
+      // Показываем уведомление пользователю
+      try {
+        if (typeof window !== 'undefined' && window.showToast) {
+          window.showToast('Подключение не готово. Попробуйте позже.', 'warning');
+        } else {
+          alert('Подключение не готово. Попробуйте позже.');
+        }
+      } catch {}
       return false;
     }
   } catch {}
@@ -105,9 +148,26 @@ export function startOutgoingCall(friend){
   const tag = (friend.username || friend.user_id || 'user').replace(/[^a-zA-Z0-9]+/g,'').slice(0,6) || 'user';
   const room = `call-${rnd}-${tag}`;
   try { const roomInput = document.getElementById('roomId'); if (roomInput && 'value' in roomInput) roomInput.value = room; } catch {}
-  setState({ phase:'outgoing_invite', roomId: room, otherUserId: friend.user_id, otherUsername: friend.username });
+  
+  // Сохраняем информацию о предполагаемом звонке, но не устанавливаем состояние пока не получим подтверждение от сервера
   dbg('notifyCall ->', friend.user_id, room);
-  notifyCall(friend.user_id, room).then(()=> dbg('notifyCall ok')).catch(e=> dbg('notifyCall error', e));
+  notifyCall(friend.user_id, room).then(()=> {
+    dbg('notifyCall ok');
+    // Если состояние всё ещё idle, устанавливаем временное состояние ожидания
+    if (state.phase === 'idle') {
+      setState({ phase:'outgoing_invite', roomId: room, otherUserId: friend.user_id, otherUsername: friend.username });
+    }
+  }).catch(e=> {
+    dbg('notifyCall error', e);
+    // При ошибке показываем уведомление пользователю
+    try {
+      if (window.showToast) {
+        window.showToast('Не удалось инициировать звонок: ' + e.message, 'error');
+      } else {
+        alert('Не удалось инициировать звонок');
+      }
+    } catch {}
+  });
   try { deps.unlockAudio(); } catch {}
   return true;
 }
@@ -181,6 +241,9 @@ function _handleWsMessage(msg, acc){
       } else if (isMine){
         if (state.phase==='idle'){
           setState({ phase:'outgoing_invite', roomId: msg.roomId, otherUserId: msg.toUserId, otherUsername: msg.toUsername });
+        } else if (state.phase==='outgoing_invite' && state.roomId === msg.roomId){
+          // Обновляем информацию о получателе, когда приходит подтверждение от сервера
+          setState({ otherUsername: msg.toUsername });
         }
       }
       break; }
