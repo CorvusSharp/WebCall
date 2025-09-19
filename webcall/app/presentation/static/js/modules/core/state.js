@@ -35,6 +35,8 @@
  *  @property {boolean} audioGestureAllowed
  *  @property {Record<string,string>} latestUserNames
  *  @property {WebSocket|null} friendsWs
+ *  @property {boolean} friendsWsConnecting
+ *  @property {number} wsReconnectAttempts
  *  @property {string|null} currentDirectFriend
  *  @property {Map<string,number>} recentOffer
  *  @property {number|null} peerCleanupIntervalId
@@ -66,6 +68,8 @@ export const appState = {
   audioGestureAllowed: false,
   latestUserNames: {},
   friendsWs: null,
+  friendsWsConnecting: false,
+  wsReconnectAttempts: 0,
   currentDirectFriend: null,
   recentOffer: new Map(),
   peerCleanupIntervalId: null,

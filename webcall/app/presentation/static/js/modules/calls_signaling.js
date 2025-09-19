@@ -130,10 +130,11 @@ export function startOutgoingCall(friend){
   // Проверяем готовность friends WebSocket
   try {
     const ws = window?.appState?.friendsWs;
+    const wsConnecting = window?.appState?.friendsWsConnecting;
     const wsState = ws ? ws.readyState : 'not_exists';
     const token = localStorage.getItem('wc_token');
     
-    dbg('WS check:', { exists: !!ws, state: wsState, hasToken: !!token });
+    dbg('WS check:', { exists: !!ws, state: wsState, connecting: wsConnecting, hasToken: !!token });
     
     if (!token) {
       try {
@@ -141,6 +142,18 @@ export function startOutgoingCall(friend){
           window.showToast('Необходимо войти в систему для совершения звонков', 'warning');
         } else {
           alert('Необходимо войти в систему');
+        }
+      } catch {}
+      return false;
+    }
+    
+    // Если WebSocket подключается, ждем
+    if (wsConnecting) {
+      try {
+        if (typeof window !== 'undefined' && window.showToast) {
+          window.showToast('Подключение устанавливается. Подождите немного...', 'info');
+        } else {
+          alert('Подключение устанавливается. Подождите...');
         }
       } catch {}
       return false;
@@ -156,9 +169,9 @@ export function startOutgoingCall(friend){
       
       try {
         if (typeof window !== 'undefined' && window.showToast) {
-          window.showToast('Устанавливается соединение. Попробуйте через несколько секунд.', 'info');
+          window.showToast('Инициируем подключение. Попробуйте через несколько секунд.', 'info');
         } else {
-          alert('Устанавливается соединение. Попробуйте позже.');
+          alert('Инициируем подключение. Попробуйте позже.');
         }
       } catch {}
       return false;
@@ -174,19 +187,23 @@ export function startOutgoingCall(friend){
       if (ws.readyState === WebSocket.CONNECTING) {
         try {
           if (typeof window !== 'undefined' && window.showToast) {
-            window.showToast('Подключение устанавливается. Подождите...', 'info');
+            window.showToast('Соединение готовится. Попробуйте через пару секунд.', 'info');
           } else {
-            alert('Подключение устанавливается. Подождите...');
+            alert('Соединение готовится. Попробуйте позже.');
           }
         } catch {}
       } else if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-        // При закрытом соединении пытаемся переподключиться
+        // При закрытом соединении пытаемся переподключиться только если не идет уже подключение
         try {
-          if (typeof window !== 'undefined' && window.startFriendsWs) {
+          if (typeof window !== 'undefined' && window.startFriendsWs && !window.appState.friendsWsConnecting) {
             window.appState.friendsWs = null;
             window.startFriendsWs();
             if (typeof window !== 'undefined' && window.showToast) {
               window.showToast('Восстанавливаем соединение. Попробуйте через несколько секунд.', 'info');
+            }
+          } else {
+            if (typeof window !== 'undefined' && window.showToast) {
+              window.showToast('Соединение недоступно. Попробуйте позже.', 'warning');
             }
           }
         } catch {}
