@@ -500,8 +500,37 @@ export async function appInit(){
   try {
     initCallSignaling({
       getAccountId,
-      connectRoom: ()=>{ if (!appState.ws) connectRoom(); },
       unlockAudio: unlockAudioPlayback,
+      navigateToRoom: (roomId)=>{
+        try {
+          if (!roomId) return;
+          // Если мы НЕ на странице /call – делаем переход с параметром
+          if (!location.pathname.startsWith('/call')){
+            const url = new URL(location.origin + '/call');
+            url.searchParams.set('room', roomId);
+            log(`navigateToRoom: redirect to ${url.toString()}`);
+            location.href = url.toString();
+            return;
+          }
+          // Уже на /call: выставляем значение в input при необходимости
+            if (els.roomId && els.roomId.value !== roomId){
+              els.roomId.value = roomId;
+              log(`navigateToRoom: roomId input set to ${roomId}`);
+            }
+          // Если уже есть WS и это тот же room – ничего не делаем
+          if (appState.ws){
+            if (appState.currentRoomId && appState.currentRoomId === roomId){
+              log('navigateToRoom: already connected to this room');
+              return;
+            }
+            // Иначе попытка переподключиться: аккуратно закрываем и откроем заново
+            try { log('navigateToRoom: switching room, closing existing ws'); appState.ws.close(); } catch {}
+            appState.ws = null;
+          }
+          // Подключаемся
+          connectRoom();
+        } catch(e){ log('navigateToRoom error: '+ (e?.message||e)); }
+      }
     });
   } catch {}
 

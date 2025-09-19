@@ -62,13 +62,20 @@ let deps = {
   getAccountId: ()=> null,
   unlockAudio: ()=>{},
   navigateToRoom: (roomId)=>{ try {
-    // Новый способ: без перезагрузки. Проставляем roomId в input и запускаем connectRoom если доступно.
+    if (!roomId) return;
     const input = document.getElementById('roomId');
     if (input && 'value' in input) { input.value = roomId; }
-    if (window.appState && window.appState.ws){ log('navigateToRoom: already in a room WS, skipping auto connect'); return; }
-    if (window.connectRoom){ log('navigateToRoom: auto connectRoom start'); window.connectRoom(); }
-    else if (window.appState && window.appState.connectRoom){ log('navigateToRoom: using appState.connectRoom'); window.appState.connectRoom(); }
-    else { log('navigateToRoom: fallback redirect'); window.location.href = `/call/${roomId}`; }
+    // Помечаем желаемую комнату для отложенного подключения
+    try { if (window.appState) window.appState.currentRoomId = roomId; } catch {}
+    // Если уже есть ws именно этой комнаты – выходим
+    try { if (window.appState && window.appState.ws && window.appState.currentRoomId === roomId){ log('navigateToRoom: already connected (same room)'); return; } } catch {}
+    if (window.connectRoom){ log('navigateToRoom: invoking connectRoom()'); window.connectRoom(); }
+    else if (window.appState && window.appState.connectRoom){ log('navigateToRoom: using appState.connectRoom()'); window.appState.connectRoom(); }
+    else {
+      // Redirect fallback (в редких случаях если нет JS API)
+      log('navigateToRoom: fallback redirect');
+      const url = new URL(location.origin + '/call'); url.searchParams.set('room', roomId); location.href = url.toString();
+    }
   } catch(e){ warn('navigateToRoom error', e); } },
 };
 
