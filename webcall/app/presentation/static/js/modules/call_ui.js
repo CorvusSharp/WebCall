@@ -64,7 +64,7 @@ function renderBanner(state){
   if (!el) return;
   const s = state || { phase:'idle' };
   let text = '';
-  if (s.phase === 'outgoing_invite') text = `Исходящий звонок: ${s.otherUsername || s.otherUserId}`;
+  if (s.phase === 'outgoing_invite') text = `Исходящий звонок: ${s.otherUsername || s.otherUserId} (ожидание ответа…)`;
   else if (s.phase === 'incoming_invite') text = `Входящий звонок от: ${s.otherUsername || s.otherUserId}`;
   else if (s.phase === 'active') text = `Звонок с: ${s.otherUsername || s.otherUserId}`;
   else if (s.phase === 'ended') {

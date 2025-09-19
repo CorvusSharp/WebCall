@@ -56,6 +56,7 @@ let deps = {
 
 export function initCallSignaling(options){
   deps = { ...deps, ...(options||{}) };
+  try { window.__NEW_CALL_SIGNALING__ = true; } catch {}
   bindActions(
     ()=>{ if (state.phase==='incoming_invite') internalAccept(); },
     ()=>{ if (state.phase==='incoming_invite') internalDecline(); },

@@ -5,6 +5,12 @@
 
 import { appState } from './core/state.js';
 
+// Декларация кастомного флага чтобы TS не ругался (jsdoc):
+/** @typedef {Window & { __NEW_CALL_SIGNALING__?: boolean }} WindowWithCallFlag */
+/** @type {WindowWithCallFlag} */
+// @ts-ignore
+const _w = window;
+
 /**
  * @typedef {import('./core/state.js').ActiveCallState} ActiveCallState
  */
@@ -25,6 +31,7 @@ export function initCallModule(options = {}){
 
 /** Ререндер текста о текущем звонке */
 function renderCallContext(){
+  if (typeof window !== 'undefined' && _w.__NEW_CALL_SIGNALING__) return; // отключаем legacy UI при новой системе
   if (!els.callContext) return;
   /** @type {ActiveCallState|null} */
   const c = appState.activeCall;
@@ -76,6 +83,7 @@ function touchFriends(){
 
 /** @param {{user_id:string, username?:string}} friend @param {string} roomId */
 export function setActiveOutgoingCall(friend, roomId){
+  if (typeof window !== 'undefined' && _w.__NEW_CALL_SIGNALING__) return; // новая система сама обновит UI
   appState.activeCall = { roomId, withUserId: friend.user_id, username: friend.username, direction: 'outgoing', status: 'invited' };
   renderCallContext();
   touchFriends();
@@ -84,6 +92,7 @@ export function setActiveOutgoingCall(friend, roomId){
 
 /** @param {string} fromUserId @param {string} username @param {string} roomId */
 export function setActiveIncomingCall(fromUserId, username, roomId){
+  if (typeof window !== 'undefined' && _w.__NEW_CALL_SIGNALING__) return;
   appState.activeCall = { roomId, withUserId: fromUserId, username, direction: 'incoming', status: 'invited' };
   appState.pendingIncomingInvites.set(fromUserId, { roomId, username });
   renderCallContext();
