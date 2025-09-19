@@ -61,7 +61,15 @@ const ENDED_CLEAR_DELAY_MS = 2000;   // задержка очистки банн
 let deps = {
   getAccountId: ()=> null,
   unlockAudio: ()=>{},
-  navigateToRoom: (roomId)=>{ try { window.location.href = `/call/${roomId}`; } catch {} },
+  navigateToRoom: (roomId)=>{ try {
+    // Новый способ: без перезагрузки. Проставляем roomId в input и запускаем connectRoom если доступно.
+    const input = document.getElementById('roomId');
+    if (input && 'value' in input) { input.value = roomId; }
+    if (window.appState && window.appState.ws){ log('navigateToRoom: already in a room WS, skipping auto connect'); return; }
+    if (window.connectRoom){ log('navigateToRoom: auto connectRoom start'); window.connectRoom(); }
+    else if (window.appState && window.appState.connectRoom){ log('navigateToRoom: using appState.connectRoom'); window.appState.connectRoom(); }
+    else { log('navigateToRoom: fallback redirect'); window.location.href = `/call/${roomId}`; }
+  } catch(e){ warn('navigateToRoom error', e); } },
 };
 
 // ============ Утилиты таймеров ============
@@ -205,7 +213,7 @@ export function acceptIncoming(){
     warn('acceptCall failed', err);
     transition('ended', { reason:'unavailable' });
   });
-  try { deps.unlockAudio(); resumeAudio(); } catch{}
+  try { deps.unlockAudio(); resumeAudio(); stopAllRings(); } catch{}
   if (state.roomId) deps.navigateToRoom(state.roomId);
 }
 
@@ -324,7 +332,7 @@ function onAccept(m, acc){
   if (state.roomId !== m.roomId) { log('ignore call_accept (room mismatch)', { have: state.roomId, got: m.roomId }); return; }
   if (['outgoing_ringing','incoming_ringing','dialing','connecting'].includes(state.phase)){
     transition('active', {});
-    try { deps.unlockAudio(); resumeAudio(); } catch{}
+    try { deps.unlockAudio(); resumeAudio(); stopAllRings(); } catch{}
     if (m.roomId) deps.navigateToRoom(m.roomId);
   }
 }
