@@ -154,35 +154,24 @@
     </template>
 
   <script src="/static/js/fx_web.js" defer></script>
-  <script>
-    // Try to load prebuilt bundle; if it's missing (404), fall back to module entry for development
-    (async function(){
-      try{
-        const resp = await fetch('/static/js/bundle.js', { method: 'HEAD' });
-        if (resp.ok){
-          const s = document.createElement('script');
-          s.type = 'module';
-          s.src = '/static/js/bundle.js';
-          document.body.appendChild(s);
-        } else {
-          // fallback to original module (dev)
-          const s2 = document.createElement('script');
-          s2.type = 'module';
-          s2.src = '/static/js/main.js?v=2';
-          document.body.appendChild(s2);
-        }
-      }catch(e){
-        const s2 = document.createElement('script');
-        s2.type = 'module';
-        s2.src = '/static/js/main.js?v=2';
-        document.body.appendChild(s2);
-      }
-    })();
-  </script>
-  <script>
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/static/sw.js').catch(()=>{});
-    }
-  </script>
+  <script type="module" src="/static/js/boot.js"></script>
+  
+  <!-- Incoming Call Modal -->
+  <div id="incomingCallModal" class="wc-modal" style="display:none;">
+    <div class="wc-modal-backdrop"></div>
+    <div class="wc-modal-dialog">
+      <div class="wc-modal-body">
+        <div class="wc-modal-icon">📞</div>
+        <div class="wc-modal-text">
+          <div class="wc-modal-title">Входящий звонок</div>
+          <div class="wc-modal-sub" id="incomingCallFrom">Пользователь</div>
+        </div>
+      </div>
+      <div class="wc-modal-actions">
+        <button id="btnCallDecline" class="btn danger">Отклонить</button>
+        <button id="btnCallAccept" class="btn success">Принять</button>
+      </div>
+    </div>
+  </div>
   </body>
 </html>

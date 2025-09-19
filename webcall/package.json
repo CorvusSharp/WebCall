@@ -2,10 +2,17 @@
   "name": "webcall-static-build",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
-  "build": "esbuild app/presentation/static/js/main.js --bundle --minify --outfile=app/presentation/static/js/bundle.js --format=esm --platform=browser --target=es2019 && esbuild app/presentation/static/js/api.js --bundle --minify --outfile=app/presentation/static/js/api.bundle.js --format=esm --platform=browser --target=es2019"
+    "build": "esbuild app/presentation/static/js/main.js --bundle --minify --outfile=app/presentation/static/js/bundle.js --format=esm --platform=browser --target=es2019 && esbuild app/presentation/static/js/api.js --bundle --minify --outfile=app/presentation/static/js/api.bundle.js --format=esm --platform=browser --target=es2019",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:cov": "vitest run --coverage"
   },
   "devDependencies": {
-    "esbuild": "^0.22.0"
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.22.0",
+    "jsdom": "^27.0.0",
+    "vitest": "^2.0.0"
   }
 }

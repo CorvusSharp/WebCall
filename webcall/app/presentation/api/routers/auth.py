@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 import hmac
 
 from ....application.dto.auth import LoginInput, RegisterInput, RegisterOutput, TokenOutput
+from ..deps.rate_limit import limit_login, limit_register
 from ....core.domain.models import User
 from ....core.errors import ConflictError
 from ....core.ports.repositories import UserRepository
@@ -18,6 +19,7 @@ async def register(
     data: RegisterInput,
     users: UserRepository = Depends(get_user_repo),
     hasher: PasswordHasher = Depends(get_password_hasher),
+    _: None = Depends(limit_register),
 ) -> RegisterOutput:  # type: ignore[override]
     from ....application.use_cases.auth import RegisterUser
     from ....infrastructure.config import get_settings
@@ -40,6 +42,7 @@ async def login(
     users: UserRepository = Depends(get_user_repo),
     hasher: PasswordHasher = Depends(get_password_hasher),
     tokens: TokenProvider = Depends(get_token_provider),
+    _: None = Depends(limit_login),
 ) -> TokenOutput:  # type: ignore[override]
     from ....application.use_cases.auth import LoginUser
 

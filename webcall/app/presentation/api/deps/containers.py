@@ -16,6 +16,12 @@ from ....infrastructure.db.repositories.direct_messages import PgDirectMessageRe
 from ....infrastructure.security.password_hasher import BcryptPasswordHasher
 from ....infrastructure.security.jwt_provider import JoseTokenProvider
 from ....infrastructure.ice.provider import EnvIceConfigProvider
+from ....infrastructure.services.call_invites import InMemoryCallInviteService
+from ....infrastructure.services.call_invites_redis import RedisCallInviteService
+from ....infrastructure.services.push_notifier import SimplePushNotifier
+from ....core.ports.services import CallInviteService, PushNotifier
+from ....infrastructure.config import get_settings
+from redis.asyncio import from_url as redis_from_url
 
 
 # DB session provider (request-scoped)
@@ -82,3 +88,33 @@ def _get_signal_bus_singleton():
 
 def get_ice_provider():
     return EnvIceConfigProvider()
+
+
+# Call / Push services (process-wide singletons where appropriate)
+_call_invite_service: CallInviteService | None = None
+_push_notifier_singleton: PushNotifier | None = None
+
+
+def get_call_invite_service() -> CallInviteService:
+    global _call_invite_service
+    if _call_invite_service is None:
+        settings = get_settings()
+        if settings.CALL_INVITES_BACKEND.lower() == 'redis':
+            try:
+                redis_client = redis_from_url(settings.REDIS_URL, decode_responses=True)
+                _call_invite_service = RedisCallInviteService(redis_client)
+            except Exception:  # pragma: no cover - fallback
+                _call_invite_service = InMemoryCallInviteService()
+        else:
+            _call_invite_service = InMemoryCallInviteService()
+    return _call_invite_service
+
+
+async def get_push_notifier(
+    subs_repo = Depends(get_push_subscription_repo),  # type: ignore
+    user_repo = Depends(get_user_repo),  # type: ignore
+):  # -> PushNotifier
+    global _push_notifier_singleton
+    if _push_notifier_singleton is None:
+        _push_notifier_singleton = SimplePushNotifier(subs_repo, user_repo)
+    return _push_notifier_singleton

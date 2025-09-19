@@ -4,6 +4,7 @@ from typing import Optional
 from uuid import UUID
 
 from ...core.domain.models import Room
+from ...core.errors import NotFoundError, ForbiddenError
 from ...core.ports.repositories import RoomRepository
 
 
@@ -37,5 +38,10 @@ class DeleteRoom:
     def __init__(self, rooms: RoomRepository) -> None:
         self.rooms = rooms
 
-    async def execute(self, room_id: UUID) -> None:
+    async def execute(self, room_id: UUID, actor_id: UUID) -> None:
+        room = await self.rooms.get(room_id)
+        if not room:
+            raise NotFoundError("Room not found")
+        if room.owner_id != actor_id:
+            raise ForbiddenError("Only owner can delete room")
         await self.rooms.delete(room_id)

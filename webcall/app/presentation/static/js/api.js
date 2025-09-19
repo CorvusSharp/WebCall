@@ -122,6 +122,15 @@ export async function declineCall(otherUserId, roomId){
   return await r.json();
 }
 
+export async function cancelCall(otherUserId, roomId){
+  const r = await fetch(`${base}/api/v1/push/call/cancel`, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ other_user_id: otherUserId, room_id: roomId })
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+
 export async function findUsers(q){
   const r = await fetch(`${base}/api/v1/users/find?` + new URLSearchParams({ q }), { headers: { ...authHeaders() } });
   if (!r.ok) throw new Error(await r.text());

@@ -3,7 +3,7 @@ import pytest
 from httpx import AsyncClient
 from fastapi import status
 
-from ..bootstrap.main import app
+from app.bootstrap.asgi import app  # use absolute import; asgi instantiates application
 
 
 @pytest.mark.asyncio

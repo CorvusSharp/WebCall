@@ -1,12 +1,80 @@
+############################################
+# Python
+############################################
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 *.pyd
-.env
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
 .venv/
-.poetry/
+.env
+.env.*
+.python-version
 .mypy_cache/
 .pytest_cache/
+.ruff_cache/
 .coverage
+coverage.xml
 htmlcov/
 .cache/
+.tox/
+.benchmarks/
+
+############################################
+# Node / Frontend
+############################################
+node_modules/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+# Optional: ignore built bundles if не хотите коммитить артефакты сборки
+# app/presentation/static/js/*.bundle.js.map
+# app/presentation/static/js/*.bundle.js
+
+############################################
+# Editor / IDE
+############################################
+.idea/
+.vscode/
+*.swp
+*.swo
+*.orig
+*.iml
+
+############################################
+# OS / Misc
+############################################
+.DS_Store
+Thumbs.db
+
+############################################
+# Notebooks / data
+############################################
+.ipynb_checkpoints/
+
+############################################
+# Docker / Runtime / Monitoring (local only)
+############################################
+docker-compose.override.yml
+prometheus-data/
+grafana-data/
+*.rdb
+
+############################################
+# Reports / temp
+############################################
+reports/
+tmp/
+*.tmp
+*.bak
+
+############################################
+# Poetry internals (опционально)
+############################################
+.poetry/

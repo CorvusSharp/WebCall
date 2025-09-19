@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Optional
 from uuid import UUID, uuid4
 
-from .values import Email, PasswordHash, RoomName
+from .values import Email, PasswordHash, RoomName, Username
 
 
 class Role(str, Enum):
@@ -19,7 +19,7 @@ class Role(str, Enum):
 class User:
     id: UUID
     email: Email
-    username: str
+    username: Username
     password_hash: PasswordHash
     created_at: datetime
     public_key: str | None = None
@@ -29,7 +29,7 @@ class User:
         return User(
             id=uuid4(),
             email=Email(email),
-            username=username,
+            username=Username(username),
             password_hash=PasswordHash(password_hash),
             created_at=datetime.utcnow(),
         )

@@ -48,3 +48,20 @@ class PasswordHash:
 
     def __str__(self) -> str:
         return self.value
+
+
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,32}$")
+
+
+@dataclass(frozen=True, slots=True)
+class Username:
+    value: str
+
+    def __post_init__(self) -> None:
+        v = self.value.strip()
+        if not USERNAME_RE.match(v):
+            raise ValidationError("Username must be 3-32 chars [A-Za-z0-9_.-]")
+        object.__setattr__(self, "value", v)
+
+    def __str__(self) -> str:  # convenience
+        return self.value

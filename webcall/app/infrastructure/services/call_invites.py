@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+from typing import Dict, List
+from uuid import UUID
+from asyncio import Lock
+
+from ...core.ports.services import CallInviteService
+"""Сервис приглашений к звонку.
+
+Избегаем циклического импорта с модулем friends_ws (presentation.ws.friends),
+который через контейнеры тянет зависимости обратно сюда. Поэтому импорт
+делается лениво внутри методов.
+"""
+
+
+class InMemoryCallInviteService(CallInviteService):
+    """In-memory реализация хранения приглашений.
+
+    Заменяет _pending_calls из friends.py, при этом friends.py может
+    пользоваться этой службой через DI.
+    """
+
+    def __init__(self) -> None:
+        self._pending: Dict[str, dict] = {}
+        self._lock = Lock()
+
+    async def invite(self, from_user_id: UUID, to_user_id: UUID, room_id: str, from_username: str | None, from_email: str | None) -> None:
+        async with self._lock:
+            self._pending[room_id] = {
+                'fromUserId': str(from_user_id),
+                'toUserId': str(to_user_id),
+                'fromUsername': from_username,
+                'fromEmail': from_email,
+            }
+        from ...presentation.ws import friends as friends_ws  # локальный импорт чтобы избежать цикла
+        await friends_ws.publish_call_invite(from_user_id, to_user_id, room_id, from_username, from_email)
+
+    async def accept(self, from_user_id: UUID, to_user_id: UUID, room_id: str) -> None:
+        async with self._lock:
+            self._pending.pop(room_id, None)
+        from ...presentation.ws import friends as friends_ws
+        await friends_ws.publish_call_accept(from_user_id, to_user_id, room_id)
+
+    async def decline(self, from_user_id: UUID, to_user_id: UUID, room_id: str) -> None:
+        async with self._lock:
+            self._pending.pop(room_id, None)
+        from ...presentation.ws import friends as friends_ws
+        await friends_ws.publish_call_decline(from_user_id, to_user_id, room_id)
+
+    async def cancel(self, from_user_id: UUID, to_user_id: UUID, room_id: str) -> None:
+        async with self._lock:
+            self._pending.pop(room_id, None)
+        # publish_call_cancel уже очищает у себя, но для безопасности удаляем здесь тоже
+        from ...presentation.ws import friends as friends_ws
+        await friends_ws.publish_call_cancel(from_user_id, to_user_id, room_id)
+
+    async def list_pending_for(self, user_id: UUID) -> List[dict]:
+        async with self._lock:
+            return [
+                {'roomId': rid, **data}
+                for rid, data in self._pending.items()
+                if str(user_id) in (data.get('fromUserId'), data.get('toUserId'))
+            ]

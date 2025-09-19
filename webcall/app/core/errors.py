@@ -20,6 +20,10 @@ class NotFoundError(DomainError):
 class PermissionDenied(DomainError):
     pass
 
+# Backwards compatibility alias after refactor (DeleteRoom use case expects ForbiddenError)
+class ForbiddenError(PermissionDenied):
+    pass
+
 
 class ConflictError(DomainError):
     pass

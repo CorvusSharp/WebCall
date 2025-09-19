@@ -1,0 +1,47 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "webcall-overview",
+    "title": "WebCall Overview",
+    "tags": ["webcall"],
+    "timezone": "browser",
+    "schemaVersion": 39,
+    "version": 1,
+    "refresh": "30s",
+    "panels": [
+      {
+        "type": "graph",
+        "title": "HTTP Requests /s",
+        "targets": [
+          {"expr": "rate(app_requests_total[5m])", "legendFormat": "{{method}} {{status}}"}
+        ],
+        "id": 1
+      },
+      {
+        "type": "graph",
+        "title": "Request latency p95 (ms)",
+        "targets": [
+          {"expr": "histogram_quantile(0.95, sum(rate(app_request_latency_ms_bucket[5m])) by (le, method, path))", "legendFormat": "{{method}} {{path}}"}
+        ],
+        "id": 2
+      },
+      {
+        "type": "graph",
+        "title": "Active WS Connections",
+        "targets": [
+          {"expr": "sum(ws_active) by (channel)", "legendFormat": "{{channel}}"}
+        ],
+        "id": 3
+      },
+      {
+        "type": "graph",
+        "title": "Call signaling events rate",
+        "targets": [
+          {"expr": "rate(call_signal_events_total[5m])", "legendFormat": "{{event}}"}
+        ],
+        "id": 4
+      }
+    ]
+  },
+  "overwrite": true
+}

@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     VAPID_PRIVATE_KEY: str | None = None
     VAPID_SUBJECT: str | None = None
 
+    # Rate limiting (формат: "<limit>/<window_sec>") например 100/60
+    RATE_LIMIT: str | None = None
+    # Backend приглашений звонков: memory | redis
+    CALL_INVITES_BACKEND: str = "memory"
+
 
 @lru_cache()
 def get_settings() -> Settings:
