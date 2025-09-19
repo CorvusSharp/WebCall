@@ -1,0 +1,50 @@
+# Базовое
+.git
+.gitignore
+README.md
+ARCHITECTURE.md
+DEPLOYMENT.md
+
+# Python виртуальные окружения
+.venv
+venv
+
+# Кэш / артефакты
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.tmp
+*.log
+*.sqlite
+.build/
+.dist/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-store/
+
+# Тесты (не нужны в прод окружении образа)
+app/tests/
+app/tests_e2e/
+webcall/tests/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Docker
+Dockerfile.*~
+
+# Monitoring локальные артефакты (пока нет, но на будущее)
+monitoring/tmp/
+
+# Прочее
+*.orig

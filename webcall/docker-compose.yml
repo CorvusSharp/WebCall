@@ -62,9 +62,14 @@ services:
       - api
     command:
       - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.retention.time=15d
+      # Уменьшаем retention по времени и ограничиваем размер БД, чтобы не съесть весь диск на малом VPS
+      - --storage.tsdb.retention.time=3d
+      - --storage.tsdb.retention.size=512MB
+      # (Опционально можно ещё добавить: --query.lookback-delta=30m для снижения нагрузки)
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Выделяем отдельный именованный volume для данных Prometheus (по умолчанию /prometheus)
+      - prometheus-data:/prometheus
     ports:
       - "127.0.0.1:9090:9090"
 
@@ -88,3 +93,4 @@ volumes:
   pgdata:
   redisdata:
   grafana-data:
+  prometheus-data:
