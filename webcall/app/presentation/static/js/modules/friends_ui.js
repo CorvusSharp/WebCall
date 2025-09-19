@@ -163,4 +163,11 @@ export function initFriendsUI(){
       });
     } catch { els.friendSearchResults.innerHTML = '<div class="muted">Ошибка поиска</div>'; }
   });
+  // Поиск по Enter
+  els.friendSearch?.addEventListener('keydown', (e)=>{
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      els.btnFriendSearch?.click();
+    }
+  });
 }

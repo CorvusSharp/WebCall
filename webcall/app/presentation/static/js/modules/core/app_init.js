@@ -7,7 +7,7 @@ import { WebRTCManager } from '../../webrtc.js';
 import { els, appendLog, appendChat, setText, setEnabled, showToast } from './dom.js';
 import { appState } from './state.js';
 import { loadVisitedRooms } from '../visited_rooms.js';
-import { initFriendsModule, loadFriends, scheduleFriendsReload } from '../friends_ui.js';
+import { initFriendsModule, loadFriends, scheduleFriendsReload, initFriendsUI } from '../friends_ui.js';
 import { initDirectChatModule, handleIncomingDirect, handleDirectCleared } from '../direct_chat.js';
 import { startSpecialRingtone, stopSpecialRingtone, setActiveIncomingCall, setActiveOutgoingCall, markCallAccepted, markCallDeclined, resetActiveCall, getActiveCall } from '../calls.js';
 import { checkAndRequestPermissionsInitial, updatePermBanner } from '../permissions.js';
@@ -338,6 +338,7 @@ export async function appInit(){
 
   initDirectChatModule({ log, getAccountId });
   initFriendsModule({ log, unlockAudioPlayback, connectRoom });
+  try { initFriendsUI(); } catch {}
 
   loadVisitedRooms().catch(()=>{});
   checkAndRequestPermissionsInitial();
