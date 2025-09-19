@@ -528,3 +528,71 @@ input[type="range"]::-moz-range-thumb{
 @keyframes toast-in { from { opacity:0; transform: translateY(-8px) scale(.95); } to { opacity:1; transform:none; } }
 .wc-toast.leaving{ animation: toast-out .32s ease forwards; }
 @keyframes toast-out { to { opacity:0; transform: translateY(-6px) scale(.96); } }
+
+/* ======= DEBUG PANEL ======= */
+#debugPanel {
+  border: 2px solid rgba(124,58,237,0.3);
+  background: linear-gradient(160deg, rgba(124,58,237,0.08), rgba(6,182,212,0.04));
+}
+
+.debug-status {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.debug-status div {
+  margin-bottom: 4px;
+}
+
+.debug-status div:last-child {
+  margin-bottom: 0;
+}
+
+.debug-status span {
+  color: var(--primary-2);
+  font-weight: 500;
+}
+
+#debugFriendsMessages,
+#debugCallLog {
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.3;
+  background: rgba(0,0,0,0.2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-y: auto;
+  padding: 6px 8px;
+}
+
+#debugFriendsMessages .debug-msg,
+#debugCallLog .debug-msg {
+  margin-bottom: 2px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+#debugFriendsMessages .debug-msg.incoming {
+  background: rgba(34,197,94,0.1);
+  border-left: 2px solid var(--success);
+}
+
+#debugFriendsMessages .debug-msg.outgoing {
+  background: rgba(239,68,68,0.1);
+  border-left: 2px solid var(--danger);
+}
+
+#debugCallLog .debug-msg.call-event {
+  background: rgba(124,58,237,0.1);
+  border-left: 2px solid var(--primary);
+}
+
+.debug-timestamp {
+  color: var(--muted);
+  font-size: 11px;
+  margin-right: 6px;
+}

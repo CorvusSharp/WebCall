@@ -343,6 +343,15 @@ function startFriendsWs(){
       window.__FRIENDS_WS_STATS.total++;
       window.__FRIENDS_WS_STATS.byType[msg.type] = (window.__FRIENDS_WS_STATS.byType[msg.type] || 0) + 1;
       
+      // Обновляем счётчик сообщений в appState для панели дебага
+      appState.friendsWsMessageCount = window.__FRIENDS_WS_STATS.total;
+      appState.lastFriendsMessage = msg;
+      
+      // Отправляем в панель дебага
+      if (window.debugPanel) {
+        window.debugPanel.logFriendsMessage(msg.type, msg, 'incoming');
+      }
+      
       // Логируем все входящие сообщения
       log(`📥 Friends WS message: ${msg.type} (всего: ${window.__FRIENDS_WS_STATS.total})`);
       

@@ -35,6 +35,29 @@ function setState(patch){
   state = { ...state, ...patch };
   lastStateChangeTs = Date.now();
   dbg('state change', { from: prev.phase, to: state.phase, roomId: state.roomId });
+  
+  // Отправляем изменение состояния в панель дебага
+  if (window.debugPanel) {
+    window.debugPanel.logCallEvent(
+      'STATE_CHANGE', 
+      { 
+        from: prev.phase, 
+        to: state.phase, 
+        roomId: state.roomId,
+        otherUserId: state.otherUserId,
+        otherUsername: state.otherUsername
+      }
+    );
+  }
+  
+  // Обновляем глобальное состояние для панели дебага
+  if (window.appState) {
+    window.appState.callPhase = state.phase;
+    window.appState.callType = state.phase === 'incoming_invite' ? 'incoming' : 
+                               state.phase === 'outgoing_invite' ? 'outgoing' : '';
+    window.appState.callFriendId = state.otherUserId || '';
+    window.appState.callRoomId = state.roomId || '';
+  }
   try {
     if (state.phase==='incoming_invite' && prev.phase!=='incoming_invite'){ resumeAudio(); startIncomingRing(); }
     if (state.phase==='outgoing_invite' && prev.phase!=='outgoing_invite'){ resumeAudio(); startOutgoingRing(); }
@@ -286,6 +309,22 @@ function _handleWsMessage(msg, acc){
     window.__CALL_DEBUG.push({ ts: Date.now(), phase: state.phase, acc, msg });
     if (window.__CALL_DEBUG.length > 200) window.__CALL_DEBUG.splice(0, window.__CALL_DEBUG.length - 200);
   } catch {}
+  
+  // Отправляем в панель дебага
+  if (window.debugPanel) {
+    window.debugPanel.logCallEvent(
+      `CALL_${msg.type.toUpperCase()}`, 
+      { 
+        roomId: msg.roomId, 
+        from: msg.fromUserId, 
+        to: msg.toUserId, 
+        phase: state.phase,
+        accountId: acc,
+        msg: msg
+      }
+    );
+  }
+  
   dbg('ws msg', msg.type, { roomId: msg.roomId, from: msg.fromUserId, to: msg.toUserId, acc, curPhase: state.phase });
   switch(msg.type){
     case 'call_invite': {

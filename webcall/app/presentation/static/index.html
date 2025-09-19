@@ -97,6 +97,46 @@
           <h2>Логи</h2>
           <div id="logs" class="logs"></div>
         </section>
+
+        <!-- Debug Panel для Friends WebSocket и звонков -->
+        <section class="card panel" id="debugPanel" style="display:none;">
+          <h2>🔧 Debug Panel</h2>
+          <div class="form-grid" style="margin-bottom:1rem; gap:.5rem 1rem;">
+            <button id="btnToggleDebug" class="btn">Показать Debug</button>
+            <button id="btnClearDebugLogs" class="btn ghost">Очистить логи</button>
+            <button id="btnTestFriendsWS" class="btn ghost">Тест Friends WS</button>
+            <button id="btnGetCallState" class="btn ghost">Состояние звонка</button>
+          </div>
+          
+          <div id="debugContent" style="display:none;">
+            <div class="grid-2" style="gap:12px; margin-bottom:1rem;">
+              <div>
+                <div class="muted small" style="margin-bottom:6px;">Friends WebSocket Status</div>
+                <div id="friendsWsStatus" class="debug-status">
+                  <div>Статус: <span id="friendsWsState">-</span></div>
+                  <div>Сообщений получено: <span id="friendsWsMessageCount">0</span></div>
+                  <div>Последнее сообщение: <span id="friendsWsLastMessage">-</span></div>
+                  <div>Реконнектов: <span id="friendsWsReconnects">0</span></div>
+                </div>
+              </div>
+              <div>
+                <div class="muted small" style="margin-bottom:6px;">Call State</div>
+                <div id="callStateStatus" class="debug-status">
+                  <div>Фаза: <span id="callPhase">-</span></div>
+                  <div>Тип: <span id="callType">-</span></div>
+                  <div>Друг: <span id="callFriendId">-</span></div>
+                  <div>Room ID: <span id="callRoomId">-</span></div>
+                </div>
+              </div>
+            </div>
+            
+            <div class="muted small" style="margin-bottom:6px;">Friends WebSocket Messages (последние 20)</div>
+            <div id="debugFriendsMessages" class="logs" style="height:150px; margin-bottom:1rem;"></div>
+            
+            <div class="muted small" style="margin-bottom:6px;">Call Debug Log</div>
+            <div id="debugCallLog" class="logs" style="height:150px;"></div>
+          </div>
+        </section>
       </section>
 
       <!-- Нижняя панель: Друзья + Личный чат (перенесены ниже плиток участников) -->
@@ -158,6 +198,7 @@
     </template>
 
   <script src="/static/js/fx_web.js" defer></script>
+  <script src="/static/js/debug_panel.js" defer></script>
   <script type="module" src="/static/js/boot.js"></script>
   
   <!-- Incoming Call Modal -->
