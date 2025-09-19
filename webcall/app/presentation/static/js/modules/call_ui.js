@@ -15,6 +15,7 @@
 let acceptHandler = null;
 let declineHandler = null;
 let cancelHandler = null;
+let lastActionTs = 0;
 
 function qs(id){ return /** @type {HTMLElement|null} */(document.getElementById(id)); }
 
@@ -25,9 +26,9 @@ function ensureModalBindings(){
   const accBtn = qs('btnCallAccept');
   const decBtn = qs('btnCallDecline');
   const cancelBtn = qs('btnCallCancel');
-  if (accBtn){ accBtn.addEventListener('click', ()=>{ try { acceptHandler && acceptHandler(); } catch {} }); }
-  if (decBtn){ decBtn.addEventListener('click', ()=>{ try { declineHandler && declineHandler(); } catch {} }); }
-  if (cancelBtn){ cancelBtn.addEventListener('click', ()=>{ try { cancelHandler && cancelHandler(); } catch {} }); }
+  if (accBtn){ accBtn.addEventListener('click', ()=>{ if (Date.now()-lastActionTs<200) return; lastActionTs=Date.now(); try { accBtn.disabled=true; decBtn && (decBtn.disabled=true); acceptHandler && acceptHandler(); } catch {} }); }
+  if (decBtn){ decBtn.addEventListener('click', ()=>{ if (Date.now()-lastActionTs<200) return; lastActionTs=Date.now(); try { decBtn.disabled=true; accBtn && (accBtn.disabled=true); declineHandler && declineHandler(); } catch {} }); }
+  if (cancelBtn){ cancelBtn.addEventListener('click', ()=>{ if (Date.now()-lastActionTs<200) return; lastActionTs=Date.now(); try { cancelBtn.disabled=true; cancelHandler && cancelHandler(); } catch {} }); }
   modalBound = true;
 }
 
@@ -37,6 +38,7 @@ function showIncoming(username){
   const sub = qs('incomingCallFrom');
   if (sub) sub.textContent = username || 'Пользователь';
   if (m) m.style.display = '';
+  const status = qs('incomingCallStatus'); if (status) status.textContent='Входящий звонок...';
 }
 
 function hideIncoming(){
@@ -74,6 +76,31 @@ function renderBanner(state){
   el.textContent = text;
   const cbtn = ensureCancelButton();
   if (cbtn){ cbtn.style.display = (s.phase==='outgoing_invite') ? '' : 'none'; }
+
+  // Обновление состояния кнопок модалки
+  const accBtn = qs('btnCallAccept');
+  const decBtn = qs('btnCallDecline');
+  const cancelBtn = qs('btnCallCancel');
+  if (s.phase==='incoming_invite'){
+    if (accBtn) { accBtn.style.display=''; accBtn.disabled=false; }
+    if (decBtn) { decBtn.style.display=''; decBtn.disabled=false; }
+    if (cancelBtn) cancelBtn.style.display='none';
+  } else if (s.phase==='outgoing_invite'){
+    if (accBtn) accBtn.style.display='none';
+    if (decBtn) decBtn.style.display='none';
+    if (cancelBtn){ cancelBtn.style.display=''; cancelBtn.disabled=false; }
+  } else {
+    if (accBtn) accBtn.style.display='none';
+    if (decBtn) decBtn.style.display='none';
+    if (cancelBtn) cancelBtn.style.display='none';
+  }
+  const status = qs('incomingCallStatus');
+  if (status){
+    if (s.phase==='incoming_invite') status.textContent='Входящий звонок...';
+    else if (s.phase==='outgoing_invite') status.textContent='Исходящий...';
+    else if (s.phase==='active') status.textContent='Активный звонок';
+    else if (s.phase==='ended') status.textContent='Завершено'; else status.textContent='';
+  }
 }
 
 export function updateCallUI(state){

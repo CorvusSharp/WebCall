@@ -92,6 +92,15 @@ function internalCancel(){
 
 export function startOutgoingCall(friend){
   if (state.phase !== 'idle') return false;
+  // Gate: ждём готовности friends WS (если не открыт — отклоняем с уведомлением)
+  try {
+    const ws = window?.appState?.friendsWs; // если глобально доступен
+    if (!ws || ws.readyState !== WebSocket.OPEN){
+      dbg('friends WS not ready, abort startOutgoingCall');
+      try { window.__CALL_DEBUG && window.__CALL_DEBUG.push({ ts:Date.now(), warn:'friends_ws_not_ready' }); } catch {}
+      return false;
+    }
+  } catch {}
   const rnd = crypto.randomUUID().slice(0,8);
   const tag = (friend.username || friend.user_id || 'user').replace(/[^a-zA-Z0-9]+/g,'').slice(0,6) || 'user';
   const room = `call-${rnd}-${tag}`;
