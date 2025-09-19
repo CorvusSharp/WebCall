@@ -22,7 +22,7 @@
 /** @typedef {Object} AppState
  *  @property {string|null} token
  *  @property {WebSocket|null} ws
- *  @property {import('../../../webrtc.js').WebRTCManager|null} rtc
+ *  @property {import('../../webrtc.js').WebRTCManager|null} rtc
  *  @property {string|null} userId
  *  @property {string|null} accountId
  *  @property {number|null} reconnectTimeout
