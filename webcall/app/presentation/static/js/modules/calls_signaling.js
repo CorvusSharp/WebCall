@@ -49,8 +49,12 @@ const listeners = new Set();
 let _dialTimer = null;  // таймер ожидания подтверждения вызова (получатель offline)
 let _ringTimer = null;  // таймер ожидания ответа
 let _graceTimer = null; // таймер авто-очистки после ended
-const DIAL_TIMEOUT_MS = 7000;        // ожидание подтверждения (call_invite broadcast)
+const DIAL_TIMEOUT_MS = 15000;       // ожидание подтверждения (call_invite broadcast) УВЕЛИЧЕН
 const RING_TIMEOUT_MS = 25000;       // ожидание ответа (accept/decline)
+const OPTIMISTIC_RING_DELAY_MS = 800; // через сколько после notifyCall OK переходим в временное outgoing_ringing если echo ещё не пришёл
+let _optimisticTimer = null; // таймер перехода в оптимистический ringing
+  if (_optimisticTimer){ clearTimeout(_optimisticTimer); _optimisticTimer=null; }
+  if (_optimisticTimer){ clearTimeout(_optimisticTimer); _optimisticTimer=null; }
 const ENDED_CLEAR_DELAY_MS = 2000;   // задержка очистки баннера
 
 // Внешние зависимости (DI)
@@ -161,8 +165,18 @@ export function startOutgoingCall(friend){
   scheduleDialTimeout();
 
   notifyCall(friend.user_id, roomId).then(()=>{
-    // Успешно отправили HTTP уведомление -> ждём WS echo в виде call_invite (это подтверждение сервера)
     log('notifyCall OK');
+    // Планируем оптимистический переход, чтобы пользователь услышал звонок даже если echo задерживается
+    if (_optimisticTimer) clearTimeout(_optimisticTimer);
+    _optimisticTimer = setTimeout(()=>{
+      _optimisticTimer=null;
+      if (state.phase==='dialing'){
+        log('optimistic transition -> outgoing_ringing (echo not yet received)');
+        transition('outgoing_ringing', { meta:{ optimistic:true, confirmed:false } });
+        // продлеваем общий ring timeout если нужно
+        scheduleRingTimeout();
+      }
+    }, OPTIMISTIC_RING_DELAY_MS);
   }).catch(err=>{
     warn('notifyCall failed', err);
     transition('ended', { reason:'unavailable' });
@@ -273,7 +287,14 @@ function onInvite(m, acc){
   const isMine = m.fromUserId === acc;
   if (isMine){
     // Echo подтверждение: если мы в dialing -> переходим в outgoing_ringing
-    if (state.phase==='dialing' && state.roomId === m.roomId){ transition('outgoing_ringing', { otherUsername: m.toUsername || state.otherUsername }); }
+    if (state.phase==='dialing' && state.roomId === m.roomId){
+      transition('outgoing_ringing', { otherUsername: m.toUsername || state.otherUsername, meta:{ optimistic:false, confirmed:true } });
+    } else if (state.phase==='outgoing_ringing' && state.roomId === m.roomId){
+      // Обновляем meta если это был оптимистический режим
+      if (state.meta && state.meta.optimistic && !state.meta.confirmed){
+        state.meta.optimistic=false; state.meta.confirmed=true; log('server confirmation for optimistic ringing');
+      }
+    }
     return;
   }
   if (isForMe){
