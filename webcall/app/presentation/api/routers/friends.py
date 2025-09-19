@@ -68,7 +68,8 @@ async def list_friends(
                 user_id=other_id,
                 status=f.status,
                 requested_by=f.requested_by,
-                username=(u.username if u else None),
+                # u.username это value object Username -> явно приводим к str
+                username=(str(u.username) if u and u.username is not None else None),
                 email=(str(u.email) if u else None),
                 unread=unread,
             )
@@ -93,7 +94,8 @@ async def list_requests(
                 user_id=other_id,
                 status=f.status,
                 requested_by=f.requested_by,
-                username=(u.username if u else None),
+                # Явное приведение value object Username к str
+                username=(str(u.username) if u and u.username is not None else None),
                 email=(str(u.email) if u else None),
             )
         )
