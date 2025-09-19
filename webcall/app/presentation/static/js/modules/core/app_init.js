@@ -367,6 +367,7 @@ function startFriendsWs(){
         case 'direct_message': handleIncomingDirect(msg); try { const acc=getAccountId(); const other= msg.fromUserId === acc ? msg.toUserId : msg.fromUserId; const isActiveChat = appState.currentDirectFriend && other === appState.currentDirectFriend; const iAmRecipient = msg.toUserId === acc; if (iAmRecipient && !isActiveChat && 'Notification' in window && Notification.permission==='granted'){ const title = 'Новое сообщение'; const body = msg.fromUsername ? `От ${msg.fromUsername}` : 'Личное сообщение'; const reg = await navigator.serviceWorker.getRegistration('/static/sw.js'); if (reg && reg.showNotification){ reg.showNotification(title, { body, data:{ type:'direct', from: other } }); } else { new Notification(title, { body, data:{ type:'direct', from: other } }); } } } catch {} break;
         case 'direct_cleared': handleDirectCleared(msg); break;
         case 'call_invite':
+          try { showToast && showToast(`(debug) Входящий call_invite from=${msg.fromUserId?.slice(0,8)} to=${msg.toUserId?.slice(0,8)}`, 'info'); } catch {}
         case 'call_accept':
         case 'call_decline':
         case 'call_cancel':

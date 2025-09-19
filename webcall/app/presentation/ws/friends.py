@@ -251,8 +251,9 @@ async def publish_call_invite(from_user: UUID, to_user: UUID, room_id: str, from
     _pending_calls[room_id] = {
         'fromUserId': str(from_user),
         'toUserId': str(to_user),
-        'fromUsername': from_username,
-        'fromEmail': from_email,
+        # Приводим к простым str чтобы исключить pydantic/ORM объекты (ошибка JSON serializable)
+        'fromUsername': (str(from_username) if from_username is not None else None),
+        'fromEmail': (str(from_email) if from_email is not None else None),
         'roomId': room_id,
     }
     payload = {
@@ -260,8 +261,8 @@ async def publish_call_invite(from_user: UUID, to_user: UUID, room_id: str, from
         'fromUserId': str(from_user),
         'toUserId': str(to_user),
         'roomId': room_id,
-        'fromUsername': from_username,
-        'fromEmail': from_email,
+        'fromUsername': (str(from_username) if from_username is not None else None),
+        'fromEmail': (str(from_email) if from_email is not None else None),
     }
     # Диагностика: сколько активных WS у отправителя и получателя на момент рассылки
     try:
