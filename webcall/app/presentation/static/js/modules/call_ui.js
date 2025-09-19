@@ -15,8 +15,29 @@ function qs(id){ return /** @type {HTMLElement|null} */(document.getElementById(
 
 // ---- Создание/кеш UI элементов ----
 function ensureButtons(){
-  const ctx = qs('callContext');
-  if (!ctx) return;
+  let ctx = qs('callContext');
+  if (!ctx){
+    // Создаём плавающую панель, если основной контейнер отсутствует
+    let floating = document.getElementById('callContextFloating');
+    if (!floating){
+      floating = document.createElement('div');
+      floating.id='callContextFloating';
+      floating.style.position='fixed';
+      floating.style.bottom='16px';
+      floating.style.left='16px';
+      floating.style.background='rgba(32,33,36,0.92)';
+      floating.style.color='#fff';
+      floating.style.padding='10px 14px';
+      floating.style.borderRadius='10px';
+      floating.style.fontSize='14px';
+      floating.style.boxShadow='0 4px 18px rgba(0,0,0,.35)';
+      floating.style.zIndex='9999';
+      floating.innerHTML = '<div id="callContext" style="margin-bottom:6px"></div>';
+      document.body.appendChild(floating);
+    }
+    ctx = qs('callContext');
+  }
+  if (!ctx) return; // если даже fallback не удался
   if (!qs('btnCallCancel')){
     const b = document.createElement('button'); b.id='btnCallCancel'; b.textContent='Отменить'; b.className='btn btn-sm'; ctx.appendChild(b);
     b.addEventListener('click', ()=>actionGuard(()=>_handlers.cancel && _handlers.cancel()));

@@ -160,6 +160,7 @@ export function startOutgoingCall(friend){
   }
 
   const roomId = buildRoomId(friend);
+  try { log('startOutgoingCall', { accountId: deps.getAccountId && deps.getAccountId(), target: friend.user_id, roomId }); } catch {}
   transition('dialing', { roomId, otherUserId: friend.user_id, otherUsername: friend.username });
   try { deps.unlockAudio(); } catch{}
   scheduleDialTimeout();
@@ -342,6 +343,21 @@ export const acceptIncomingOld = acceptIncoming;
 try {
   window.__debugCallState = () => ({ state: {...state}, log:(window.__CALL_DEBUG||[]).slice(-20) });
   window.getCallState = () => ({...state});
+  window.debugCallEngine = () => {
+    const ws = (window.appState && window.appState.friendsWs) || null;
+    return {
+      state: { ...state },
+      timers: {
+        hasDial: !!_dialTimer,
+        hasRing: !!_ringTimer,
+        hasGrace: !!_graceTimer,
+        hasOptimistic: !!_optimisticTimer,
+      },
+      ws: ws ? ['CONNECTING','OPEN','CLOSING','CLOSED'][ws.readyState] : 'NONE',
+      accountId: deps.getAccountId && deps.getAccountId(),
+      pendingBuffered: _pending.length,
+    };
+  };
 } catch{}
 
 // Экспорт типов для JSDoc других модулей
