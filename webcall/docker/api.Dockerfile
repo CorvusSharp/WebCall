@@ -1,13 +1,16 @@
 # syntax=docker/dockerfile:1
 ## Build frontend in a node stage, then copy into python image
-FROM node:18-alpine AS nodebuilder
+FROM node:20-alpine AS nodebuilder
 WORKDIR /build
-# copy package.json to install esbuild
-COPY package.json ./
-# install npm deps (including dev deps / esbuild)
-RUN npm install --production=false --silent
+# copy dependency manifests
+COPY package.json package-lock.json ./
+# install dependencies deterministically
+RUN apk add --no-cache libc6-compat \
+    && npm ci --silent
 # copy frontend sources (only the static JS folder to keep context small)
 COPY app/presentation/static/js ./app/presentation/static/js
+# debug list sources (can be removed later)
+RUN find app/presentation/static/js -maxdepth 2 -type f -print
 # build bundles (script defined in package.json)
 RUN npm run build
 
