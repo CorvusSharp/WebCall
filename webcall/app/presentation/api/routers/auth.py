@@ -33,7 +33,8 @@ async def register(
 
     use = RegisterUser(users, hasher)
     user = await use.execute(email=data.email, username=data.username, password=data.password)
-    return RegisterOutput(id=str(user.id), email=str(user.email), username=user.username)
+    # user.username является value object (dataclass Username). Преобразуем к str для валидации Pydantic.
+    return RegisterOutput(id=str(user.id), email=str(user.email), username=str(user.username))
 
 
 @router.post("/login", response_model=TokenOutput)
@@ -61,4 +62,4 @@ class MeOut(BaseModel):
 
 @router.get("/me", response_model=MeOut)
 async def get_me(current=Depends(get_current_user)) -> MeOut:  # type: ignore[override]
-    return MeOut(id=str(current.id), email=str(current.email), username=current.username)
+    return MeOut(id=str(current.id), email=str(current.email), username=str(current.username))
