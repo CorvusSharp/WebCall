@@ -110,7 +110,20 @@ export class WebRTCManager {
   bindPeerMedia(peerId, handlers){
     const st = this.peers.get(peerId); if (!st) return;
     st.handlers = { ...(st.handlers||{}), ...(handlers||{}) };
-    if (st.stream.getTracks().length){ try { st.handlers.onTrack?.(st.stream); } catch{} }
+    if (st.stream.getTracks().length){
+      // Немедленно пробрасываем (повторное) чтобы обойти мобильные случаи, когда первый ontrack был до установки обработчика
+      try { st.handlers.onTrack?.(st.stream); } catch{}
+      // Watchdog: если через 1.2с нет ни одного video track с readyState='live' — запрашиваем повторную renegotiation
+      const needCheck = !st.stream.getVideoTracks().some(t=> t.readyState==='live');
+      if (needCheck){
+        setTimeout(()=>{
+          try {
+            const stillEmpty = !st.stream.getVideoTracks().some(t=> t.readyState==='live');
+            if (stillEmpty){ this._log(`🕒 video watchdog -> renegotiate for ${peerId.slice(0,8)}`); this._negotiateAll(); }
+          } catch{}
+        }, 1200);
+      }
+    }
   }
 
   async handleSignal(msg, mediaBinder){
