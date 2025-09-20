@@ -225,9 +225,23 @@ async _ensurePeer(peerId) {
     }
   } catch {}
 
+  // Аналогично гарантируем m=audio (recvonly) чтобы при первом оффере не потерять аудио m-line из-за гонок
+  try {
+    const hasAudioTr = pc.getTransceivers().some(t=> t.receiver?.track?.kind==='audio' || t.sender?.track?.kind==='audio');
+    if (!hasAudioTr){
+      const atr = pc.addTransceiver('audio', { direction: 'recvonly' });
+      this._log(`➕ Added passive recvonly audio transceiver for ${peerId.slice(0,8)}`);
+      // Сохраняем для дальнейших replaceTrack
+      const st = this.peers.get(peerId);
+      if (st) st.audioTransceiver = atr;
+    }
+  } catch {}
+
   this.peers.set(peerId, state);
   // После создания PeerConnection дотягиваем существующие видео-треки (если камера/экран были включены раньше)
   try { this._ensureExistingVideoSenders(); } catch {}
+  // И сразу цепляем аудио-трек, если он уже есть (после init())
+  try { if (this.localStream?.getAudioTracks?.()[0]) this.updateAllPeerTracks(); } catch {}
   return state;
 }
 
@@ -967,6 +981,17 @@ async startOffer(peerId){
           this._log(`📊 Состояние: ${pc.connectionState}`);
           this._log(`🧊 ICE: ${pc.iceConnectionState}`);
           this._log(`📡 Signaling: ${pc.signalingState}`);
+          try {
+            const localSdp = pc.localDescription?.sdp || ''; const remoteSdp = pc.remoteDescription?.sdp || '';
+            const mAudioLocal = (localSdp.match(/^m=audio /gm)||[]).length;
+            const mAudioRemote = (remoteSdp.match(/^m=audio /gm)||[]).length;
+            this._log(`📝 SDP m=audio local=${mAudioLocal} remote=${mAudioRemote}`);
+          } catch {}
+          try {
+            pc.getTransceivers().filter(t=> t.receiver?.track?.kind==='audio' || t.sender?.track?.kind==='audio').forEach((t,idx)=>{
+              this._log(`🔁 TR#a${idx} mid=${t.mid} dir=${t.direction} cur=${t.currentDirection} hasSender=${!!t.sender?.track} hasRecv=${!!t.receiver?.track}`);
+            });
+          } catch {}
           
           // Детальная информация о транспорте
           try{
