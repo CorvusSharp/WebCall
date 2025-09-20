@@ -1,5 +1,5 @@
 // Импорт API методов (исправлено: убран лишний сегмент js/ в пути)
-import { getMe, updateProfile, changePassword } from './api.js';
+import { getMe, updateProfile } from './api.js';
 
 function setMsg(el, text, cls){
   el.textContent = text || '';
@@ -10,9 +10,7 @@ async function init(){
   const emailEl = document.getElementById('email');
   const usernameEl = document.getElementById('username');
   const profileMsg = document.getElementById('profileMsg');
-  const pwdMsg = document.getElementById('pwdMsg');
   const formProfile = document.getElementById('formProfile');
-  const formPassword = document.getElementById('formPassword');
 
   // Prefill
   try {
@@ -49,27 +47,6 @@ async function init(){
     }
   });
 
-  formPassword.addEventListener('submit', async (ev)=>{
-    ev.preventDefault();
-    setMsg(pwdMsg, 'Обновление...', '');
-    const old_password = document.getElementById('old_password').value;
-    const new_password = document.getElementById('new_password').value;
-    if (!old_password || !new_password){
-      setMsg(pwdMsg, 'Заполните оба поля', 'error');
-      return;
-    }
-    try {
-      await changePassword(old_password, new_password);
-      setMsg(pwdMsg, 'Пароль изменён', 'success');
-      document.getElementById('old_password').value='';
-      document.getElementById('new_password').value='';
-    } catch (e){
-      let msg = String(e);
-      if (msg.includes('400')) msg = 'Старый пароль неверен или новый некорректен';
-      else if (msg.startsWith('Error:')) msg = msg.slice(6);
-      setMsg(pwdMsg, msg, 'error');
-    }
-  });
 }
 
 init();

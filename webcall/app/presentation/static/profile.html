@@ -8,7 +8,7 @@
   <style>
     .profile-container { max-width: 640px; margin: 2rem auto; padding: 1rem 1.25rem; background: var(--panel-bg,#111); border:1px solid var(--border-color,#333); border-radius:8px; }
     .profile-container h1 { margin-top:0; font-size:1.4rem; }
-    form + form { margin-top:2rem; }
+  form + form { margin-top:2rem; }
     .field { display:flex; flex-direction:column; gap:4px; margin-bottom:0.9rem; }
     label { font-weight:600; }
     input[type=text], input[type=email], input[type=password] { padding:0.55rem 0.7rem; border:1px solid var(--border-color,#444); background:var(--input-bg,#181818); color:var(--fg,#eee); border-radius:6px; }
@@ -48,21 +48,6 @@
       </div>
     </form>
 
-    <form id="formPassword" novalidate>
-      <h2>Смена пароля</h2>
-      <div class="field">
-        <label for="old_password">Текущий пароль</label>
-        <input id="old_password" name="old_password" type="password" autocomplete="current-password" />
-      </div>
-      <div class="field">
-        <label for="new_password">Новый пароль</label>
-        <input id="new_password" name="new_password" type="password" autocomplete="new-password" minlength="6" maxlength="128" />
-      </div>
-      <div class="actions-row">
-        <button class="primary" type="submit" id="btnChangePwd">Изменить пароль</button>
-        <span class="inline-msg" id="pwdMsg"></span>
-      </div>
-    </form>
   </div>
   <script type="module" src="/static/js/profile.js"></script>
 </body>
