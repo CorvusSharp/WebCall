@@ -386,6 +386,57 @@ body.theme-red .share-badge{ background: linear-gradient(140deg, rgba(255,59,48,
   gap:16px;
 }
 
+/* ===== Single peer (full focus) ===== */
+.peers-grid.layout-single-peer{
+  /* Отключаем авто-fill сетку и даём одну колонку на всю ширину */
+  display:grid;
+  grid-template-columns:1fr !important;
+  gap:20px;
+  align-items:center;
+  justify-content:center;
+}
+.tile.single-peer{
+  width:100%;
+  max-width:1600px; /* ограничиваем чтобы на ультрашироких не растягивалось слишком */
+  margin:0 auto;
+  /* Усилим визуальный акцент */
+  box-shadow:0 0 0 .35rem rgba(124,58,237,0.10), 0 16px 52px -8px rgba(0,0,0,.55);
+  border-color:color-mix(in srgb, var(--primary) 55%, var(--border));
+  transition:box-shadow .35s ease, border-color .35s ease, transform .35s ease;
+}
+.tile.single-peer:hover{
+  transform:translateY(-3px);
+  box-shadow:0 0 0 .42rem rgba(6,182,212,0.14), 0 20px 60px -6px rgba(0,0,0,.65);
+}
+.tile.single-peer .media{
+  /* Убираем жёсткое отношение сторон и делаем адаптивную высоту */
+  aspect-ratio:auto;
+  height:clamp(320px, 72vh, 880px);
+  background:#000; /* гарантируем чёрный фон вокруг видео при letterbox */
+}
+.tile.single-peer .media .video-stack .peer-main,
+.tile.single-peer .media video.peer-main{
+  object-fit:contain; /* чтобы не обрезать при высоком/широком экране */
+  background:#000;
+}
+.tile.single-peer .pip{
+  width:22%;
+  max-width:320px;
+  box-shadow:0 6px 26px rgba(0,0,0,.65), 0 0 0 .25rem rgba(0,0,0,.35);
+}
+@media (max-width:900px){
+  .tile.single-peer .media{ height:clamp(260px, 58vh, 640px); }
+  .tile.single-peer .pip{ width:28%; }
+}
+@media (max-width:640px){
+  .tile.single-peer .media{ height:clamp(200px, 54vh, 520px); }
+  .tile.single-peer .pip{ width:32%; }
+}
+@media (orientation:portrait) and (min-height:900px){
+  .tile.single-peer .media{ height:clamp(360px, 70vh, 900px); }
+}
+
+
 /* ======= TILE (плитка участника) ======= */
 .tile{
   position:relative; border-radius:12px; overflow:hidden;

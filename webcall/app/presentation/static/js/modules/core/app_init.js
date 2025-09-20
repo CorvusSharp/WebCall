@@ -220,6 +220,7 @@ export async function connectRoom(){
       for (const peerId of msg.users){ if (peerId === myId) continue; try { const last = appState.recentOffer.get(peerId) || 0; const now=Date.now(); if (now - last < 3000){ log(`Пропущен повторный старт для ${peerId}`); continue; } appState.recentOffer.set(peerId, now); } catch {}
         try { log(`Обнаружен пир ${peerId}, инициирую звонок...`); await appState.rtc.startOffer(peerId); } catch(e){ log(`startOffer(${peerId}) failed: ${e}`); }
       }
+      try { updatePeerLayout(); } catch {}
       // Авто-выход из личной комнаты звонка если остались одни
       try {
         const roomId = els.roomId?.value || '';
@@ -269,7 +270,7 @@ export async function connectRoom(){
         }
       } catch {}
     } else if (msg.type === 'user_joined'){ log(`Присоединился: ${msg.userId}`); }
-    else if (msg.type === 'user_left'){ log(`Отключился: ${msg.userId}`); const tile=document.querySelector(`.tile[data-peer="${msg.userId}"]`); if (tile) tile.remove(); }
+  else if (msg.type === 'user_left'){ log(`Отключился: ${msg.userId}`); const tile=document.querySelector(`.tile[data-peer="${msg.userId}"]`); if (tile) tile.remove(); try { updatePeerLayout(); } catch {} }
     else if (msg.type === 'chat'){
       const senderId = msg.fromUserId || msg.authorId;
       const who = msg.authorName || (senderId ? (appState.latestUserNames[senderId] || senderId.slice(0,6)) : 'unknown');
@@ -338,6 +339,7 @@ function bindPeerMedia(peerId){
   if (document.querySelector(`.tile[data-peer="${peerId}"]`)) return;
   const tpl = document.getElementById('tpl-peer-tile');
   const tile = tpl.content.firstElementChild.cloneNode(true); tile.dataset.peer = peerId; els.peersGrid.appendChild(tile);
+  try { updatePeerLayout(); } catch {}
   const mainVideo = tile.querySelector('video.peer-main');
   const pipWrap = tile.querySelector('.pip');
   const pipVideo = tile.querySelector('video.peer-pip');
@@ -382,6 +384,7 @@ function bindPeerMedia(peerId){
   appState.rtc.bindPeerMedia(peerId, {
     onTrack: (stream) => {
       log(`Получен медиа-поток от ${peerId.slice(0,6)}`); stopSpecialRingtone(); assignTracks(stream);
+      try { updatePeerLayout(); } catch {}
       if (audio){
         audio.srcObject=stream; try{ audio._peerStream=stream; }catch{}; audio.muted=false;
         audio.volume = vol ? (Math.min(100, Math.max(0, Number(vol.value)||100))/100) : 1.0;
@@ -392,6 +395,22 @@ function bindPeerMedia(peerId){
     onSinkChange: (deviceId)=>{ if (audio && audio.setSinkId){ audio.setSinkId(deviceId).catch(e=>log(`sinkAudio(${peerId.slice(0,6)}): ${e.name}`)); } }
   });
   if (vol && audio){ vol.addEventListener('input', ()=>{ const v = Math.min(100, Math.max(0, Number(vol.value)||0)); audio.volume = v/100; }); }
+}
+
+// Адаптация лэйаута: если один удалённый участник и нет screen share — делаем плитку широкой
+function updatePeerLayout(){
+  try {
+    const tiles = Array.from(document.querySelectorAll('#peersGrid .tile'));
+    const grid = document.getElementById('peersGrid');
+    if (!grid) return;
+    // Сбрасываем классы
+    tiles.forEach(t=> t.classList.remove('single-peer')); grid.classList.remove('layout-single-peer');
+    if (tiles.length === 1){
+      const t = tiles[0];
+      t.classList.add('single-peer');
+      grid.classList.add('layout-single-peer');
+    }
+  } catch {}
 }
 
 export function leaveRoom(){
