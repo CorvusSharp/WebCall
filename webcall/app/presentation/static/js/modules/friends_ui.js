@@ -77,7 +77,16 @@ export async function loadFriends(){
   els.friendsList.innerHTML = '<div class="muted">Загрузка...</div>';
   els.friendRequests.innerHTML = '<div class="muted">Загрузка...</div>';
   try {
-    const [friends, reqs] = await Promise.all([listFriends(), listFriendRequests()]);
+    const startedAt = Date.now();
+    let friends, reqs;
+    try {
+      [friends, reqs] = await Promise.all([listFriends(), listFriendRequests()]);
+    } catch(e){
+      console.warn('[friends_ui] Ошибка загрузки списков друзей/заявок:', e);
+      throw e; // пробрасываем дальше в общий catch
+    }
+    if (!Array.isArray(friends)) { console.warn('[friends_ui] Неверный формат friends', friends); friends = []; }
+    if (!Array.isArray(reqs)) { console.warn('[friends_ui] Неверный формат friend requests', reqs); reqs = []; }
     els.friendsList.innerHTML = '';
     if (!friends.length) els.friendsList.innerHTML = '<div class="muted">Нет друзей</div>';
     const activeCall = getActiveCall();
@@ -154,8 +163,9 @@ export async function loadFriends(){
     // Обновим статусы после полной перерисовки
     refreshFriendStatuses();
   } catch(e){
-    els.friendsList.innerHTML = '<div class="muted">Ошибка</div>';
-    els.friendRequests.innerHTML = '<div class="muted">Ошибка</div>';
+    const msg = (e && e.message) ? e.message : 'Ошибка';
+    els.friendsList.innerHTML = `<div class="muted">Ошибка загрузки: ${msg}</div>`;
+    els.friendRequests.innerHTML = `<div class="muted">Ошибка загрузки: ${msg}</div>`;
   }
 }
 
@@ -172,17 +182,31 @@ export function initFriendsUI(){
     if (!q) return;
     els.friendSearchResults.innerHTML = '<div class="muted">Поиск...</div>';
     try {
+      const t0 = performance.now();
       const arr = await findUsers(q);
+      const dt = (performance.now()-t0).toFixed(0);
       els.friendSearchResults.innerHTML='';
-      if (!arr.length) els.friendSearchResults.innerHTML = '<div class="muted">Ничего не найдено</div>';
+      if (!Array.isArray(arr)) {
+        console.warn('[friends_ui] findUsers: ожидался массив, получено', arr);
+        els.friendSearchResults.innerHTML = '<div class="muted">Неверный ответ сервера</div>';
+        return;
+      }
+      if (!arr.length) {
+        els.friendSearchResults.innerHTML = '<div class="muted">Ничего не найдено</div>';
+        return;
+      }
       arr.forEach(u => {
         const btnAdd = makeBtn('Добавить','btn', async ()=>{
           try { await sendFriendRequest(u.id); alert('Заявка отправлена'); await loadFriends(); }
-          catch(e){ alert(String(e)); }
+          catch(e){ alert('Ошибка отправки: '+ String(e?.message||e)); }
         });
         renderUserRow(els.friendSearchResults, u, { actions:[btnAdd] });
       });
-    } catch { els.friendSearchResults.innerHTML = '<div class="muted">Ошибка поиска</div>'; }
+      console.debug(`[friends_ui] Поиск "${q}" -> ${arr.length} (за ${dt}мс)`);
+    } catch(e) {
+      console.warn('[friends_ui] Ошибка поиска пользователей:', e);
+      els.friendSearchResults.innerHTML = `<div class="muted">Ошибка поиска: ${e?.message||e}</div>`;
+    }
   });
   // Поиск по Enter
   els.friendSearch?.addEventListener('keydown', (e)=>{

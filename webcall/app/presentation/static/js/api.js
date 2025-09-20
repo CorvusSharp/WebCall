@@ -58,13 +58,23 @@ function authHeaders(){
 // Friends
 export async function listFriends(){
   const r = await fetch(`${base}/api/v1/friends/`, { headers: { ...authHeaders() } });
-  if (!r.ok) throw new Error(await r.text());
+  if (!r.ok){
+    let msg = `Friends ${r.status}`;
+    try { msg += ' ' + (await r.text()); } catch{}
+    if (r.status === 401) msg = 'Не авторизован (401) — войдите заново';
+    throw new Error(msg);
+  }
   return await r.json();
 }
 
 export async function listFriendRequests(){
   const r = await fetch(`${base}/api/v1/friends/requests`, { headers: { ...authHeaders() } });
-  if (!r.ok) throw new Error(await r.text());
+  if (!r.ok){
+    let msg = `FriendRequests ${r.status}`;
+    try { msg += ' ' + (await r.text()); } catch{}
+    if (r.status === 401) msg = 'Не авторизован (401) — войдите заново';
+    throw new Error(msg);
+  }
   return await r.json();
 }
 
@@ -132,8 +142,19 @@ export async function cancelCall(otherUserId, roomId){
 }
 
 export async function findUsers(q){
-  const r = await fetch(`${base}/api/v1/users/find?` + new URLSearchParams({ q }), { headers: { ...authHeaders() } });
-  if (!r.ok) throw new Error(await r.text());
+  const url = `${base}/api/v1/users/find?` + new URLSearchParams({ q });
+  const r = await fetch(url, { headers: { ...authHeaders() } });
+  if (!r.ok){
+    let bodyTxt = '';
+    try { bodyTxt = await r.text(); } catch {}
+    let msg;
+    if (r.status === 401) msg = 'Поиск: не авторизован (401) — выполните вход.';
+    else if (r.status === 422) msg = 'Поиск: некорректный запрос (422) — проверьте длину запроса.';
+    else msg = `Поиск: ошибка ${r.status}${bodyTxt?(' '+bodyTxt):''}`;
+    const err = new Error(msg);
+    try { err.status = r.status; err.url = url; } catch {}
+    throw err;
+  }
   return await r.json();
 }
 
