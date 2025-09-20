@@ -22,6 +22,8 @@ from ....infrastructure.config import get_settings
 from ...ws.friends import publish_direct_message, publish_direct_cleared
 from ....infrastructure.db.repositories.users import PgUserRepository
 from ....infrastructure.services.direct_crypto import decrypt_direct, encrypt_direct
+from sqlalchemy import select, and_, func
+from ....infrastructure.db import models as m
 
 router = APIRouter(prefix='/api/v1/direct', tags=['direct'])
 
@@ -135,10 +137,27 @@ async def post_direct_message(friend_id: UUID, body: DirectMessageIn, background
         await publish_direct_message(current.id, friend_id, dm.id, content, dm.sent_at)
     except Exception:
         pass
-    # Мгновенное пуш-уведомление получателю (не дожидаясь 10 минут)
-    async def _instant_push(sender_id: UUID, to_id: UUID, ciphertext: str):
+    # Определяем порядковый номер сообщения в паре (после сохранения)
+    msg_index: int | None = None
+    try:
+        # Подсчёт количества сообщений в паре (включая текущее)
+        a_s, b_s = str(current.id), str(friend_id)
+        if a_s <= b_s:
+            ua, ub = current.id, friend_id
+        else:
+            ua, ub = friend_id, current.id
+        stmt_cnt = select(func.count()).select_from(m.DirectMessages).where(and_(m.DirectMessages.user_a_id == ua, m.DirectMessages.user_b_id == ub))
+        res_cnt = await dms.session.execute(stmt_cnt)  # type: ignore[attr-defined]
+        msg_index = int(res_cnt.scalar_one() or 0)
+    except Exception:
+        msg_index = None
+
+    # Мгновенное пуш-уведомление получателю только на каждое 10-е сообщение
+    async def _instant_push(sender_id: UUID, to_id: UUID, ciphertext: str, ordinal: int | None):
         settings = get_settings()
         if not (settings.VAPID_PUBLIC_KEY and settings.VAPID_PRIVATE_KEY and settings.VAPID_SUBJECT):
+            return
+        if ordinal is not None and ordinal % 10 != 0:
             return
         async with get_session() as session:
             push_repo_local = PgPushSubscriptionRepository(session)
@@ -165,9 +184,10 @@ async def post_direct_message(friend_id: UUID, body: DirectMessageIn, background
                     )
                 except Exception:
                     pass
-    background.add_task(_instant_push, current.id, friend_id, ciphertext)
-    # Планируем отложенное пуш-уведомление через 10 минут, если получатель не прочитал
-    async def _delayed_push_if_unread(sender_id: UUID, to_id: UUID, sent_at_iso: str):
+    background.add_task(_instant_push, current.id, friend_id, ciphertext, msg_index)
+    # Планируем отложенное пуш-уведомление через 10 минут, если получатель не прочитал.
+    # Тоже только для кратности 10.
+    async def _delayed_push_if_unread(sender_id: UUID, to_id: UUID, sent_at_iso: str, ordinal: int | None):
         # Ждём 10 минут, затем проверяем, прочитано ли сообщение (по last_read)
         import asyncio
         from datetime import datetime
@@ -175,6 +195,8 @@ async def post_direct_message(friend_id: UUID, body: DirectMessageIn, background
         # Настройки push
         settings = get_settings()
         if not (settings.VAPID_PUBLIC_KEY and settings.VAPID_PRIVATE_KEY and settings.VAPID_SUBJECT):
+            return
+        if ordinal is not None and ordinal % 10 != 0:
             return
         # Парсим время отправки сообщения
         try:
@@ -218,7 +240,7 @@ async def post_direct_message(friend_id: UUID, body: DirectMessageIn, background
                     # игнорируем ошибки доставки
                     pass
 
-    background.add_task(_delayed_push_if_unread, current.id, friend_id, dm.sent_at.isoformat())
+    background.add_task(_delayed_push_if_unread, current.id, friend_id, dm.sent_at.isoformat(), msg_index)
     return DirectMessageOut(id=dm.id, from_user_id=current.id, to_user_id=friend_id, content=content, sent_at=dm.sent_at.isoformat())
 
 

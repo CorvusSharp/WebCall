@@ -526,7 +526,15 @@ function setupUI(){
   els.chatInput?.addEventListener('keydown', e=>{ if (e.key==='Enter') els.btnSend.click(); });
   els.btnToggleMic?.addEventListener('click', async ()=>{ if (!appState.rtc) return; const enabled = await appState.rtc.toggleMic(); els.btnToggleMic.textContent = enabled ? 'Выкл.микро' : 'Вкл.микро'; });
   els.btnDiag?.addEventListener('click', ()=> appState.rtc?.diagnoseAudio());
-  els.btnToggleTheme?.addEventListener('click', ()=>{ const isDark = document.body.classList.toggle('dark'); localStorage.setItem('theme', isDark ? 'dark' : 'light'); });
+  els.btnToggleTheme?.addEventListener('click', ()=>{
+    // Цикл: light -> dark -> red -> light
+    const body = document.body;
+    let mode = localStorage.getItem('theme') || 'light';
+    if (mode === 'light'){ mode='dark'; body.classList.add('dark'); body.classList.remove('theme-red'); els.btnToggleTheme.textContent='🌙'; }
+    else if (mode === 'dark'){ mode='red'; body.classList.remove('dark'); body.classList.add('theme-red'); els.btnToggleTheme.textContent='☀️'; }
+    else { mode='light'; body.classList.remove('dark'); body.classList.remove('theme-red'); els.btnToggleTheme.textContent='🌙'; }
+    localStorage.setItem('theme', mode);
+  });
   els.btnLogout?.addEventListener('click', ()=>{ try { localStorage.removeItem('wc_token'); localStorage.removeItem('wc_username'); } catch {}; try { sessionStorage.removeItem('wc_connid'); } catch {}; if (appState.ws){ try { appState.ws.close(); } catch {} } const params = new URLSearchParams({ redirect:'/call' }); if (els.roomId.value) params.set('room', els.roomId.value); location.href = `/auth?${params.toString()}`; });
 
   // user gesture unlock
@@ -538,7 +546,13 @@ function setupUI(){
   const onHidden = ()=>{ try { appState.pendingAutoplayTasks=[]; } catch {}; try { stopSpecialRingtone(); } catch {}; };
   document.addEventListener('visibilitychange', ()=>{ if (document.hidden) onHidden(); });
   window.addEventListener('pagehide', onHidden, { capture:true });
-  if (localStorage.getItem('theme')==='dark') document.body.classList.add('dark');
+  // Применяем сохранённую тему
+  try {
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme === 'dark'){ document.body.classList.add('dark'); els.btnToggleTheme && (els.btnToggleTheme.textContent='🌙'); }
+    else if (savedTheme === 'red'){ document.body.classList.add('theme-red'); els.btnToggleTheme && (els.btnToggleTheme.textContent='☀️'); }
+    else { document.body.classList.remove('dark','theme-red'); els.btnToggleTheme && (els.btnToggleTheme.textContent='🌙'); }
+  } catch {}
   const u = new URL(location.href); if (u.searchParams.has('room')) els.roomId.value = u.searchParams.get('room');
   showPreJoin();
 
@@ -609,7 +623,12 @@ function setupUI(){
             [...wrappers, ...containers].forEach(el=>{ if (el) el.style.display = shouldShow ? '' : 'none'; });
         });
       };
-      const prefs = loadPrefs();
+      let prefs = loadPrefs();
+      // Если первый запуск (нет ключей) — скрываем логи и статус по умолчанию
+      if (!prefs || Object.keys(prefs).length === 0){
+        prefs = { logs:false, statusCard:false };
+        savePrefs(prefs);
+      }
       groups.forEach(g=>{
         const wrap = document.createElement('label');
         wrap.style.display='inline-flex';

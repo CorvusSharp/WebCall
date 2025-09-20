@@ -37,6 +37,29 @@ body.dark{
   --ring-2:rgba(6,182,212,0.32);
 }
 
+/* Red theme: более радикальная цветовая палитра с красными оттенками */
+body.theme-red{
+  --bg:#1a0507;
+  --surface:#25080c;
+  --card:#2d0c10;
+  --text:#ffecec;
+  --muted:#f19999;
+  --primary:#ff3b30;
+  --primary-2:#ff7a45;
+  --success:#22c55e; /* оставим системные */
+  --danger:#ff4242;
+  --warning:#ff9800;
+  --border:#3a1116;
+  --ring:rgba(255,59,48,0.45);
+  --ring-2:rgba(255,122,69,0.30);
+  --grad: linear-gradient(120deg,#ff3b30,#ff7a45);
+  --grad-soft: linear-gradient(160deg,rgba(255,59,48,.18),rgba(255,122,69,.14));
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(255,59,48,0.25), transparent),
+    radial-gradient(1000px 600px at 100% 10%, rgba(255,122,69,0.20), transparent),
+    linear-gradient(180deg,#1a0507 0%,#2d0c10 100%);
+}
+
 /* ======= GLOBAL ======= */
 html,body{height:100%}
 *{box-sizing:border-box}
