@@ -213,6 +213,11 @@ export async function connectRoom(){
                       return;
                     }
                     try { window.getCallState && window.getCallState().phase==='active' && window.hangup?.(); } catch {}
+                    // Полная очистка состояния звонка, чтобы не оставалось "занято" при повторных попытках
+                    try { window.resetCallSystem && window.resetCallSystem(); } catch {}
+                    try { if (els.roomId && /^call-/.test(els.roomId.value)) els.roomId.value=''; } catch {}
+                    try { appState.currentRoomId = null; } catch {}
+                    try { appState._prevPresenceCount = 0; } catch {}
                     leaveRoom();
                   } catch {}
                   appState._callSoloGrace = null;
