@@ -154,17 +154,20 @@ async _ensurePeer(peerId) {
 
   pc.addEventListener("negotiationneeded", async () => {
     if (state.makingOffer) return;
-    if (!state.polite) {
-      try {
-        state.makingOffer = true;
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        sendSignal(this.ws, 'offer', { sdp: offer.sdp }, this.userId, peerId);
-        this._log(`📤 Sent offer → ${peerId.slice(0,8)} (negotiationneeded)\n${offer.sdp}`);
-      } catch (e) {
-        this._log(`negotiationneeded(${peerId.slice(0,8)}): ${e?.name || e}`);
-      } finally { state.makingOffer = false; }
-    }
+    // Ранее офферы создавались только "impolite" стороной. Это ломало сценарии,
+    // когда видеотрек добавлялся у polite участника (часто мобильный), и peers
+    // так и не переходили к m=video. Теперь обе стороны могут инициировать,
+    // но защищаемся от коллизий через стандартную collision logic в handleSignal().
+    try {
+      state.makingOffer = true;
+      this._log(`⚙️ negotiationneeded → createOffer (polite=${state.polite}) for ${peerId.slice(0,8)}`);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      sendSignal(this.ws, 'offer', { sdp: offer.sdp }, this.userId, peerId);
+      this._log(`📤 Sent offer → ${peerId.slice(0,8)} (negotiationneeded, polite=${state.polite})`);
+    } catch (e) {
+      this._log(`negotiationneeded(${peerId.slice(0,8)}): ${e?.name || e}`);
+    } finally { state.makingOffer = false; }
   });
 
   pc.addEventListener("connectionstatechange", () => {
@@ -422,12 +425,18 @@ async startOffer(peerId){
 
   _attachOrReplaceVideoSender(track){
     try {
-      for (const [,peer] of this.peers){
+      for (const [pid,peer] of this.peers){
         let sender = peer.pc.getSenders().find(s=> s.track && s.track.kind==='video');
         if (!sender){
           sender = peer.pc.addTrack(track, this.localStream);
+          this._log(`➕ add video track → ${pid.slice(0,8)} (id=${track.id})`);
         } else if (sender.track !== track){
-          sender.replaceTrack(track).catch(()=>{});
+          const oldId = sender.track?.id;
+          sender.replaceTrack(track).then(()=>{
+            this._log(`♻️ replace video track → ${pid.slice(0,8)} (${oldId}→${track.id})`);
+          }).catch(()=>{});
+        } else {
+          this._log(`↔️ video track already set for ${pid.slice(0,8)} (id=${track.id})`);
         }
       }
       // Сохраняем ссылку на первого sender как основной
@@ -457,8 +466,30 @@ async startOffer(peerId){
   try { this.localVideo?.play?.().catch(()=>{}); } catch {}
       this._currentVideoKind = 'camera';
       track.onended = () => { this._log('Камера трек завершён'); if (this._currentVideoKind==='camera') this.stopVideo(); };
-      this._log('Камера запущена');
+      this._log(`Камера запущена (track id=${track.id}, label="${track.label}")`);
       this.onVideoState('camera', track);
+
+      // Авто-триггер renegotiation если браузер (редко) не выдал negotiationneeded
+      setTimeout(()=>{
+        for (const [pid, st] of this.peers){
+          const pc = st.pc;
+          if (pc.signalingState === 'stable'){
+            const hasVideoSender = pc.getSenders().some(s=> s.track && s.track.kind==='video');
+            const transHasVideo = pc.getTransceivers().some(t=> t.sender?.track?.kind==='video');
+            // Если sender есть, но m=video ещё не ушло (можно косвенно судить по отсутствию currentDirection с send)
+            const needForce = hasVideoSender && !pc.getTransceivers().some(t=> (t.sender?.track?.kind==='video' && /send/.test(t.currentDirection||'')));
+            if (needForce){
+              this._log(`⚠️ Force renegotiation (manual offer) for ${pid.slice(0,8)} — negotiationneeded не сработал`);
+              st.pc.createOffer().then(of=>{
+                return st.pc.setLocalDescription(of).then(()=>{
+                  sendSignal(this.ws, 'offer', { sdp: of.sdp }, this.userId, pid);
+                  this._log(`📤 Sent offer (forced video) → ${pid.slice(0,8)}`);
+                });
+              }).catch(e=> this._log(`forceOffer(${pid.slice(0,8)}): ${e?.name||e}`));
+            }
+          }
+        }
+      }, 500);
       return true;
     } catch(e){ this._log(`startCamera error: ${e?.name||e}`); return false; }
   }
@@ -662,5 +693,37 @@ async startOffer(peerId){
           }
       }
       this._log('=== КОНЕЦ ДИАГНОСТИКИ ===');
+  }
+
+  // Диагностика видео/транссиверов для случая асимметрии
+  async diagnoseVideo(){
+    this._log('=== 🎥 ВИДЕО ДИАГНОСТИКА ===');
+    if (this.localStream){
+      const vts = this.localStream.getVideoTracks();
+      this._log(`📱 Локальный поток: ${vts.length} видео трек(а)`);
+      vts.forEach((t,i)=> this._log(`📸 Трек ${i}: id=${t.id}, label="${t.label}", state=${t.readyState}, enabled=${t.enabled}`));
+    } else {
+      this._log('❌ НЕТ локального потока (video)');
+    }
+    for (const [peerId, st] of this.peers){
+      const pc = st.pc;
+      this._log(`--- Peer ${peerId.slice(0,8)} video ---`);
+      try {
+        const trans = pc.getTransceivers();
+        trans.filter(t=> (t.sender?.track?.kind==='video') || (t.receiver?.track?.kind==='video')).forEach((t,idx)=>{
+          this._log(`🔁 TX#${idx} mid=${t.mid} dir=${t.direction} cur=${t.currentDirection} senderTrack=${t.sender?.track?.id||'-'} recvTrack=${t.receiver?.track?.id||'-'}`);
+        });
+        const senders = pc.getSenders().filter(s=> s.track && s.track.kind==='video');
+        senders.forEach(s=> this._log(`➡️ sender track=${s.track.id} rtcp=${s.transport?.state||'?'} params=${(s.getParameters().encodings||[]).length}enc`));
+        const receivers = pc.getReceivers().filter(r=> r.track && r.track.kind==='video');
+        receivers.forEach(r=> this._log(`⬅️ receiver track=${r.track.id} state=${r.track.readyState}`));
+        if (st.stream){
+          const remoteV = st.stream.getVideoTracks();
+          this._log(`📥 remote stream video tracks=${remoteV.length}`);
+          remoteV.forEach((t,i)=> this._log(`   [${i}] id=${t.id} ready=${t.readyState} muted=${t.muted}`));
+        }
+      } catch(e){ this._log(`diagnoseVideo error: ${e?.name||e}`); }
+    }
+    this._log('=== КОНЕЦ ВИДЕО ДИАГНОСТИКИ ===');
   }
 }
