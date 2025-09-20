@@ -82,19 +82,20 @@ async def update_me(
     return MeOut(id=str(updated.id), email=str(updated.email), username=str(updated.username))
 
 
-from fastapi import Response
-
-@router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+@router.post("/me/password", status_code=status.HTTP_200_OK)
 async def change_password(
     data: ChangePasswordInput,
     current=Depends(get_current_user),
     users: UserRepository = Depends(get_user_repo),
     hasher: PasswordHasher = Depends(get_password_hasher),
-) -> None:  # type: ignore[override]
+):  # type: ignore[override]
     """Смена пароля текущего пользователя.
 
-    Используем 204 No Content — поэтому явно указываем response_class=Response и
-    ничего не возвращаем (без JSON null), иначе FastAPI сочтёт что есть тело.
+    Заменили 204 → 200, потому что текущая версия FastAPI жёстко валидирует
+    отсутствие потенциального тела для 204 и выбрасывает AssertionError при
+    комбинации декоратора. Возвращаем простой JSON для явного подтверждения.
+    Если критично иметь 204, можно убрать status_code в декораторе и возвращать
+    Response(status_code=204), но тогда OpenAPI покажет 200.
     """
     if not hasher.verify(data.old_password, str(current.password_hash)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Старый пароль неверен")
@@ -102,5 +103,4 @@ async def change_password(
     ok = await users.update_password(current.id, new_hash)
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    # Ничего не возвращаем: 204 No Content
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return {"status":"ok"}
