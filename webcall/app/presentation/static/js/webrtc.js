@@ -44,6 +44,7 @@ constructor(opts){
   // Метрики локального видео (fps/разрешение)
   this._metricsTimer = null;
   this._metrics = { fps:0, width:0, height:0 };
+  this._pendingGlare = new Map(); // peerId -> { sdp, ts }
 }
   _log(m){ try{ this.onLog(m); }catch{} }
 
@@ -214,6 +215,15 @@ async _ensurePeer(peerId) {
     this._log(`ICE(${peerId.slice(0,8)}) = ${pc.iceConnectionState}`);
   });
 
+  // Превентивно добавляем video transceiver (recvonly) чтобы у удалённой стороны всегда было m=video место
+  try {
+    const hasVideoTr = pc.getTransceivers().some(t=> t.receiver?.track?.kind==='video' || t.sender?.track?.kind==='video');
+    if (!hasVideoTr){
+      pc.addTransceiver('video', { direction: 'recvonly' });
+      this._log(`➕ Added passive recvonly video transceiver for ${peerId.slice(0,8)}`);
+    }
+  } catch {}
+
   this.peers.set(peerId, state);
   // После создания PeerConnection дотягиваем существующие видео-треки (если камера/экран были включены раньше)
   try { this._ensureExistingVideoSenders(); } catch {}
@@ -268,7 +278,14 @@ async handleSignal(msg, mediaBinder) {
 
     const offerCollision = peer.makingOffer || pc.signalingState !== "stable";
     peer.ignoreOffer = !peer.polite && offerCollision;
-    if (peer.ignoreOffer) { this._log(`⏭️ Ignore offer from ${peerId.slice(0,8)} (impolite collision)`); return; }
+    if (peer.ignoreOffer) {
+      this._log(`⏭️ Ignore offer from ${peerId.slice(0,8)} (impolite collision)`);
+      // Сохраняем для повторной обработки когда стабилизируемся
+      this._pendingGlare.set(peerId, { sdp: msg.sdp, ts: Date.now() });
+      // Запускаем отложенную попытку
+      setTimeout(()=> this._retryPendingGlare(peerId), 150);
+      return;
+    }
 
     try {
       if (offerCollision) await pc.setLocalDescription({ type: 'rollback' });
@@ -332,6 +349,24 @@ async handleSignal(msg, mediaBinder) {
     }
   }
 }
+
+  _retryPendingGlare(peerId){
+    try {
+      const pcState = this.peers.get(peerId);
+      if (!pcState) return;
+      const pc = pcState.pc;
+      if (pc.signalingState !== 'stable') { // подождём следующего раунда
+        setTimeout(()=> this._retryPendingGlare(peerId), 120);
+        return;
+      }
+      const pending = this._pendingGlare.get(peerId);
+      if (!pending) return;
+      this._pendingGlare.delete(peerId);
+      this._log(`🔄 Retrying glare offer from ${peerId.slice(0,8)}`);
+      // Повторно обрабатываем как обычный offer
+      this.handleSignal({ signalType:'offer', fromUserId: peerId, sdp: pending.sdp, targetUserId: this.userId }).catch(()=>{});
+    } catch {}
+  }
 
 
 
