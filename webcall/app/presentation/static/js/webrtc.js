@@ -46,6 +46,18 @@ constructor(opts){
   this._metrics = { fps:0, width:0, height:0 };
 }
   _log(m){ try{ this.onLog(m); }catch{} }
+
+  // Привязка уже активных локальных видео-треков к всем пирам (используется при появлении нового пира)
+  _ensureExistingVideoSenders(){
+    try {
+      const tracks = [];
+      if (this._cameraTrack && this._cameraTrack.readyState === 'live') tracks.push(this._cameraTrack);
+      if (this._screenTrack && this._screenTrack.readyState === 'live') tracks.push(this._screenTrack);
+      if (!tracks.length) return;
+      tracks.forEach(t=> this._attachOrReplaceVideoSender(t));
+      this._log(`🔁 Resync existing video tracks to peers: ${tracks.map(t=>t._wcType||t.kind).join(',')}`);
+    } catch {}
+  }
   getOutputDeviceId(){ return this.outputDeviceId; }
   setPreferredDevices({ mic, cam, spk }){
     if (mic) this.preferred.micId = mic;
@@ -203,6 +215,8 @@ async _ensurePeer(peerId) {
   });
 
   this.peers.set(peerId, state);
+  // После создания PeerConnection дотягиваем существующие видео-треки (если камера/экран были включены раньше)
+  try { this._ensureExistingVideoSenders(); } catch {}
   return state;
 }
 
@@ -371,6 +385,9 @@ async startOffer(peerId){
     }
     if (at) { await tx.sender.replaceTrack(at); }
     st.audioTransceiver = tx;
+
+  // ДО createOffer убедимся что уже существующие видео треки прикреплены
+  this._ensureExistingVideoSenders();
     // ============================================================================
 
     const offer = await pc.createOffer();
