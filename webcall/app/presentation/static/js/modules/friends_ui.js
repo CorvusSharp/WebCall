@@ -164,8 +164,21 @@ export async function loadFriends(){
     refreshFriendStatuses();
   } catch(e){
     const msg = (e && e.message) ? e.message : 'Ошибка';
-    els.friendsList.innerHTML = `<div class="muted">Ошибка загрузки: ${msg}</div>`;
-    els.friendRequests.innerHTML = `<div class="muted">Ошибка загрузки: ${msg}</div>`;
+    const needsUsernameFix = /Username must be 3-32 chars/.test(msg);
+    const extra = needsUsernameFix ? `<div class="small" style="margin-top:6px;">
+      Требуется валидный username. <button class="btn btn-sm" id="btnGoProfile">Исправить профиль</button>
+    </div>` : '';
+    const html = `<div class="muted">Ошибка загрузки: ${msg}</div>${extra}`;
+    els.friendsList.innerHTML = html;
+    els.friendRequests.innerHTML = html;
+    if (needsUsernameFix){
+      setTimeout(()=>{
+        const b = document.getElementById('btnGoProfile');
+        if (b){
+          b.addEventListener('click', ()=>{ try { location.href='/profile.html'; } catch {} });
+        }
+      }, 30);
+    }
   }
 }
 
