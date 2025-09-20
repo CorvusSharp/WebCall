@@ -182,6 +182,9 @@ body,html{background-attachment:fixed}
 .app-main{display:flex;flex-direction:column;gap:16px}
 .panel{background:transparent;border-radius:var(--radius)}
 .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+/* Выравнивание высоты локального и удалённых контейнеров */
+#remoteContainer{display:flex;flex-direction:column}
+#remoteContainer .peers-grid{flex:1 1 auto}
 @media(max-width:960px){.grid-2{grid-template-columns:1fr}}
 
 /* ======= CARD (стеклянная карта с переливом) ======= */
