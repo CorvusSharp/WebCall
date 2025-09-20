@@ -13,6 +13,8 @@ export const els = {
   logs: document.getElementById('logs'),
   chat: document.getElementById('chat'),
   btnToggleMic: document.getElementById('btnToggleMic'),
+  btnToggleCam: document.getElementById('btnToggleCam'),
+  btnScreenShare: document.getElementById('btnScreenShare'),
   localVideo: document.getElementById('localVideo'),
   peersGrid: document.getElementById('peersGrid'),
   stats: document.getElementById('stats'),

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 
 class RegisterInput(BaseModel):
@@ -30,21 +30,13 @@ class UpdateProfileInput(BaseModel):
     email: EmailStr | None = None
     username: str | None = Field(default=None, min_length=3, max_length=50)
 
-    @field_validator('email', 'username')
-    @classmethod
-    def at_least_one(cls, v, values, field):  # type: ignore[override]
-        # Pydantic v2 style: we can't check other fields easily here; will enforce in endpoint.
-        return v
-
 
 class ChangePasswordInput(BaseModel):
     old_password: str = Field(min_length=6, max_length=128)
     new_password: str = Field(min_length=6, max_length=128)
 
-    @field_validator('new_password')
-    @classmethod
-    def passwords_different(cls, v, values):  # type: ignore[override]
-        old = values.get('old_password')
-        if old and old == v:
+    @model_validator(mode='after')
+    def passwords_different(self):  # type: ignore[override]
+        if self.old_password == self.new_password:
             raise ValueError('Новый пароль не должен совпадать со старым')
-        return v
+        return self

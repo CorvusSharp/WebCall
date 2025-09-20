@@ -102,6 +102,21 @@ async function refreshDevices(){
   fill(els.micSel,mics,appState.selected.mic); fill(els.camSel,cams,appState.selected.cam); fill(els.spkSel,spks,appState.selected.spk);
   const summary = devs.map(d=>`${d.kind}:${d.label||'(no)'}:${(d.deviceId||'').slice(0,6)}`).join(' | ');
   stat(`Devices: ${summary}`);
+  try {
+    if (els.camSel && !els.camSel._wc_bound){
+      els.camSel.addEventListener('change', async ()=>{
+        const devId = els.camSel.value; appState.selected.cam = devId; try { localStorage.setItem('wc_cam', devId); } catch {}
+        if (appState.rtc){
+          if (appState.rtc._currentVideoKind === 'camera'){
+            await appState.rtc.switchCamera(devId);
+          } else {
+            appState.rtc.preferred.camId = devId;
+          }
+        }
+      });
+      els.camSel._wc_bound = true;
+    }
+  } catch {}
 }
 
 // ===== WS Room connect =====
@@ -118,7 +133,17 @@ export async function connectRoom(){
     localVideo: els.localVideo,
     outputDeviceId: appState.selected.spk,
     onLog: log,
-    onPeerState: (peerId,key,value)=>{ const tile=document.querySelector(`.tile[data-peer="${peerId}"]`); if (tile) tile.dataset[key]=value; }
+    onPeerState: (peerId,key,value)=>{ const tile=document.querySelector(`.tile[data-peer="${peerId}"]`); if (tile) tile.dataset[key]=value; },
+    onVideoState: (kind)=>{
+      try {
+        const camBtn = els.btnToggleCam; const screenBtn = els.btnScreenShare; const badge = document.getElementById('screenShareBadge');
+        camBtn?.classList.remove('btn-media-active'); screenBtn?.classList.remove('btn-media-active');
+        if (badge) badge.style.display = (kind==='screen') ? '' : 'none';
+        if (kind==='camera') camBtn?.classList.add('btn-media-active');
+        if (kind==='screen') screenBtn?.classList.add('btn-media-active');
+        const card = document.getElementById('localCard'); if (card) card.style.display = (kind==='none') ? 'none' : '';
+      } catch {}
+    }
   });
 
   const sendPingSafe = signal.sendPing ?? (ws => { try { if (ws && ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:'ping'})); } catch {} });
@@ -313,6 +338,9 @@ export function leaveRoom(){
   } catch {}
   try { appState.ws?.send(JSON.stringify({ type:'leave', fromUserId: appState.userId })); } catch {}
   if (appState.ws) appState.ws.close(); if (appState.rtc) { appState.rtc.close(); appState.rtc=null; }
+  try { // Безопасно гасим локальное видео/шаринг (если остались треки)
+    if (appState.rtc?.stopVideo) appState.rtc.stopVideo();
+  } catch {}
   setConnectedState(false);
   try { els.peersGrid.querySelectorAll('.tile').forEach(t=> safeReleaseMedia(t)); } catch {}
   els.peersGrid.innerHTML=''; log('Отключено'); if (appState.peerCleanupIntervalId){ clearInterval(appState.peerCleanupIntervalId); appState.peerCleanupIntervalId=null; }
@@ -536,6 +564,8 @@ function setupUI(){
   els.btnSend?.addEventListener('click', ()=>{ const text = els.chatInput.value; if (text && appState.ws){ (signal.sendChat || (()=>{}))(appState.ws, text, getStableConnId()); try { window.__lastChatSendTs = Date.now(); } catch {}; els.chatInput.value=''; } });
   els.chatInput?.addEventListener('keydown', e=>{ if (e.key==='Enter') els.btnSend.click(); });
   els.btnToggleMic?.addEventListener('click', async ()=>{ if (!appState.rtc) return; const enabled = await appState.rtc.toggleMic(); els.btnToggleMic.textContent = enabled ? 'Выкл.микро' : 'Вкл.микро'; });
+  els.btnToggleCam?.addEventListener('click', async ()=>{ if (!appState.rtc) return; const on = await appState.rtc.toggleCameraStream(); els.btnToggleCam.textContent = on ? '🎥 Камера выкл' : '🎥 Камера'; });
+  els.btnScreenShare?.addEventListener('click', async ()=>{ if (!appState.rtc) return; const sharing = await appState.rtc.toggleScreenShare(); els.btnScreenShare.textContent = sharing ? '🛑 Остановить' : '🖥 Экран'; });
   els.btnDiag?.addEventListener('click', ()=> appState.rtc?.diagnoseAudio());
   els.btnToggleTheme?.addEventListener('click', ()=>{
     // Цикл тем: light -> dark -> red -> light (визуально один кружок меняет цвет)

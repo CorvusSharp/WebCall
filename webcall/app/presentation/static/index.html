@@ -38,7 +38,9 @@
             <div id="inCallControls" class="controls-grid" style="grid-column:1/-1; display:none;">
               <button id="btnLeave" class="btn danger">Выйти</button>
               <button id="btnCopyLink" class="btn">Копия ссылки</button>
-              <button id="btnToggleMic" class="btn">Выкл.микро</button>
+              <button id="btnToggleMic" class="btn" title="Микрофон">🎤 Микро</button>
+              <button id="btnToggleCam" class="btn" title="Камера">🎥 Камера</button>
+              <button id="btnScreenShare" class="btn" title="Демонстрация экрана">🖥 Экран</button>
               <button id="btnDiag" class="btn ghost">Диагностика</button>
             </div>
           </div>
@@ -57,6 +59,7 @@
             <h2>Вы</h2>
             <div class="video-wrap">
               <video id="localVideo" muted playsinline></video>
+              <div id="screenShareBadge" class="share-badge" style="display:none;" aria-live="polite">🖥 <span>Экран шарится</span></div>
             </div>
           </div>
         </section>

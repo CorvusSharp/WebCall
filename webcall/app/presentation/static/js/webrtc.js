@@ -24,6 +24,14 @@ constructor(opts){
   this.peers = new Map();
 
   this._offerLocks = new Map(); // <— анти-дубль createOffer() по пиру
+  this._videoSender = null; // RTCRtpSender для локального видео
+  this._currentVideoKind = 'none'; // none | camera | screen
+  this._screenStream = null; // отдельный stream для шаринга
+  this.videoConstraints = {
+    camera: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } },
+    screen: { frameRate: 15 }
+  };
+  this.onVideoState = opts.onVideoState || (()=>{}); // callback(kind:'none'|'camera'|'screen', track)
 }
   _log(m){ try{ this.onLog(m); }catch{} }
   getOutputDeviceId(){ return this.outputDeviceId; }
@@ -400,7 +408,9 @@ async startOffer(peerId){
         const [vt] = s.getVideoTracks();
         if (!vt) return;
         this.localStream.addTrack(vt);
+        this._attachOrReplaceVideoSender(vt);
         if (this.localVideo) this.localVideo.srcObject = this.localStream;
+        this._currentVideoKind = 'camera';
         this._log('Камера включена');
       }).catch(e=> this._log(`Camera init: ${e?.name||e}`));
       return true;
@@ -409,6 +419,138 @@ async startOffer(peerId){
     this._log(`Камера ${tr.enabled ? 'включена' : 'выключена'}`);
     return tr.enabled;
   }
+
+  _attachOrReplaceVideoSender(track){
+    try {
+      for (const [,peer] of this.peers){
+        let sender = peer.pc.getSenders().find(s=> s.track && s.track.kind==='video');
+        if (!sender){
+          sender = peer.pc.addTrack(track, this.localStream);
+        } else if (sender.track !== track){
+          sender.replaceTrack(track).catch(()=>{});
+        }
+      }
+      // Сохраняем ссылку на первого sender как основной
+      const firstPeer = this.peers.values().next().value;
+      if (firstPeer){
+        this._videoSender = firstPeer.pc.getSenders().find(s=> s.track && s.track.kind==='video') || this._videoSender;
+      }
+    } catch {}
+  }
+
+  async startCamera(){
+    if (this._currentVideoKind === 'camera' && this.localStream?.getVideoTracks()[0]){
+      this._log('Камера уже активна');
+      return true;
+    }
+    try {
+      const base = this.preferred.camId ? { deviceId: { exact: this.preferred.camId }, ...this.videoConstraints.camera } : this.videoConstraints.camera;
+      const gum = await navigator.mediaDevices.getUserMedia({ video: base, audio: false });
+      const track = gum.getVideoTracks()[0];
+      if (!track) { this._log('Нет video track после getUserMedia'); return false; }
+      // Удаляем предыдущие video треки из localStream
+      if (!this.localStream){ this.localStream = await this._getLocalMedia() || new MediaStream(); }
+      this.localStream.getVideoTracks().forEach(t=>{ t.stop(); this.localStream.removeTrack(t); });
+      this.localStream.addTrack(track);
+      this._attachOrReplaceVideoSender(track);
+      if (this.localVideo) this.localVideo.srcObject = this.localStream;
+      this._currentVideoKind = 'camera';
+      track.onended = () => { this._log('Камера трек завершён'); if (this._currentVideoKind==='camera') this.stopVideo(); };
+      this._log('Камера запущена');
+      this.onVideoState('camera', track);
+      return true;
+    } catch(e){ this._log(`startCamera error: ${e?.name||e}`); return false; }
+  }
+
+  async startScreenShare(){
+    if (this._currentVideoKind === 'screen') { this._log('Screen share уже активен'); return true; }
+    try {
+      const ds = await navigator.mediaDevices.getDisplayMedia({ video: this.videoConstraints.screen, audio: false });
+      const track = ds.getVideoTracks()[0];
+      if (!track){ this._log('Нет трека экрана'); return false; }
+      this._screenStream = ds;
+      if (!this.localStream){ this.localStream = await this._getLocalMedia() || new MediaStream(); }
+      // Заменяем текущий видеотрек
+      this.localStream.getVideoTracks().forEach(t=>{ t.stop(); this.localStream.removeTrack(t); });
+      this.localStream.addTrack(track);
+      this._attachOrReplaceVideoSender(track);
+      if (this.localVideo) this.localVideo.srcObject = this.localStream;
+      this._currentVideoKind = 'screen';
+      track.onended = () => {
+        this._log('Screen share завершён пользователем');
+        if (this._currentVideoKind === 'screen') {
+          this._screenStream?.getTracks().forEach(t=>t.stop());
+          this._screenStream = null;
+          // Пытаемся вернуть камеру, если пользователь включал её ранее
+          this.startCamera().catch(()=> this.stopVideo());
+        }
+      };
+      this._log('Демонстрация экрана запущена');
+      this.onVideoState('screen', track);
+      return true;
+    } catch(e){ this._log(`startScreenShare error: ${e?.name||e}`); return false; }
+  }
+
+  stopVideo(){
+    try {
+      if (!this.localStream) return;
+      this.localStream.getVideoTracks().forEach(t=>{ try { t.stop(); } catch{}; this.localStream.removeTrack(t); });
+      if (this.localVideo) {
+        // Сохраняем аудио, но очистим video отображение
+        this.localVideo.srcObject = this.localStream;
+      }
+      this._currentVideoKind = 'none';
+      this._log('Видео выключено');
+      this.onVideoState('none', null);
+      // Обновляем senders: заменяем видеотрек на null
+      for (const [,peer] of this.peers){
+        const sender = peer.pc.getSenders().find(s=> s.track && s.track.kind==='video');
+        if (sender){ sender.replaceTrack(null).catch(()=>{}); }
+      }
+    } catch(e){ this._log(`stopVideo error: ${e?.name||e}`); }
+  }
+
+  async toggleScreenShare(){
+    if (this._currentVideoKind === 'screen'){
+      this._log('Отключаем screen share');
+      this.stopVideo();
+      return false;
+    } else {
+      const ok = await this.startScreenShare();
+      return ok;
+    }
+  }
+
+  async switchCamera(deviceId){
+    try {
+      this.preferred.camId = deviceId;
+      if (this._currentVideoKind !== 'camera'){ this._log('switchCamera: камера не активна, просто обновляем prefer'); return false; }
+      const constraints = { video: { deviceId: { exact: deviceId }, ...this.videoConstraints.camera }, audio: false };
+      const gum = await navigator.mediaDevices.getUserMedia(constraints);
+      const newTrack = gum.getVideoTracks()[0]; if (!newTrack){ this._log('switchCamera: нет нового видеотрека'); return false; }
+      const oldTracks = this.localStream?.getVideoTracks() || [];
+      if (!this.localStream){ this.localStream = await this._getLocalMedia() || new MediaStream(); }
+      oldTracks.forEach(t=>{ try { t.stop(); } catch{}; try { this.localStream.removeTrack(t); } catch{} });
+      this.localStream.addTrack(newTrack);
+      this._attachOrReplaceVideoSender(newTrack);
+      if (this.localVideo) this.localVideo.srcObject = this.localStream;
+      this._log('switchCamera: видеотрек заменён');
+      this.onVideoState('camera', newTrack);
+      return true;
+    } catch(e){ this._log(`switchCamera error: ${e?.name||e}`); return false; }
+  }
+
+  async toggleCameraStream(){
+    if (this._currentVideoKind === 'camera'){
+      this._log('Отключаем камеру');
+      this.stopVideo();
+      return false;
+    } else {
+      const ok = await this.startCamera();
+      return ok;
+    }
+  }
+
 
   async close(){
       try{ this.ws?.close(); }catch{}
