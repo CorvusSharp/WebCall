@@ -55,7 +55,8 @@ const OPTIMISTIC_RING_DELAY_MS = 800; // через сколько после no
 let _optimisticTimer = null; // таймер перехода в оптимистический ringing
   if (_optimisticTimer){ clearTimeout(_optimisticTimer); _optimisticTimer=null; }
   if (_optimisticTimer){ clearTimeout(_optimisticTimer); _optimisticTimer=null; }
-const ENDED_CLEAR_DELAY_MS = 2000;   // задержка очистки баннера
+const ENDED_CLEAR_DELAY_MS_DEFAULT = 2000;   // задержка очистки баннера (дефолт)
+let ENDED_CLEAR_DELAY_MS = ENDED_CLEAR_DELAY_MS_DEFAULT;
 
 // Внешние зависимости (DI)
 let deps = {
@@ -139,6 +140,12 @@ function transition(phase, patch){
   if (phase==='dialing') scheduleDialTimeout(); else if (prev.phase==='dialing') { if (_dialTimer) { clearTimeout(_dialTimer); _dialTimer=null; } }
   if (['outgoing_ringing','incoming_ringing'].includes(phase)) scheduleRingTimeout(); else if (['outgoing_ringing','incoming_ringing'].includes(prev.phase)) { if (_ringTimer){ clearTimeout(_ringTimer); _ringTimer=null; } }
   if (phase==='ended') scheduleEndedCleanup(); else if (phase!=='ended' && _graceTimer){ clearTimeout(_graceTimer); _graceTimer=null; }
+  // Адаптивная задержка очистки: для call-* ускоряем
+  try {
+    if (phase==='ended'){
+      if (state.roomId && /^call-/.test(state.roomId)){ ENDED_CLEAR_DELAY_MS = 250; } else { ENDED_CLEAR_DELAY_MS = ENDED_CLEAR_DELAY_MS_DEFAULT; }
+    }
+  } catch {}
   // (убрано) Ранее здесь был автодисконнект WS для эфемерных комнат, отключено во избежание преждевременного выхода
   emit();
 }
@@ -339,10 +346,19 @@ function onInvite(m, acc){
   }
   if (isForMe){
     if (!['idle','ended'].includes(state.phase)){
-      // Уже заняты — авто decline
-      warn('incoming invite while busy -> decline');
-      declineCall(m.fromUserId, m.roomId).catch(()=>{});
-      return;
+      // Попытка авто-восстановления если состояние устаревшее или не соответствует реальности
+      const age = Date.now() - state.sinceTs;
+      const recoverable = ['ended','active','connecting','dialing','outgoing_ringing','incoming_ringing'].includes(state.phase) && age > 2000;
+      if (recoverable){
+        warn('recover stale state before processing new invite', state.phase, age);
+        try { clearTimers(); } catch{}
+        state = { phase:'idle', sinceTs: Date.now() };
+        emit();
+      } else {
+        warn('incoming invite while busy -> decline');
+        declineCall(m.fromUserId, m.roomId).catch(()=>{});
+        return;
+      }
     }
     transition('incoming_ringing', { roomId: m.roomId, otherUserId: m.fromUserId, otherUsername: m.fromUsername, incoming:true });
     // Браузерное уведомление

@@ -251,6 +251,13 @@ export async function connectRoom(){
     if (appState.rtc) { appState.rtc.close(); appState.rtc = null; }
     try { stopStatsLoop(); } catch {}
     appState.ws = null; if (appState.peerCleanupIntervalId) { clearInterval(appState.peerCleanupIntervalId); appState.peerCleanupIntervalId=null; }
+    try {
+      // Если закрылась эфемерная комната звонка — форсируем полный сброс сигналинга
+      const rid = els.roomId?.value || '';
+      if (/^call-/.test(rid) && window.forceResetCall){ window.forceResetCall(); }
+      if (/^call-/.test(rid)){ try { els.roomId.value=''; } catch {} }
+      appState.currentRoomId = null;
+    } catch {}
     if (!appState.isManuallyDisconnected && !appState.isReconnecting){ appState.isReconnecting = true; log('Попытка переподключения через 3с...'); appState.reconnectTimeout = setTimeout(connectRoom, 3000); }
   };
   appState.ws.onerror = (err)=>{ log(`WS ошибка: ${err?.message||'unknown'}`); try { appState.ws?.close(); } catch {} };
