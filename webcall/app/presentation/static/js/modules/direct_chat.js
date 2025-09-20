@@ -31,11 +31,12 @@ function appendDirectMessage(m, isSelf){
   const div = document.createElement('div');
   div.className = 'chat-line' + (isSelf ? ' self' : '');
   const dt = new Date(m.sent_at || m.sentAt || Date.now());
-  const ts = dt.toLocaleTimeString();
+  const ts = dt.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
   const full = dt.toLocaleString();
   const whoSpan = document.createElement('span'); whoSpan.className = 'who'; whoSpan.textContent = isSelf ? 'Я' : (m.from_user_id||m.fromUserId||'--').slice(0,6);
   const msgSpan = document.createElement('span'); msgSpan.className = 'msg'; msgSpan.textContent = m.content;
   const timeSpan = document.createElement('span'); timeSpan.className = 'time'; timeSpan.title = full; timeSpan.textContent = ts;
+  timeSpan.style.marginLeft = '6px';
   div.appendChild(whoSpan); div.appendChild(msgSpan); div.appendChild(timeSpan);
   els.directMessages.appendChild(div);
 }
@@ -52,9 +53,18 @@ function scheduleAutoRedecrypt(friendId){
   const run = async () => {
     if (appState.currentDirectFriend !== friendId){ _redecryptSchedulers.delete(key); return; }
     try { await tryDecryptVisibleMessages(friendId, els.directMessages); } catch {}
-    // Есть ли ещё элементы помеченные как pending?
-    const pending = els.directMessages.querySelector('.chat-line .msg[data-cipher]');
-    if (!pending){ _redecryptSchedulers.delete(key); return; }
+    // Есть ли ещё элементы помеченные как pending (dataset.cipher)? Попытка индивидуальной дешифровки.
+    const pending = Array.from(els.directMessages.querySelectorAll('.chat-line .msg[data-cipher]'));
+    for (const span of pending){
+      const cipher = span.dataset.cipher;
+      if (!cipher) { span.removeAttribute('data-cipher'); continue; }
+      try {
+        const dec = await decryptFromFriend(friendId, cipher);
+        if (dec){ span.textContent = dec; span.removeAttribute('data-cipher'); }
+      } catch {}
+    }
+    const still = els.directMessages.querySelector('.chat-line .msg[data-cipher]');
+    if (!still){ _redecryptSchedulers.delete(key); return; }
     state.attempts++;
     if (state.attempts >= state.max){ _redecryptSchedulers.delete(key); return; }
     // Экспоненциальная или квазилинейная задержка
@@ -168,6 +178,13 @@ export function handleIncomingDirect(msg){
       const prev = appState.directUnread.get(other) || 0;
       appState.directUnread.set(other, prev + 1);
       updateFriendUnreadBadge(other);
+      // Уведомление на каждое 10-е непросмотренное сообщение (10,20,30 ...)
+      try {
+        const unreadNow = prev + 1;
+        if (unreadNow % 10 === 0 && Notification && Notification.permission === 'granted'){
+            new Notification('Новые сообщения', { body: `Еще ${unreadNow} непрочитанных от собеседника` });
+        }
+      } catch {}
     }
   }
 }
