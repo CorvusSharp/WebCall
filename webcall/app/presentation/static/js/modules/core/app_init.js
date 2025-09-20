@@ -188,13 +188,38 @@ export async function connectRoom(){
       try {
         const roomId = els.roomId?.value || '';
         if (/^call-/.test(roomId)) {
-          // Если в presence только наш connId -> другой вышел
-            if (msg.users.length <= 1) {
-              log('call-room solitary: auto hangup + leave');
-              try { window.getCallState && window.getCallState().phase==='active' && window.hangup?.(); } catch {}
-              // Небольшая задержка чтобы дать пройти возможному call_end
-              setTimeout(()=>{ try { leaveRoom(); } catch {} }, 120);
+          // Сохраняем предыдущее количество пользователей в appState
+          if (typeof appState._prevPresenceCount !== 'number') appState._prevPresenceCount = msg.users.length;
+          const prev = appState._prevPresenceCount;
+          const nowCount = msg.users.length;
+          appState._prevPresenceCount = nowCount;
+          // Условия авто-выхода:
+          // 1) Раньше было >=2 пользователей
+          // 2) Сейчас остались мы одни (<=1)
+          // 3) Текущая фаза звонка активная/завершившаяся (исключаем стадии ожидания соединения peer-ов)
+          // 4) Ещё не запущен grace таймер
+          if (prev >= 2 && nowCount <= 1) {
+            const phase = (window.getCallState && window.getCallState().phase) || 'idle';
+            if (['active','ended','connecting'].includes(phase)){
+              if (!appState._callSoloGrace){
+                log(`call-room solitary detected (prev=${prev} -> now=${nowCount}), scheduling auto leave`);
+                appState._callSoloGrace = setTimeout(()=>{
+                  try {
+                    // Перепроверка: если за grace время снова кто-то пришёл — отменяем
+                    const latestCount = appState._prevPresenceCount;
+                    if (latestCount && latestCount > 1){
+                      log('solo grace aborted: peer rejoined');
+                      appState._callSoloGrace = null;
+                      return;
+                    }
+                    try { window.getCallState && window.getCallState().phase==='active' && window.hangup?.(); } catch {}
+                    leaveRoom();
+                  } catch {}
+                  appState._callSoloGrace = null;
+                }, 800); // grace 0.8s
+              }
             }
+          }
         }
       } catch {}
     } else if (msg.type === 'user_joined'){ log(`Присоединился: ${msg.userId}`); }
