@@ -56,7 +56,10 @@
       <section id="inCallSection" style="display:none;" class="app-in-call">
         <section class="panel grid-2">
           <div class="card video-card" id="localCard" style="display:none">
-            <h2>Вы</h2>
+            <h2 style="display:flex; justify-content:space-between; align-items:center; gap:.5rem;">
+              <span>Вы</span>
+              <button class="btn btn-xs btn-fullscreen" type="button" data-action="fullscreen-local" title="На полный экран">⛶</button>
+            </h2>
             <div class="video-wrap">
               <video id="localVideo" muted playsinline></video>
               <div id="screenShareBadge" class="share-badge" style="display:none;" aria-live="polite">🖥 <span>Экран шарится</span></div>
@@ -196,6 +199,7 @@
           <label class="vol">
             🔊 <input type="range" name="volume" min="0" max="100" step="1" value="100" />
           </label>
+          <button class="btn btn-xs btn-fullscreen" type="button" title="На полный экран" data-action="fullscreen">⛶</button>
         </div>
       </div>
     </template>

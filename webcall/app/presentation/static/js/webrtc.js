@@ -454,6 +454,7 @@ async startOffer(peerId){
       this.localStream.addTrack(track);
       this._attachOrReplaceVideoSender(track);
       if (this.localVideo) this.localVideo.srcObject = this.localStream;
+  try { this.localVideo?.play?.().catch(()=>{}); } catch {}
       this._currentVideoKind = 'camera';
       track.onended = () => { this._log('Камера трек завершён'); if (this._currentVideoKind==='camera') this.stopVideo(); };
       this._log('Камера запущена');
@@ -475,6 +476,7 @@ async startOffer(peerId){
       this.localStream.addTrack(track);
       this._attachOrReplaceVideoSender(track);
       if (this.localVideo) this.localVideo.srcObject = this.localStream;
+  try { this.localVideo?.play?.().catch(()=>{}); } catch {}
       this._currentVideoKind = 'screen';
       track.onended = () => {
         this._log('Screen share завершён пользователем');
@@ -498,6 +500,7 @@ async startOffer(peerId){
       if (this.localVideo) {
         // Сохраняем аудио, но очистим video отображение
         this.localVideo.srcObject = this.localStream;
+        try { this.localVideo?.play?.().catch(()=>{}); } catch {}
       }
       this._currentVideoKind = 'none';
       this._log('Видео выключено');

@@ -266,6 +266,26 @@ input:active{ transform: scale(.995) }
 }
 .btn:hover::after{ transform: translateX(0) }
 
+/* Fullscreen button */
+.btn-fullscreen {
+  font-size: 11px;
+  padding: 2px 6px;
+  line-height: 1.2;
+  background: var(--panel-bg,#1b1f25);
+  border: 1px solid var(--border-color,#333);
+  color: var(--fg,#ddd);
+  cursor: pointer;
+  border-radius: 4px;
+}
+.btn-fullscreen:hover {
+  background: var(--accent,#1fa060);
+  color:#fff;
+  border-color: var(--accent,#1fa060);
+}
+.fullscreen-active video {
+  outline: 3px solid var(--accent,#1fa060);
+}
+
 .btn:hover{ border-color:#2a3347; box-shadow:0 0 0 .35rem rgba(124,58,237,0.10) }
 .btn:active{ transform: translateY(1px) scale(.99) }
 .btn:disabled{opacity:.6;cursor:not-allowed}

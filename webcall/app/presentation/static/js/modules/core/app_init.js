@@ -614,6 +614,50 @@ function setupUI(){
   const u = new URL(location.href); if (u.searchParams.has('room')) els.roomId.value = u.searchParams.get('room');
   showPreJoin();
 
+  // Делегирование кликов для кнопок полноэкранного режима (локальное и peer видео)
+  try {
+    document.addEventListener('click', (e)=>{
+      const btn = e.target.closest('button[data-action="fullscreen"], button[data-action="fullscreen-local"]');
+      if (!btn) return;
+      e.preventDefault();
+      let container = null;
+      if (btn.dataset.action === 'fullscreen-local') {
+        container = document.getElementById('localCard')?.querySelector('.video-wrap') || document.getElementById('localCard');
+      } else {
+        container = btn.closest('.tile');
+      }
+      if (!container) return;
+      const enter = () => {
+        try { container.requestFullscreen?.(); } catch {}
+        container.classList.add('fullscreen-active');
+      };
+      const exitMark = () => { container.classList.remove('fullscreen-active'); };
+      if (document.fullscreenElement) {
+        if (document.fullscreenElement === container) {
+          document.exitFullscreen().catch(()=>{}).then(exitMark);
+        } else {
+          document.exitFullscreen().catch(()=>{}).then(()=> enter());
+        }
+      } else {
+        enter();
+      }
+    });
+    document.addEventListener('fullscreenchange', ()=>{
+      if (!document.fullscreenElement) {
+        document.querySelectorAll('.fullscreen-active').forEach(el => el.classList.remove('fullscreen-active'));
+      }
+    });
+  } catch {}
+
+  // Принудительная попытка воспроизведения локального видео (фикс черного экрана при некоторых политиках автоплея)
+  try {
+    const vid = document.getElementById('localVideo');
+    if (vid) {
+      vid.addEventListener('loadedmetadata', ()=>{ vid.play().catch(()=>{}); });
+      setTimeout(()=>{ if (vid.paused) vid.play().catch(()=>{}); }, 800);
+    }
+  } catch {}
+
   // === Панель настроек отображения ===
   try {
     // Вставляем кнопку-шестерёнку рядом с кнопкой выхода

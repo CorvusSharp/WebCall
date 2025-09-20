@@ -1,4 +1,5 @@
-import { getMe, updateProfile, changePassword } from './js/api.js';
+// Импорт API методов (исправлено: убран лишний сегмент js/ в пути)
+import { getMe, updateProfile, changePassword } from './api.js';
 
 function setMsg(el, text, cls){
   el.textContent = text || '';
@@ -43,6 +44,7 @@ async function init(){
       if (msg.includes('409')) msg = 'Email или имя уже занято';
       else if (msg.includes('400')) msg = 'Некорректные данные';
       else if (msg.startsWith('Error:')) msg = msg.slice(6);
+      else if (msg.includes('401')) msg = 'Нужна авторизация';
       setMsg(profileMsg, msg, 'error');
     }
   });
