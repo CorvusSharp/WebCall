@@ -416,7 +416,7 @@ body.theme-red .share-badge{ background: linear-gradient(140deg, rgba(255,59,48,
 }
 .tile.single-peer .media .video-stack .peer-main,
 .tile.single-peer .media video.peer-main{
-  object-fit:contain; /* чтобы не обрезать при высоком/широком экране */
+  object-fit:cover; /* Заполняем полностью, допускаем обрезку краёв */
   background:#000;
 }
 .tile.single-peer .pip{

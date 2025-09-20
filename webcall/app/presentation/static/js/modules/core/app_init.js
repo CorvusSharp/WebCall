@@ -355,29 +355,67 @@ function bindPeerMedia(peerId){
   // Локальное хранилище последнего распределения треков
   const assignTracks = (stream)=>{
     try {
-      const vids = stream.getVideoTracks();
-      log(`[diag] peer ${peerId.slice(0,6)} assignTracks vids=${vids.length} ids=[${vids.map(v=>v.id).join(',')}]`);
+      let vids = stream.getVideoTracks();
+      // Фильтруем завершённые/неактивные треки
+      const live = vids.filter(v => v.readyState === 'live');
+      if (live.length !== vids.length){
+        log(`[diag] peer ${peerId.slice(0,6)} filtered dead tracks old=${vids.length} live=${live.length}`);
+      }
+      vids = live;
+      log(`[diag] peer ${peerId.slice(0,6)} assignTracks vids=${vids.length} ids=[${vids.map(v=>v.id+':'+(v.label||'')).join(',')}]`);
+
       if (!vids.length){
         if (mainVideo){ mainVideo.srcObject=null; mainVideo.load?.(); }
         if (pipWrap){ pipWrap.style.display='none'; if (pipVideo){ pipVideo.srcObject=null; pipVideo.load?.(); } }
         return;
       }
+
+      // Подписка на onended для автоматического пересчёта (один раз на трек)
+      vids.forEach(t=>{
+        if (!t._wcAssignBound){
+          t._wcAssignBound = true;
+            t.addEventListener('ended', ()=>{
+              log(`[diag] track ended ${t.id}, reassign peer ${peerId.slice(0,6)}`);
+              setTimeout(()=> assignTracks(stream), 30);
+            }, { once:false });
+        }
+      });
+
       if (vids.length === 1){
         const ms = new MediaStream([vids[0]]);
-        if (mainVideo) mainVideo.srcObject = ms;
-        if (pipWrap){ pipWrap.style.display='none'; if (pipVideo){ pipVideo.srcObject=null; pipVideo.load?.(); } }
-      } else {
-        // Эвристика: экран обычно шире и имеет label с 'screen'/'display'
-        let screen = vids.find(v=> /screen|display|share/i.test(v.label));
-        let camera = vids.find(v=> v !== screen);
-        if (!screen){ screen = vids[0]; camera = vids[1]; }
-        log(`[diag] peer ${peerId.slice(0,6)} screenGuess=${screen && screen.id} camGuess=${camera && camera.id}`);
-        const msScreen = new MediaStream([screen]);
-        const msCam = new MediaStream([camera]);
-        if (mainVideo) mainVideo.srcObject = msScreen;
-        if (pipVideo){ pipVideo.srcObject = msCam; }
-        if (pipWrap) pipWrap.style.display='';
+        if (mainVideo && mainVideo.srcObject !== ms) mainVideo.srcObject = ms;
+        if (pipWrap){ pipWrap.style.display='none'; if (pipVideo && pipVideo.srcObject){ pipVideo.srcObject=null; pipVideo.load?.(); } }
+        return;
       }
+
+      // Эвристика выбора экрана и камеры
+      let screen = vids.find(v => /screen|display|window|share/i.test(v.label));
+      let camera = vids.find(v => v !== screen);
+
+      // Если эвристика по label не сработала: попробуем по настройкам (широкий трек считаем экраном)
+      if (!screen && vids.length >= 2){
+        try {
+          const withRatio = vids.map(v=>{ const st=v.getSettings?.()||{}; return { v, ratio: (st.width||0) >= (st.height||0) ? (st.width||1)/(st.height||1) : 0 }; });
+          // Экран обычно имеет высокий ratio (>=1.5)
+          const candidate = withRatio.filter(o=> o.ratio >= 1.5).sort((a,b)=> b.ratio - a.ratio)[0];
+          if (candidate){ screen = candidate.v; camera = vids.find(v=> v!==screen); }
+        } catch {}
+      }
+
+      // Если всё ещё нет screen – просто берём первые два и считаем первый основным
+      if (!screen){ screen = vids[0]; camera = vids.find(v=> v!==screen) || vids[0]; }
+
+      // Если screen трек вдруг ended (мог закончиться между фильтрацией и выбором) – промоутим камеру в main
+      if (screen.readyState !== 'live' && camera && camera.readyState === 'live'){
+        screen = camera;
+      }
+
+      log(`[diag] peer ${peerId.slice(0,6)} screen=${screen && screen.id} camera=${camera && camera.id}`);
+      const msScreen = new MediaStream([screen]);
+      const msCam = camera && camera !== screen ? new MediaStream([camera]) : null;
+      if (mainVideo && mainVideo.srcObject !== msScreen) mainVideo.srcObject = msScreen;
+      if (pipVideo && msCam){ pipVideo.srcObject = msCam; }
+      if (pipWrap) pipWrap.style.display = msCam ? '' : 'none';
     } catch(e){ log(`assignTracks(${peerId.slice(0,6)}): ${e}`); }
   };
 
