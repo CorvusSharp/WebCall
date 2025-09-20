@@ -69,7 +69,10 @@ export async function selectDirectFriend(friendId, label, opts={}){
     let added = 0;
     if (Array.isArray(arr) && arr.length){
       els.directMessages.innerHTML = '';
-      arr.forEach(m => { if (m.id) seen.add(m.id); added++; appendDirectMessage(m, m.from_user_id === hooks.getAccountId()); });
+      arr.forEach(m => {
+        if (m.id) seen.add(m.id); added++;
+        appendDirectMessage(m, m.from_user_id === hooks.getAccountId());
+      });
       try { await tryDecryptVisibleMessages(friendId, els.directMessages); } catch {}
       if (added === 0) els.directMessages.innerHTML = '<div class="muted">Пусто</div>'; else scrollDirectToEnd();
     } else {
@@ -171,10 +174,12 @@ export function bindSendDirect(){
     const text = (els.directInput?.value || '').trim();
     if (!text) return;
     try {
-      const ct = await encryptForFriend(appState.currentDirectFriend, text);
+      let ct = await encryptForFriend(appState.currentDirectFriend, text);
+      let sendingPlain = false;
       if (!ct){
-        try { alert('Не удалось зашифровать сообщение (нет публичного ключа получателя). Попросите друга открыть интерфейс для генерации ключей.'); } catch {}
-        throw new Error('encryption failed');
+        // Fallback: отправляем в открытом виде (лучше чем потеря сообщения)
+        sendingPlain = true;
+        ct = text;
       }
       try { tryDecryptVisibleMessages(appState.currentDirectFriend, els.directMessages).catch(()=>{}); } catch {}
       const t = localStorage.getItem('wc_token');
@@ -185,8 +190,12 @@ export function bindSendDirect(){
         if (!seen){ seen = new Set(); appState.directSeenByFriend.set(appState.currentDirectFriend, seen); }
         if (m.id && !seen.has(m.id)){
           seen.add(m.id);
-          const dec = await decryptFromFriend(appState.currentDirectFriend, ct);
-          appendDirectMessage({ id: m.id, from_user_id: hooks.getAccountId(), content: dec || '(encrypted)', sent_at: m.sent_at || new Date().toISOString() }, true);
+          let displayed = text;
+          if (!sendingPlain){
+            const dec = await decryptFromFriend(appState.currentDirectFriend, ct);
+            if (dec) displayed = dec; else displayed = '(encrypted)';
+          }
+          appendDirectMessage({ id: m.id, from_user_id: hooks.getAccountId(), content: displayed, sent_at: m.sent_at || new Date().toISOString() }, true);
           scrollDirectToEnd();
         }
       }
