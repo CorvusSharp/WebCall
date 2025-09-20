@@ -193,12 +193,17 @@ export async function connectRoom(){
           const prev = appState._prevPresenceCount;
           const nowCount = msg.users.length;
           appState._prevPresenceCount = nowCount;
+          // Фиксируем момент стабилизации когда в комнате >=2
+          if (nowCount >= 2){ appState._multiPresenceSince = appState._multiPresenceSince || Date.now(); }
+          if (nowCount < 2){ /* сбрасывать не будем сразу, пусть хранится для анализа */ }
           // Условия авто-выхода:
           // 1) Раньше было >=2 пользователей
           // 2) Сейчас остались мы одни (<=1)
           // 3) Текущая фаза звонка активная/завершившаяся (исключаем стадии ожидания соединения peer-ов)
           // 4) Ещё не запущен grace таймер
-          if (prev >= 2 && nowCount <= 1) {
+          // 5) Прошло минимум 1.2s с момента когда в комнате впервые стало >=2 (стабилизация)
+          const stabilized = appState._multiPresenceSince && (Date.now() - appState._multiPresenceSince > 1200);
+          if (prev >= 2 && nowCount <= 1 && stabilized) {
             const phase = (window.getCallState && window.getCallState().phase) || 'idle';
             if (['active','ended','connecting'].includes(phase)){
               if (!appState._callSoloGrace){
@@ -291,6 +296,12 @@ export function leaveRoom(){
     if (c && c.status === 'accepted' && (c.roomId||'').startsWith('call-') && appState.friendsWs && appState.friendsWs.readyState===WebSocket.OPEN){
       const payload = { type:'call_end', roomId: c.roomId, toUserId: c.withUserId, reason:'leave' };
       appState.friendsWs.send(JSON.stringify(payload));
+    }
+  } catch {}
+  // Принудительный сброс внутреннего signaling состояния для call-* комнат
+  try {
+    if (els.roomId && /^call-/.test(els.roomId.value)){
+      if (window.forceResetCall) window.forceResetCall();
     }
   } catch {}
   try { appState.ws?.send(JSON.stringify({ type:'leave', fromUserId: appState.userId })); } catch {}
