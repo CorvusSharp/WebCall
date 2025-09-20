@@ -354,6 +354,32 @@ function onInvite(m, acc){
       return;
     }
     transition('incoming_ringing', { roomId: m.roomId, otherUserId: m.fromUserId, otherUsername: m.fromUsername, incoming:true });
+    // Браузерное уведомление
+    try {
+      const showNotif = () => {
+        const title = m.fromUsername ? `Звонок от ${m.fromUsername}` : 'Входящий звонок';
+        const body = 'Нажмите, чтобы ответить';
+        const icon = '/static/icons/phone.png'; // fallback, если нет — можно заменить
+        const n = new Notification(title, { body, tag: 'incoming-call', icon, renotify: true, data: { roomId: m.roomId } });
+        n.onclick = (ev) => {
+          try { ev.preventDefault(); } catch {}
+          try { window.focus && window.focus(); } catch {}
+          try {
+            // Переходим в комнату; если UI ещё не инициализирован — сохранится через navigate
+            if (m.roomId && deps.navigateToRoom) deps.navigateToRoom(m.roomId);
+          } catch {}
+          try { n.close(); } catch {}
+        };
+        // Авто закрытие через 15с если пользователь не взаимодействует
+        setTimeout(()=>{ try { n.close(); } catch {} }, 15000);
+      };
+      if ('Notification' in window){
+        if (Notification.permission === 'granted') showNotif();
+        else if (Notification.permission !== 'denied'){
+          Notification.requestPermission().then(p=>{ if (p==='granted') showNotif(); });
+        }
+      }
+    } catch {}
   }
 }
 function onAccept(m, acc){
