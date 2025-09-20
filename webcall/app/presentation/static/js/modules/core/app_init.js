@@ -354,6 +354,7 @@ function bindPeerMedia(peerId){
   const assignTracks = (stream)=>{
     try {
       const vids = stream.getVideoTracks();
+      log(`[diag] peer ${peerId.slice(0,6)} assignTracks vids=${vids.length} ids=[${vids.map(v=>v.id).join(',')}]`);
       if (!vids.length){
         if (mainVideo){ mainVideo.srcObject=null; mainVideo.load?.(); }
         if (pipWrap){ pipWrap.style.display='none'; if (pipVideo){ pipVideo.srcObject=null; pipVideo.load?.(); } }
@@ -368,6 +369,7 @@ function bindPeerMedia(peerId){
         let screen = vids.find(v=> /screen|display|share/i.test(v.label));
         let camera = vids.find(v=> v !== screen);
         if (!screen){ screen = vids[0]; camera = vids[1]; }
+        log(`[diag] peer ${peerId.slice(0,6)} screenGuess=${screen && screen.id} camGuess=${camera && camera.id}`);
         const msScreen = new MediaStream([screen]);
         const msCam = new MediaStream([camera]);
         if (mainVideo) mainVideo.srcObject = msScreen;

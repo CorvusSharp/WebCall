@@ -562,8 +562,10 @@ async startOffer(peerId){
     this._cameraTrack = null; this._cameraSender = null;
     this._updateLocalPreview();
     this._refreshVideoKind();
+    const kind = this._currentVideoKind; // пересчитанный после удаления
+    const activeTrack = this._screenTrack || this._cameraTrack || null;
     this._log('Камера остановлена');
-    this.onVideoState('camera', null);
+    try { this.onVideoState(kind, activeTrack); } catch {}
   }
 
   stopScreenShare(){
@@ -579,8 +581,10 @@ async startOffer(peerId){
     this._screenTrack = null; this._screenSender = null;
     this._updateLocalPreview();
     this._refreshVideoKind();
+    const kind = this._currentVideoKind;
+    const activeTrack = this._screenTrack || this._cameraTrack || null;
     this._log('Screen share остановлен');
-    this.onVideoState('screen', null);
+    try { this.onVideoState(kind, activeTrack); } catch {}
   }
 
   stopVideo(){ // legacy: выключить всё
