@@ -455,7 +455,7 @@ input[type="range"]::-moz-range-thumb{
 .list-item-actions{ display:flex; gap:8px; flex-wrap:wrap }
 
 /* Кнопка переключения темы в виде цветной точки */
-#btnToggleTheme.theme-dot{ width:30px; height:30px; padding:0; font-size:20px; line-height:1; border-radius:50%; background:var(--card); border:1px solid var(--border); color:var(--primary); text-shadow:0 0 8px color-mix(in srgb, var(--primary) 65%, transparent); box-shadow:0 2px 8px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.05); }
+#btnToggleTheme.theme-dot{ width:30px; height:30px; padding:0; font-size:20px; line-height:1; border-radius:50%; background:var(--card); border:1px solid var(--border); color:var(--primary); text-shadow:0 0 8px color-mix(in srgb, var(--primary) 65%, transparent); box-shadow:0 2px 8px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.05); display:inline-flex; align-items:center; justify-content:center; }
 #btnToggleTheme.theme-dot:hover{ background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)); }
 body.dark #btnToggleTheme.theme-dot{ color:var(--primary); text-shadow:0 0 10px rgba(16,185,129,.6) }
 body.theme-red #btnToggleTheme.theme-dot{ color:var(--primary); text-shadow:0 0 10px rgba(255,59,48,.65) }
