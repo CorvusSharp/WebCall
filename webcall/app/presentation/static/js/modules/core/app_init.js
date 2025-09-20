@@ -430,8 +430,14 @@ function bindPeerMedia(peerId){
       log(`[diag] peer ${peerId.slice(0,6)} screen=${screen && screen.id} camera=${camera && camera.id}`);
       const msScreen = new MediaStream([screen]);
       const msCam = camera && camera !== screen ? new MediaStream([camera]) : null;
-      if (mainVideo && mainVideo.srcObject !== msScreen) mainVideo.srcObject = msScreen;
-      if (pipVideo && msCam){ pipVideo.srcObject = msCam; }
+      const manual = tile._manualSwap === true;
+      if (!manual){
+        if (mainVideo && mainVideo.srcObject !== msScreen) mainVideo.srcObject = msScreen;
+        if (pipVideo && msCam){ pipVideo.srcObject = msCam; }
+      } else {
+        if (mainVideo && msCam && mainVideo.srcObject !== msCam) mainVideo.srcObject = msCam;
+        if (pipVideo){ pipVideo.srcObject = msScreen; }
+      }
       if (pipWrap) pipWrap.style.display = msCam ? '' : 'none';
 
       // Пост-эвристика: если вставили предполагаемый экран, но фактически кадры не идут → через 500мс свап
@@ -440,11 +446,12 @@ function bindPeerMedia(peerId){
           setTimeout(()=>{
             try {
               if (!tile.isConnected) return; // уже удалён
-              if (mainVideo.videoWidth === 0 && pipVideo && pipVideo.srcObject){
+              if (!tile._manualSwap && mainVideo.videoWidth === 0 && pipVideo && pipVideo.srcObject){
                 log(`[diag] main video no frames, swapping with pip for ${peerId.slice(0,6)}`);
                 const mvStream = mainVideo.srcObject; const pvStream = pipVideo.srcObject;
                 if (pvStream){ mainVideo.srcObject = pvStream; }
                 if (mvStream && msCam){ pipVideo.srcObject = mvStream; }
+                tile._manualSwap = true;
               }
             } catch {}
           }, 500);
@@ -452,6 +459,20 @@ function bindPeerMedia(peerId){
       } catch {}
     } catch(e){ log(`assignTracks(${peerId.slice(0,6)}): ${e}`); }
   };
+
+  // Ручной swap по двойному клику
+  function manualSwap(){
+    try {
+      if (pipWrap && pipWrap.style.display === 'none') return; // нет второй дорожки
+      const mv = mainVideo?.srcObject; const pv = pipVideo?.srcObject;
+      if (!mv || !pv) return;
+      mainVideo.srcObject = pv; pipVideo.srcObject = mv;
+      tile._manualSwap = !tile._manualSwap;
+      log(`[ui] manual swap peer ${peerId.slice(0,6)} => ${tile._manualSwap?'pip->main':'main->pip'}`);
+    } catch(e){ log('manualSwap error '+e); }
+  }
+  if (mainVideo){ mainVideo.addEventListener('dblclick', manualSwap); }
+  if (pipVideo){ pipVideo.addEventListener('dblclick', manualSwap); }
 
   appState.rtc.bindPeerMedia(peerId, {
     onTrack: (stream) => {
@@ -484,9 +505,17 @@ function updatePeerLayout(){
       // Показать кнопку expand если есть
       const btn = t.querySelector('.btn-expand-peer');
       if (btn){ btn.style.display=''; }
+      // Подогнать ширину под локальное превью (если есть и видно)
+      try {
+        const localWrap = document.querySelector('#localCard .video-wrap');
+        if (localWrap){
+          const w = localWrap.getBoundingClientRect().width;
+          if (w>0){ t.style.maxWidth = Math.round(w) + 'px'; }
+        }
+      } catch {}
     } else {
       // Скрыть expand кнопки
-      tiles.forEach(t=>{ const btn=t.querySelector('.btn-expand-peer'); if (btn){ btn.style.display='none'; } t.classList.remove('single-peer-expanded'); });
+      tiles.forEach(t=>{ const btn=t.querySelector('.btn-expand-peer'); if (btn){ btn.style.display='none'; } t.classList.remove('single-peer-expanded'); try { t.style.removeProperty('max-width'); } catch {}; });
     }
   } catch {}
 }
