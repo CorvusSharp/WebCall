@@ -37,6 +37,13 @@ constructor(opts){
     screen: { frameRate: 15 }
   };
   this.onVideoState = opts.onVideoState || (()=>{}); // callback(kind:'none'|'camera'|'screen', track)
+  // Canvas композиция (локальное превью):
+  this._compositeEnabled = false;
+  this._compositeCanvas = null; // назначается извне (index.html)
+  this._compositeRaf = null;
+  // Метрики локального видео (fps/разрешение)
+  this._metricsTimer = null;
+  this._metrics = { fps:0, width:0, height:0 };
 }
   _log(m){ try{ this.onLog(m); }catch{} }
   getOutputDeviceId(){ return this.outputDeviceId; }
@@ -652,7 +659,9 @@ async startOffer(peerId){
       this.localStream = null;
       this._cameraTrack = null; this._screenTrack = null;
       this._cameraSender = null; this._screenSender = null;
-      this._log('WebRTC соединения закрыты');
+    try { this.disableComposite(); } catch {}
+    this._stopMetricsLoop();
+    this._log('WebRTC соединения закрыты');
   }
 
   _updateLocalPreview(){
@@ -678,7 +687,109 @@ async startOffer(peerId){
     else if (scr) this._currentVideoKind = 'screen';
     else if (cam) this._currentVideoKind = 'camera';
     else this._currentVideoKind = 'none';
+    // Адаптация качества камеры при одновременном шеринге экрана
+    this._adaptVideoQualities().catch(()=>{});
+    if (this._currentVideoKind === 'none') this._stopMetricsLoop(); else this._ensureMetricsLoop();
   }
+
+  async _adaptVideoQualities(){
+    try {
+      const camLive = this._cameraTrack && this._cameraTrack.readyState==='live';
+      const scrLive = this._screenTrack && this._screenTrack.readyState==='live';
+      if (!camLive) return;
+      if (scrLive){
+        // Понижаем нагрузку камеры
+        const target = { frameRate: 12, width: { ideal: 960 }, height: { ideal: 540 } };
+        await this._cameraTrack.applyConstraints(target).catch(()=>{});
+        this._log('Адаптация: камера снижена (fps≈12 960x540) при активном screen share');
+      } else {
+        // Восстанавливаем
+        await this._cameraTrack.applyConstraints(this.videoConstraints.camera).catch(()=>{});
+        this._log('Адаптация: камера восстановлена к стандартным ограничениям');
+      }
+    } catch(e){ this._log('adaptVideoQualities: '+(e?.name||e)); }
+  }
+
+  // === Canvas Composition (экран + камера PiP) ===
+  enableComposite(canvas){
+    try {
+      if (!canvas) return false;
+      this._compositeCanvas = canvas;
+      this._compositeEnabled = true;
+      canvas.style.display = '';
+      if (this.localVideo) this.localVideo.style.opacity = '0'; // скрываем оригинал, но оставляем для звука (если бы был)
+      this._runCompositeLoop();
+      this._log('Composite canvas enabled');
+      return true;
+    } catch(e){ this._log('enableComposite error: '+(e?.name||e)); return false; }
+  }
+  disableComposite(){
+    this._compositeEnabled = false;
+    if (this._compositeRaf) cancelAnimationFrame(this._compositeRaf); this._compositeRaf=null;
+    if (this._compositeCanvas){ this._compositeCanvas.getContext('2d')?.clearRect(0,0,this._compositeCanvas.width,this._compositeCanvas.height); this._compositeCanvas.style.display='none'; }
+    if (this.localVideo) this.localVideo.style.opacity = '';
+    this._log('Composite canvas disabled');
+  }
+  toggleComposite(canvas){
+    if (this._compositeEnabled) this.disableComposite(); else this.enableComposite(canvas||this._compositeCanvas);
+  }
+  _runCompositeLoop(){
+    if (!this._compositeEnabled || !this._compositeCanvas){ return; }
+    const ctx = this._compositeCanvas.getContext('2d');
+    if (!ctx){ return; }
+    const W = this._compositeCanvas.width; const H = this._compositeCanvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0,0,W,H);
+    // Основной слой: экран если есть, иначе камера
+    const screenTrack = (this._screenTrack && this._screenTrack.readyState==='live') ? this._screenTrack : null;
+    const camTrack = (this._cameraTrack && this._cameraTrack.readyState==='live') ? this._cameraTrack : null;
+    const drawTrack = (track, dx,dy,dw,dh)=>{
+      try {
+        const el = track._wcOffscreenEl || (track._wcOffscreenEl = document.createElement('video'));
+        if (!el.srcObject){ const ms = new MediaStream([track]); el.srcObject = ms; el.muted=true; el.playsInline=true; el.autoplay=true; el.play().catch(()=>{}); }
+        if (el.readyState >= 2){ ctx.drawImage(el, dx,dy,dw,dh); }
+      } catch {}
+    };
+    if (screenTrack){
+      drawTrack(screenTrack, 0,0,W,H);
+      if (camTrack){
+        // PiP камера в правом нижнем углу
+        const pipW = Math.round(W*0.22); const pipH = Math.round(pipW* (9/16));
+        drawTrack(camTrack, W-pipW-24, H-pipH-24, pipW, pipH);
+        // Рамка
+        ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 3; ctx.strokeRect(W-pipW-24+1.5, H-pipH-24+1.5, pipW-3, pipH-3);
+      }
+    } else if (camTrack){
+      drawTrack(camTrack, 0,0,W,H);
+    } else {
+      // Нет треков — отключаем композицию
+      this.disableComposite();
+      return;
+    }
+    this._compositeRaf = requestAnimationFrame(()=> this._runCompositeLoop());
+  }
+
+  _ensureMetricsLoop(){
+    if (this._metricsTimer) return;
+    const el = document.getElementById('localVideoMetrics');
+    const update = ()=>{
+      try {
+        const track = this._screenTrack || this._cameraTrack;
+        if (!track || track.readyState!=='live'){ this._stopMetricsLoop(); return; }
+        let st = {};
+        try { st = track.getSettings ? track.getSettings() : {}; } catch {}
+        this._metrics.width = st.width || this._metrics.width;
+        this._metrics.height = st.height || this._metrics.height;
+        this._metrics.fps = st.frameRate ? Math.round(st.frameRate) : this._metrics.fps;
+        if (el){
+          el.style.display='';
+          el.textContent = `${this._currentVideoKind} ${this._metrics.width||'?'}x${this._metrics.height||'?'} @${this._metrics.fps||0}fps`;
+        }
+      } catch {}
+    };
+    this._metricsTimer = setInterval(update, 1000);
+    update();
+  }
+  _stopMetricsLoop(){ if (this._metricsTimer){ clearInterval(this._metricsTimer); this._metricsTimer=null; const el=document.getElementById('localVideoMetrics'); if (el){ el.style.display='none'; el.textContent='—'; } } }
 
   async updateAllPeerTracks() {
       if (!this.localStream) return;

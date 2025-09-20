@@ -136,11 +136,22 @@ export async function connectRoom(){
     onPeerState: (peerId,key,value)=>{ const tile=document.querySelector(`.tile[data-peer="${peerId}"]`); if (tile) tile.dataset[key]=value; },
     onVideoState: (kind)=>{
       try {
-        const camBtn = els.btnToggleCam; const screenBtn = els.btnScreenShare; const badge = document.getElementById('screenShareBadge');
+        const camBtn = els.btnToggleCam; const screenBtn = els.btnScreenShare; const scrBadge = document.getElementById('screenShareBadge');
+        const multiBadge = document.getElementById('multiBadge');
+        const stopCam = document.getElementById('btnStopCam');
+        const stopScr = document.getElementById('btnStopScreen');
+        const mixBtn = document.getElementById('btnCompositeToggle');
         camBtn?.classList.remove('btn-media-active'); screenBtn?.classList.remove('btn-media-active');
-        if (badge) badge.style.display = (kind==='screen') ? '' : 'none';
-        if (kind==='camera') camBtn?.classList.add('btn-media-active');
-        if (kind==='screen') screenBtn?.classList.add('btn-media-active');
+        if (scrBadge) scrBadge.style.display = (kind==='screen' || kind==='multi') ? '' : 'none';
+        if (multiBadge) multiBadge.style.display = (kind==='multi') ? '' : 'none';
+        if (kind==='camera' || kind==='multi') camBtn?.classList.add('btn-media-active');
+        if (kind==='screen' || kind==='multi') screenBtn?.classList.add('btn-media-active');
+        if (stopCam) stopCam.style.display = (kind==='camera' || kind==='multi') ? '' : 'none';
+        if (stopScr) stopScr.style.display = (kind==='screen' || kind==='multi') ? '' : 'none';
+        if (mixBtn) {
+          // Показываем кнопку только когда есть одновременно экран и камера
+          mixBtn.style.display = (kind==='multi') ? '' : 'none';
+        }
         const card = document.getElementById('localCard'); if (card) card.style.display = (kind==='none') ? 'none' : '';
       } catch {}
     }
@@ -288,6 +299,27 @@ export async function connectRoom(){
   appState.ws.onerror = (err)=>{ log(`WS ошибка: ${err?.message||'unknown'}`); try { appState.ws?.close(); } catch {} };
 }
 
+// Привязка локальных дополнительных кнопок (камера/экран стоп и PiP)
+document.addEventListener('click', (e)=>{
+  const t = e.target;
+  if (!(t instanceof HTMLElement)) return;
+  if (t.id === 'btnStopCam'){
+    try { appState.rtc?.stopCamera(); } catch {}
+  } else if (t.id === 'btnStopScreen'){
+    try { appState.rtc?.stopScreenShare(); } catch {}
+  } else if (t.id === 'btnCompositeToggle'){
+    try {
+      const canvas = document.getElementById('localCompositeCanvas');
+      appState.rtc?.toggleComposite(canvas);
+      t.classList.toggle('btn-media-active');
+    } catch {}
+  }
+});
+
+// Обновление локального PiP (камера поверх экрана) при изменении треков
+const _origOnVideoState = appState.rtc?.onVideoState;
+// Уже встроено в onVideoState логика UI; PiP в локальном контейнере управляется в webrtc.js через _updateLocalPreview.
+
 function safeReleaseMedia(el){
   try {
     if (!el) return;
@@ -306,13 +338,53 @@ function bindPeerMedia(peerId){
   if (document.querySelector(`.tile[data-peer="${peerId}"]`)) return;
   const tpl = document.getElementById('tpl-peer-tile');
   const tile = tpl.content.firstElementChild.cloneNode(true); tile.dataset.peer = peerId; els.peersGrid.appendChild(tile);
-  const video = tile.querySelector('video'); const audio = tile.querySelector('audio'); const name = tile.querySelector('.name'); const vol = tile.querySelector('input[type="range"][name="volume"]'); const level = tile.querySelector('.level-bar');
+  const mainVideo = tile.querySelector('video.peer-main');
+  const pipWrap = tile.querySelector('.pip');
+  const pipVideo = tile.querySelector('video.peer-pip');
+  const audio = tile.querySelector('audio');
+  const name = tile.querySelector('.name');
+  const vol = tile.querySelector('input[type="range"][name="volume"]');
+  const level = tile.querySelector('.level-bar');
   name.textContent = appState.latestUserNames[peerId] || `user-${peerId.slice(0,6)}`;
-  if (video){ video.playsInline=true; video.autoplay=true; video.muted=true; }
+  if (mainVideo){ mainVideo.playsInline=true; mainVideo.autoplay=true; mainVideo.muted=true; }
+  if (pipVideo){ pipVideo.playsInline=true; pipVideo.autoplay=true; pipVideo.muted=true; }
   if (audio){ audio.autoplay=true; }
+
+  // Локальное хранилище последнего распределения треков
+  const assignTracks = (stream)=>{
+    try {
+      const vids = stream.getVideoTracks();
+      if (!vids.length){
+        if (mainVideo){ mainVideo.srcObject=null; mainVideo.load?.(); }
+        if (pipWrap){ pipWrap.style.display='none'; if (pipVideo){ pipVideo.srcObject=null; pipVideo.load?.(); } }
+        return;
+      }
+      if (vids.length === 1){
+        const ms = new MediaStream([vids[0]]);
+        if (mainVideo) mainVideo.srcObject = ms;
+        if (pipWrap){ pipWrap.style.display='none'; if (pipVideo){ pipVideo.srcObject=null; pipVideo.load?.(); } }
+      } else {
+        // Эвристика: экран обычно шире и имеет label с 'screen'/'display'
+        let screen = vids.find(v=> /screen|display|share/i.test(v.label));
+        let camera = vids.find(v=> v !== screen);
+        if (!screen){ screen = vids[0]; camera = vids[1]; }
+        const msScreen = new MediaStream([screen]);
+        const msCam = new MediaStream([camera]);
+        if (mainVideo) mainVideo.srcObject = msScreen;
+        if (pipVideo){ pipVideo.srcObject = msCam; }
+        if (pipWrap) pipWrap.style.display='';
+      }
+    } catch(e){ log(`assignTracks(${peerId.slice(0,6)}): ${e}`); }
+  };
+
   appState.rtc.bindPeerMedia(peerId, {
     onTrack: (stream) => {
-      log(`Получен медиа-поток от ${peerId.slice(0,6)}`); stopSpecialRingtone(); if (video) video.srcObject=stream; if (audio){ audio.srcObject=stream; try{ audio._peerStream=stream; }catch{}; audio.muted=false; audio.volume = vol ? (Math.min(100, Math.max(0, Number(vol.value)||100))/100) : 1.0; audio.play().catch(()=>{ unlockAudioPlayback(); setTimeout(()=> audio.play().catch(()=>{}), 250); }); }
+      log(`Получен медиа-поток от ${peerId.slice(0,6)}`); stopSpecialRingtone(); assignTracks(stream);
+      if (audio){
+        audio.srcObject=stream; try{ audio._peerStream=stream; }catch{}; audio.muted=false;
+        audio.volume = vol ? (Math.min(100, Math.max(0, Number(vol.value)||100))/100) : 1.0;
+        audio.play().catch(()=>{ unlockAudioPlayback(); setTimeout(()=> audio.play().catch(()=>{}), 250); });
+      }
     },
     onLevel: (value)=>{ level.style.transform = `scaleX(${value})`; },
     onSinkChange: (deviceId)=>{ if (audio && audio.setSinkId){ audio.setSinkId(deviceId).catch(e=>log(`sinkAudio(${peerId.slice(0,6)}): ${e.name}`)); } }
@@ -656,6 +728,41 @@ function setupUI(){
       vid.addEventListener('loadedmetadata', ()=>{ vid.play().catch(()=>{}); });
       setTimeout(()=>{ if (vid.paused) vid.play().catch(()=>{}); }, 800);
     }
+  } catch {}
+
+  // === Горячие клавиши медиа ===
+  try {
+    document.addEventListener('keydown', (e)=>{
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const tag = (e.target && e.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
+      switch(e.key){
+        case 'm': // toggle mic
+          if (appState.rtc){ appState.rtc.toggleMic(); showToast && showToast('Микрофон: toggle', 'info'); }
+          break;
+        case 'c': // toggle camera
+          if (appState.rtc){ appState.rtc.toggleCameraStream(); showToast && showToast('Камера: toggle', 'info'); }
+          break;
+        case 's': // toggle screen
+          if (appState.rtc){ appState.rtc.toggleScreenShare(); showToast && showToast('Экран: toggle', 'info'); }
+          break;
+        case 'x': // stop screen explicitly
+          if (appState.rtc && appState.rtc._screenTrack){ appState.rtc.stopScreenShare(); showToast && showToast('Экран: стоп', 'info'); }
+          break;
+        case 'k': // stop camera explicitly
+          if (appState.rtc && appState.rtc._cameraTrack){ appState.rtc.stopCamera(); showToast && showToast('Камера: стоп', 'info'); }
+          break;
+        case 'M': // Shift+M → composite toggle (регистр различается)
+          if (appState.rtc){
+            const canvas = document.getElementById('localCompositeCanvas');
+            appState.rtc.toggleComposite(canvas);
+            showToast && showToast('Composite: toggle', 'info');
+            const btn = document.getElementById('btnCompositeToggle'); if (btn){ btn.classList.toggle('btn-media-active', appState.rtc._compositeEnabled); }
+          }
+          break;
+        default: return;
+      }
+    });
   } catch {}
 
   // === Панель настроек отображения ===
