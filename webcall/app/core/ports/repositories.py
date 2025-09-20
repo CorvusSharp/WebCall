@@ -30,6 +30,19 @@ class UserRepository(ABC):
         """Search users by username or email (case-insensitive)."""
         raise NotImplementedError
 
+    @abstractmethod
+    async def update_profile(self, user_id: UUID, *, email: str | None = None, username: str | None = None) -> User | None:
+        """Update email and/or username. Return updated user or None if not found.
+
+        Implementations must enforce uniqueness and raise ConflictError on duplicates.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def update_password(self, user_id: UUID, password_hash: str) -> bool:
+        """Update user's password hash. Return True if user existed and was updated."""
+        raise NotImplementedError
+
 
 class RoomRepository(ABC):
     @abstractmethod

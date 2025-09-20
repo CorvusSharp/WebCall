@@ -144,6 +144,29 @@ export async function getMe(){
   return await r.json();
 }
 
+export async function updateProfile({ email, username }){
+  const payload = {};
+  if (email) payload.email = email;
+  if (username) payload.username = username;
+  const r = await fetch(`${base}/api/v1/auth/me`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(payload)
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+
+export async function changePassword(old_password, new_password){
+  const r = await fetch(`${base}/api/v1/auth/me/password`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ old_password, new_password })
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return true;
+}
+
 // E2EE public key endpoints
 export async function setMyPublicKey(publicKeyStr){
   try {

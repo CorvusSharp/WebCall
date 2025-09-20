@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 import hmac
 
-from ....application.dto.auth import LoginInput, RegisterInput, RegisterOutput, TokenOutput
+from ....application.dto.auth import LoginInput, RegisterInput, RegisterOutput, TokenOutput, UpdateProfileInput, ChangePasswordInput
 from ..deps.rate_limit import limit_login, limit_register
 from ....core.domain.models import User
 from ....core.errors import ConflictError
@@ -63,3 +63,37 @@ class MeOut(BaseModel):
 @router.get("/me", response_model=MeOut)
 async def get_me(current=Depends(get_current_user)) -> MeOut:  # type: ignore[override]
     return MeOut(id=str(current.id), email=str(current.email), username=str(current.username))
+
+
+@router.patch("/me", response_model=MeOut)
+async def update_me(
+    data: UpdateProfileInput,
+    current=Depends(get_current_user),
+    users: UserRepository = Depends(get_user_repo),
+) -> MeOut:  # type: ignore[override]
+    if data.email is None and data.username is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нужно указать email и/или username")
+    try:
+        updated = await users.update_profile(current.id, email=str(data.email) if data.email else None, username=data.username)
+    except ConflictError:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email или username уже заняты")
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return MeOut(id=str(updated.id), email=str(updated.email), username=str(updated.username))
+
+
+@router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)
+async def change_password(
+    data: ChangePasswordInput,
+    current=Depends(get_current_user),
+    users: UserRepository = Depends(get_user_repo),
+    hasher: PasswordHasher = Depends(get_password_hasher),
+) -> None:  # type: ignore[override]
+    # Verify old password
+    if not hasher.verify(data.old_password, str(current.password_hash)):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Старый пароль неверен")
+    new_hash = hasher.hash(data.new_password)
+    ok = await users.update_password(current.id, new_hash)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return None

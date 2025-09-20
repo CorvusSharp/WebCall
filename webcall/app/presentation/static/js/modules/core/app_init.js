@@ -526,6 +526,7 @@ function updateUserBadge(){
     }
   } catch {}
 }
+try { window.updateUserBadge = updateUserBadge; } catch {}
 
 // ===== UI Setup =====
 function setupUI(){
@@ -670,7 +671,21 @@ function setupUI(){
         cb.addEventListener('change', ()=>{ const p=loadPrefs(); p[g.id] = cb.checked; savePrefs(p); apply(p); });
         wrap.appendChild(cb); wrap.appendChild(document.createTextNode(g.label)); container.appendChild(wrap);
       });
-      panel.appendChild(container);
+  panel.appendChild(container);
+  // Кнопка перехода в профиль
+  const profBtn = document.createElement('button');
+  profBtn.type='button';
+  profBtn.textContent='Изменить данные';
+  profBtn.style.marginTop='10px';
+  profBtn.style.width='100%';
+  profBtn.style.background='#1fa060';
+  profBtn.style.color='#fff';
+  profBtn.style.border='none';
+  profBtn.style.padding='8px 10px';
+  profBtn.style.borderRadius='6px';
+  profBtn.style.cursor='pointer';
+  profBtn.addEventListener('click', (e)=>{ e.stopPropagation(); location.href='/static/profile.html'; });
+  panel.appendChild(profBtn);
       document.body.appendChild(panel);
       gearBtn.addEventListener('click', ()=>{ panel.style.display = panel.style.display==='none' ? 'block' : 'none'; });
       document.addEventListener('click', (e)=>{ if (!panel.contains(e.target) && e.target!==gearBtn){ if (panel.style.display==='block') panel.style.display='none'; } }, { capture:true });

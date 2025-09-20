@@ -89,3 +89,30 @@ class PgUserRepository(UserRepository):
             User(id=r.id, email=Email(r.email), username=Username(r.username), password_hash=PasswordHash(r.password_hash), created_at=r.created_at)
             for r in rows
         ]
+
+    async def update_profile(self, user_id: UUID, *, email: str | None = None, username: str | None = None) -> User | None:  # type: ignore[override]
+        if email is None and username is None:
+            return await self.get_by_id(user_id)
+        row = await self.session.get(Users, user_id)
+        if not row:
+            return None
+        if email is not None:
+            row.email = email
+        if username is not None:
+            row.username = username
+        self.session.add(row)
+        try:
+            await self.session.commit()
+        except IntegrityError as e:
+            await self.session.rollback()
+            raise ConflictError("User with same email or username already exists") from e
+        return User(id=row.id, email=Email(row.email), username=Username(row.username), password_hash=PasswordHash(row.password_hash), created_at=row.created_at, public_key=row.public_key)
+
+    async def update_password(self, user_id: UUID, password_hash: str) -> bool:  # type: ignore[override]
+        row = await self.session.get(Users, user_id)
+        if not row:
+            return False
+        row.password_hash = password_hash
+        self.session.add(row)
+        await self.session.commit()
+        return True
