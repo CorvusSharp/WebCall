@@ -3,7 +3,7 @@
 
 import { els } from './core/dom.js';
 import { appState } from './core/state.js';
-import { encryptForFriend, decryptFromFriend, tryDecryptVisibleMessages, ensureE2EEKeys } from './e2ee.js';
+// Клиентское E2EE отключено для DM: сервер возвращает plaintext.
 
 // Внешние хуки (интеграция с друзьями и логами)
 let hooks = {
@@ -42,45 +42,14 @@ function appendDirectMessage(m, isSelf){
 }
 function scrollDirectToEnd(){ try { els.directMessages.scrollTop = els.directMessages.scrollHeight; } catch {} }
 
-// ===================== Повторные попытки дешифровки =====================
-const _redecryptSchedulers = new Map(); // friendId -> { attempts, max }
-function scheduleAutoRedecrypt(friendId){
-  if (!friendId || !els.directMessages) return;
-  const key = friendId;
-  if (_redecryptSchedulers.has(key)) return; // уже запущено
-  const state = { attempts: 0, max: 12 }; // ~12 попыток (первые ~18 сек суммарно)
-  _redecryptSchedulers.set(key, state);
-  const run = async () => {
-    if (appState.currentDirectFriend !== friendId){ _redecryptSchedulers.delete(key); return; }
-    try { await tryDecryptVisibleMessages(friendId, els.directMessages); } catch {}
-    // Есть ли ещё элементы помеченные как pending (dataset.cipher)? Попытка индивидуальной дешифровки.
-    const pending = Array.from(els.directMessages.querySelectorAll('.chat-line .msg[data-cipher]'));
-    for (const span of pending){
-      const cipher = span.dataset.cipher;
-      if (!cipher) { span.removeAttribute('data-cipher'); continue; }
-      try {
-        const dec = await decryptFromFriend(friendId, cipher);
-        if (dec){ span.textContent = dec; span.removeAttribute('data-cipher'); }
-      } catch {}
-    }
-    const still = els.directMessages.querySelector('.chat-line .msg[data-cipher]');
-    if (!still){ _redecryptSchedulers.delete(key); return; }
-    state.attempts++;
-    if (state.attempts >= state.max){ _redecryptSchedulers.delete(key); return; }
-    // Экспоненциальная или квазилинейная задержка
-    const delay = 500 + state.attempts * 1000; // 0.5s, 1.5s, 2.5s ...
-    setTimeout(run, delay);
-  };
-  setTimeout(run, 400); // первая проба чуть позже
-}
+// scheduleAutoRedecrypt удалён — не требуется.
 
 export async function selectDirectFriend(friendId, label, opts={}){
   const already = appState.currentDirectFriend === friendId;
   appState.currentDirectFriend = friendId;
   if (els.directChatCard) els.directChatCard.style.display = '';
   if (els.directChatTitle) els.directChatTitle.textContent = 'Чат с: ' + (label || friendId.slice(0,8));
-  // Убедимся что у нас уже есть локальная пара ключей (ускоряет шансы расшифровки истории)
-  try { ensureE2EEKeys().catch(()=>{}); } catch {}
+  // E2EE отключено — никакой ensureE2EEKeys.
   ensureDirectActions();
   if (already && !opts.force){
     if (appState.directUnread.has(friendId)) { appState.directUnread.delete(friendId); updateFriendUnreadBadge(friendId); }
@@ -108,8 +77,7 @@ export async function selectDirectFriend(friendId, label, opts={}){
         if (m.id) seen.add(m.id); added++;
         appendDirectMessage(m, m.from_user_id === hooks.getAccountId());
       });
-      try { await tryDecryptVisibleMessages(friendId, els.directMessages); } catch {}
-      scheduleAutoRedecrypt(friendId);
+  // plaintext уже
       if (added === 0) els.directMessages.innerHTML = '<div class="muted">Пусто</div>'; else scrollDirectToEnd();
     } else {
       els.directMessages.innerHTML = '<div class="muted">Пусто</div>';
@@ -125,8 +93,7 @@ export async function selectDirectFriend(friendId, label, opts={}){
               if (!seen2){ seen2 = new Set(); appState.directSeenByFriend.set(friendId, seen2); }
               let added2 = 0;
               arr2.forEach(m => { if (m.id && !seen2.has(m.id)){ seen2.add(m.id); added2++; appendDirectMessage(m, m.from_user_id === hooks.getAccountId()); } });
-              try { await tryDecryptVisibleMessages(friendId, els.directMessages); } catch {}
-              scheduleAutoRedecrypt(friendId);
+              // plaintext уже
               if (added2 === 0) els.directMessages.innerHTML = '<div class="muted">Пусто</div>'; else scrollDirectToEnd();
             }
           }
@@ -149,28 +116,7 @@ export function handleIncomingDirect(msg){
     if (mid && seen.has(mid)) return;
     if (mid) seen.add(mid);
     (async ()=>{
-      let plaintext = msg.content;
-      try {
-        const otherId = msg.fromUserId === acc ? msg.toUserId : msg.fromUserId;
-        const dec = await decryptFromFriend(otherId, msg.content);
-        if (dec) plaintext = dec;
-      } catch {}
-      // Если не удалось расшифровать и строка похожа на ciphertext — скрываем оригинал
-      const looksCipher = /^[A-Za-z0-9+/=\-_\.]{24,}$/.test(msg.content) && plaintext === msg.content;
-      if (looksCipher){
-        plaintext = '(encrypted)';
-      }
-      appendDirectMessage({ id: mid, from_user_id: msg.fromUserId, content: plaintext, sent_at: msg.sentAt }, msg.fromUserId === acc);
-      try {
-        if (looksCipher && els.directMessages){
-          const last = els.directMessages.lastElementChild;
-          if (last){
-            const span = last.querySelector('.msg');
-            if (span){ span.dataset.cipher = msg.content; }
-          }
-          scheduleAutoRedecrypt(other);
-        }
-      } catch {}
+      appendDirectMessage({ id: mid, from_user_id: msg.fromUserId, content: msg.content, sent_at: msg.sentAt }, msg.fromUserId === acc);
       scrollDirectToEnd();
     })();
   } else {
@@ -233,15 +179,7 @@ export function bindSendDirect(){
     const text = (els.directInput?.value || '').trim();
     if (!text) return;
     try {
-      let ct = await encryptForFriend(appState.currentDirectFriend, text);
-      let sendingPlain = false;
-      if (!ct){
-        // Fallback: отправляем в открытом виде (лучше чем потеря сообщения)
-        sendingPlain = true;
-        ct = text;
-      }
-      // Если отправили plaintext — дешифровка не нужна; если ciphertext — попробуем позже тоже
-      try { tryDecryptVisibleMessages(appState.currentDirectFriend, els.directMessages).catch(()=>{}); } catch {}
+      const ct = text; // отправляем plaintext
       const t = localStorage.getItem('wc_token');
       const r = await fetch(`/api/v1/direct/${appState.currentDirectFriend}/messages`, { method:'POST', headers:{ 'content-type':'application/json','Authorization': `Bearer ${t}` }, body: JSON.stringify({ content: ct }) });
       if (r.ok){
@@ -250,20 +188,7 @@ export function bindSendDirect(){
         if (!seen){ seen = new Set(); appState.directSeenByFriend.set(appState.currentDirectFriend, seen); }
         if (m.id && !seen.has(m.id)){
           seen.add(m.id);
-          let displayed = text;
-          if (!sendingPlain){
-            const dec = await decryptFromFriend(appState.currentDirectFriend, ct);
-            if (dec) displayed = dec; else displayed = '(encrypted)';
-          }
-          appendDirectMessage({ id: m.id, from_user_id: hooks.getAccountId(), content: displayed, sent_at: m.sent_at || new Date().toISOString() }, true);
-          // Помечаем для отложенной расшифровки если пока не удалось
-          if (displayed === '(encrypted)' && els.directMessages){
-            try {
-              const last = els.directMessages.lastElementChild;
-              if (last){ const span = last.querySelector('.msg'); if (span){ span.dataset.cipher = ct; } }
-              scheduleAutoRedecrypt(appState.currentDirectFriend);
-            } catch {}
-          }
+          appendDirectMessage({ id: m.id, from_user_id: hooks.getAccountId(), content: text, sent_at: m.sent_at || new Date().toISOString() }, true);
           scrollDirectToEnd();
         }
       }

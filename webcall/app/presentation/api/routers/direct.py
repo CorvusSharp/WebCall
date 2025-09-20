@@ -21,7 +21,7 @@ from ....infrastructure.services.webpush import WebPushSender, WebPushMessage
 from ....infrastructure.config import get_settings
 from ...ws.friends import publish_direct_message, publish_direct_cleared
 from ....infrastructure.db.repositories.users import PgUserRepository
-from ....infrastructure.services.direct_crypto import decrypt_direct
+from ....infrastructure.services.direct_crypto import decrypt_direct, encrypt_direct
 
 router = APIRouter(prefix='/api/v1/direct', tags=['direct'])
 
@@ -77,7 +77,7 @@ async def list_direct_messages(friend_id: UUID, current=Depends(get_current_user
     # Возвращаем в прямом порядке по времени (старые -> новые)
     rows = list(reversed(rows))
     result: list[DirectMessageOut] = []
-    # Возвращаем ciphertext; клиенты должны расшифровывать локально
+    # Возвращаем уже расшифрованный plaintext — клиенту не нужно E2EE для DM (упрощённый подход)
     for dm in rows:
         to_user = friend_id if dm.sender_id == current.id else current.id
         # Попробуем расшифровать на сервере для участника переписки.
@@ -125,13 +125,14 @@ async def post_direct_message(friend_id: UUID, body: DirectMessageIn, background
     content = body.content.strip()
     if not content:
         raise HTTPException(status_code=400, detail='Empty content')
-    # Ожидаем, что клиент уже прислал ciphertext (E2EE): сохраняем как есть
-    ciphertext = content  # сервер принимает ciphertext
+    # Новый подход: клиент присылает plaintext, сервер шифрует и хранит ciphertext
+    ciphertext = encrypt_direct(current.id, friend_id, content)
     dm = DirectMessage.create(current.id, friend_id, current.id, ciphertext)
     await dms.add(dm)
     # Публикация события обеим сторонам (ciphertext)
     try:
-        await publish_direct_message(current.id, friend_id, dm.id, ciphertext, dm.sent_at)
+        # Рассылаем plaintext, чтобы клиент сразу показал читаемый текст
+        await publish_direct_message(current.id, friend_id, dm.id, content, dm.sent_at)
     except Exception:
         pass
     # Мгновенное пуш-уведомление получателю (не дожидаясь 10 минут)
