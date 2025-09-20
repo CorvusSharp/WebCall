@@ -7,7 +7,7 @@ import { WebRTCManager } from '../../webrtc.js';
 import { els, appendLog, appendChat, setText, setEnabled, showToast } from './dom.js';
 import { appState } from './state.js';
 import { loadVisitedRooms } from '../visited_rooms.js';
-import { initFriendsModule, loadFriends, scheduleFriendsReload, initFriendsUI, markFriendSeen, refreshFriendStatuses } from '../friends_ui.js';
+import { initFriendsModule, loadFriends, scheduleFriendsReload, initFriendsUI, markFriendSeen, refreshFriendStatuses, setOnlineSnapshot, addOnlineUser, removeOnlineUser } from '../friends_ui.js';
 import { initDirectChatModule, handleIncomingDirect, handleDirectCleared, bindSendDirect } from '../direct_chat.js';
 // Legacy calls.js оставляем временно для обратной совместимости (звук, часть тестов)
 import { startSpecialRingtone, stopSpecialRingtone, resetActiveCall, getActiveCall, initCallModule } from '../calls.js';
@@ -423,6 +423,15 @@ function startFriendsWs(){
       log(`📥 Friends WS message: ${msg.type} (всего: ${window.__FRIENDS_WS_STATS.total})`);
       
       switch(msg.type){
+        case 'presence_snapshot':
+          try { setOnlineSnapshot(msg.userIds || []); refreshFriendStatuses(); } catch{}
+          break;
+        case 'presence_join':
+          try { addOnlineUser(msg.userId); refreshFriendStatuses(); } catch{}
+          break;
+        case 'presence_leave':
+          try { removeOnlineUser(msg.userId); refreshFriendStatuses(); } catch{}
+          break;
         case 'friend_request': case 'friend_accepted': case 'friend_cancelled': scheduleFriendsReload(); break;
         case 'friend_removed': scheduleFriendsReload(); break;
   case 'direct_message': handleIncomingDirect(msg); try { const acc=getAccountId(); const other= msg.fromUserId === acc ? msg.toUserId : msg.fromUserId; markFriendSeen(other); const isActiveChat = appState.currentDirectFriend && other === appState.currentDirectFriend; const iAmRecipient = msg.toUserId === acc; if (iAmRecipient && !isActiveChat && 'Notification' in window && Notification.permission==='granted'){ const title = 'Новое сообщение'; const body = msg.fromUsername ? `От ${msg.fromUsername}` : 'Личное сообщение'; const reg = await navigator.serviceWorker.getRegistration('/static/sw.js'); if (reg && reg.showNotification){ reg.showNotification(title, { body, data:{ type:'direct', from: other } }); } else { new Notification(title, { body, data:{ type:'direct', from: other } }); } } } catch {} break;

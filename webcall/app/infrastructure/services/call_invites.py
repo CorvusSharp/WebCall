@@ -59,8 +59,9 @@ class InMemoryCallInviteService(CallInviteService):
 
     async def list_pending_for(self, user_id: UUID) -> List[dict]:
         now = int(time.time() * 1000)
-        # Жизненный цикл инвайта: 30 секунд (синхронизировано с RING_TIMEOUT_MS на клиенте 25s + небольшой запас)
-        MAX_AGE_MS = 30000
+        # Жизненный цикл инвайта: 40 секунд (увеличено для сценария захода пользователя позже).
+        # Синхронизировать с calls_signaling.js (MAX_AGE_MS в onInvite) и RING_TIMEOUT_MS.
+        MAX_AGE_MS = 40000
         async with self._lock:
             # Очистим устаревшие
             stale = [rid for rid, data in self._pending.items() if (now - int(data.get('ts', 0))) > MAX_AGE_MS]

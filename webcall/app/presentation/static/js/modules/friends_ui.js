@@ -16,31 +16,24 @@ let hooks = {
 
 // ===== Онлайн статус друзей =====
 // Простая эвристика: если видели активность (сообщение, сигнал звонка, вступление в звонок) < FRIEND_ONLINE_WINDOW -> online
-const FRIEND_ONLINE_WINDOW = 20000; // 20s (снижено с 35s)
-const friendLastSeen = new Map(); // friendId -> ts
-
-export function markFriendSeen(friendId){
-  if (!friendId) return; friendLastSeen.set(friendId, Date.now()); refreshFriendStatuses();
-}
-
-function isFriendOnline(friendId){
-  const ts = friendLastSeen.get(friendId); if (!ts) return false; return (Date.now() - ts) < FRIEND_ONLINE_WINDOW;
-}
-
+// ===== Presence через сервер =====
+const onlineUsers = new Set();
+export function setOnlineSnapshot(arr){ try { onlineUsers.clear(); (arr||[]).forEach(id=> onlineUsers.add(String(id).toLowerCase())); } catch{} }
+export function addOnlineUser(id){ if(!id) return; onlineUsers.add(String(id).toLowerCase()); }
+export function removeOnlineUser(id){ if(!id) return; onlineUsers.delete(String(id).toLowerCase()); }
+export function markFriendSeen(friendId){ /* больше не используется для presence, оставляем заглушку для совместимости */ }
 export function refreshFriendStatuses(){
   try {
     document.querySelectorAll('#friendsList .list-item').forEach(li => {
-      const fid = li.getAttribute('data-friend-id'); if (!fid) return;
+      const fid = (li.getAttribute('data-friend-id')||'').toLowerCase(); if (!fid) return;
       const dot = li.querySelector('.status-dot'); if (!dot) return;
-      const online = isFriendOnline(fid);
+      const online = onlineUsers.has(fid);
       dot.classList.toggle('online', online);
       dot.classList.toggle('offline', !online);
       dot.title = online ? 'Онлайн' : 'Оффлайн';
     });
-  } catch {}
+  } catch{}
 }
-
-setInterval(()=> refreshFriendStatuses(), 8000);
 
 export function initFriendsModule(options={}){ hooks = { ...hooks, ...options }; }
 

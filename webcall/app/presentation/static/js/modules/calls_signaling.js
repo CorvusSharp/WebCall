@@ -325,7 +325,7 @@ function onInvite(m, acc){
   const nowMs = Date.now();
   const createdAt = typeof m.createdAt === 'number' ? m.createdAt : nowMs;
   const age = nowMs - createdAt;
-  const MAX_AGE_MS = 30000; // должно быть синхронизировано с backend MAX_AGE_MS
+  const MAX_AGE_MS = 40000; // синхронизировано с backend (call_invites.py) увеличено до 40s
   if (age > MAX_AGE_MS){
     log('ignore stale call_invite (age ms)', age, m.roomId);
     return;

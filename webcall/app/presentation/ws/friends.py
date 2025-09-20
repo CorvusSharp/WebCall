@@ -95,6 +95,21 @@ async def broadcast_users(user_ids: Set[UUID] | list[UUID], payload: dict):
         await broadcast_user(uid, payload)
 
 
+async def broadcast_all(payload: dict, exclude: UUID | None = None):
+    """Рассылка всем активным пользователям (используем для presence)."""
+    for uid, sockets in list(_friend_clients.items()):
+        if exclude is not None and uid == exclude:
+            continue
+        for ws in list(sockets):
+            try:
+                await ws.send_json(payload)
+            except Exception:  # pragma: no cover
+                with contextlib.suppress(Exception):
+                    sockets.discard(ws)
+        if not sockets:
+            _friend_clients.pop(uid, None)
+
+
 @router.websocket('/ws/friends')
 async def ws_friends(
     websocket: WebSocket,
@@ -128,6 +143,17 @@ async def ws_friends(
         if FRIENDS_WS_ACTIVE:
             with contextlib.suppress(Exception):
                 FRIENDS_WS_ACTIVE.inc()
+        # Presence snapshot (отправляем только подключившемуся)
+        try:
+            snapshot_ids = [str(uid) for uid in _friend_clients.keys()]
+            await websocket.send_json({'type': 'presence_snapshot', 'userIds': snapshot_ids})
+        except Exception:
+            logger.warning("PRESENCE_SNAPSHOT_FAIL user=%s", user_id)
+        # Broadcast join другим
+        try:
+            await broadcast_all({'type': 'presence_join', 'userId': str(user_id)}, exclude=user_id)
+        except Exception:
+            logger.warning("PRESENCE_JOIN_BROADCAST_FAIL user=%s", user_id)
         # Ретрансляция ожидающих инвайтов через сервис
         with contextlib.suppress(Exception):
             pending = await call_invites.list_pending_for(user_id)
@@ -182,6 +208,13 @@ async def ws_friends(
         if FRIENDS_WS_ACTIVE:
             with contextlib.suppress(Exception):
                 FRIENDS_WS_ACTIVE.dec()
+        # Если после отключения у пользователя больше нет соединений – посылаем presence_leave
+        try:
+            # user_id может быть None если не аутентифицирован
+            if user_id is not None and user_id not in _friend_clients:
+                await broadcast_all({'type': 'presence_leave', 'userId': str(user_id)}, exclude=user_id)
+        except Exception:
+            logger.warning("PRESENCE_LEAVE_BROADCAST_FAIL user=%s", user_id)
 
 
 # === Friend events ===
