@@ -530,9 +530,21 @@ function setupUI(){
     // Цикл: light -> dark -> red -> light
     const body = document.body;
     let mode = localStorage.getItem('theme') || 'light';
-    if (mode === 'light'){ mode='dark'; body.classList.add('dark'); body.classList.remove('theme-red'); els.btnToggleTheme.textContent='🌙'; }
-    else if (mode === 'dark'){ mode='red'; body.classList.remove('dark'); body.classList.add('theme-red'); els.btnToggleTheme.textContent='☀️'; }
-    else { mode='light'; body.classList.remove('dark'); body.classList.remove('theme-red'); els.btnToggleTheme.textContent='🌙'; }
+    if (mode === 'light'){
+      mode='dark';
+      body.classList.add('dark');
+      body.classList.remove('theme-red');
+      els.btnToggleTheme.textContent='🔴'; // показываем что следующая красная
+    } else if (mode === 'dark'){
+      mode='red';
+      body.classList.remove('dark');
+      body.classList.add('theme-red');
+      els.btnToggleTheme.textContent='☀️'; // после red вернёмся к светлой
+    } else {
+      mode='light';
+      body.classList.remove('dark','theme-red');
+      els.btnToggleTheme.textContent='🌙'; // готов перейти в dark
+    }
     localStorage.setItem('theme', mode);
   });
   els.btnLogout?.addEventListener('click', ()=>{ try { localStorage.removeItem('wc_token'); localStorage.removeItem('wc_username'); } catch {}; try { sessionStorage.removeItem('wc_connid'); } catch {}; if (appState.ws){ try { appState.ws.close(); } catch {} } const params = new URLSearchParams({ redirect:'/call' }); if (els.roomId.value) params.set('room', els.roomId.value); location.href = `/auth?${params.toString()}`; });
@@ -549,9 +561,18 @@ function setupUI(){
   // Применяем сохранённую тему
   try {
     const savedTheme = localStorage.getItem('theme');
-    if (savedTheme === 'dark'){ document.body.classList.add('dark'); els.btnToggleTheme && (els.btnToggleTheme.textContent='🌙'); }
-    else if (savedTheme === 'red'){ document.body.classList.add('theme-red'); els.btnToggleTheme && (els.btnToggleTheme.textContent='☀️'); }
-    else { document.body.classList.remove('dark','theme-red'); els.btnToggleTheme && (els.btnToggleTheme.textContent='🌙'); }
+    if (savedTheme === 'dark'){
+      document.body.classList.add('dark');
+      document.body.classList.remove('theme-red');
+      if (els.btnToggleTheme) els.btnToggleTheme.textContent='🔴';
+    } else if (savedTheme === 'red'){
+      document.body.classList.add('theme-red');
+      document.body.classList.remove('dark');
+      if (els.btnToggleTheme) els.btnToggleTheme.textContent='☀️';
+    } else {
+      document.body.classList.remove('dark','theme-red');
+      if (els.btnToggleTheme) els.btnToggleTheme.textContent='🌙';
+    }
   } catch {}
   const u = new URL(location.href); if (u.searchParams.has('room')) els.roomId.value = u.searchParams.get('room');
   showPreJoin();

@@ -38,6 +38,7 @@ body.dark{
 }
 
 /* Red theme: более радикальная цветовая палитра с красными оттенками */
+/* theme-red удалён из активного цикла переключения; блок стилизатора убран */
 body.theme-red{
   --bg:#1a0507;
   --surface:#25080c;
@@ -46,7 +47,7 @@ body.theme-red{
   --muted:#f19999;
   --primary:#ff3b30;
   --primary-2:#ff7a45;
-  --success:#22c55e; /* оставим системные */
+  --success:#22c55e;
   --danger:#ff4242;
   --warning:#ff9800;
   --border:#3a1116;
@@ -74,6 +75,7 @@ body{
   accent-color: var(--primary);
   -webkit-font-smoothing:antialiased;
   -moz-osx-font-smoothing:grayscale;
+  padding-bottom: env(safe-area-inset-bottom, 0); /* Safe area support */
 }
 
 /* Мягкая диффузная подсветка фоном при скролле */
@@ -619,3 +621,73 @@ input[type="range"]::-moz-range-thumb{
   font-size: 11px;
   margin-right: 6px;
 }
+
+/* ======= RESPONSIVE REFINEMENTS (ADDED) ======= */
+/* Сетка участников: упорядочим брейки, чтобы не было конфликтов 220px/140px */
+@media (max-width: 900px){
+  .peers-grid{ grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); }
+}
+@media (max-width: 760px){
+  /* Уже есть общее уменьшение – подправим peers-grid */
+  .peers-grid{ grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); }
+}
+@media (max-width: 640px){
+  .peers-grid{ grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); }
+  .tile .media{ aspect-ratio:4/3; }
+}
+@media (max-width: 520px){
+  .peers-grid{ grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:10px; }
+  .tile .media{ aspect-ratio:4/3; }
+  .tile .hud{ padding:8px 8px 10px; gap:6px; }
+  .tile .hud .name{ font-size:13px; }
+}
+@media (max-width: 430px){
+  .peers-grid{ grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:8px; }
+  .tile .media{ aspect-ratio:1/1; }
+  .tile .hud{ padding:6px 6px 8px; }
+  .tile .hud .level{ height:5px; }
+  .tile .hud .name{ font-size:12px; }
+}
+
+/* Header / actions адаптация */
+@media (max-width: 720px){
+  .header-inner{ flex-wrap:wrap; row-gap:8px; }
+  .app-header .actions{ flex-wrap:wrap; justify-content:flex-end; }
+}
+@media (max-width: 560px){
+  .app-header .actions .btn{ padding:8px 10px; font-size:13px; }
+  .user-badge{ padding:5px 9px; }
+}
+@media (max-width: 430px){
+  .title{ font-size:15px; }
+  .app-header .actions .btn{ padding:7px 9px; font-size:12px; }
+  /* Скрыть текст на кнопке выхода оставив иконку через data-attr, если захотите добавить позже */
+  #btnLogout{ white-space:nowrap; }
+  #btnLogout::after{ content:""; }
+}
+
+/* Уменьшение общих отступов */
+@media (max-width: 600px){
+  .container{ padding:12px; }
+  .card{ padding:14px; }
+}
+@media (max-width: 430px){
+  .container{ padding:10px; }
+  .card{ padding:12px; }
+}
+
+/* Динамическая высота чатов: предотвращаем наложение на элементы управления */
+@media (max-height: 900px){
+  .chat-box{ max-height: 260px; }
+}
+@media (max-height: 780px){
+  .chat-box{ max-height: 220px; }
+}
+@media (max-width: 640px){
+  /* На очень узких и невысоких устройствах ограничим относительным vh */
+  .chat-box, #directMessages{ max-height: min(44vh, 300px); }
+}
+@media (max-width: 430px){
+  .chat-box, #directMessages{ max-height: min(48vh, 260px); }
+}
+
