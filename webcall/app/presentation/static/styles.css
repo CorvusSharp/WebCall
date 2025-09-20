@@ -182,6 +182,8 @@ body,html{background-attachment:fixed}
 .app-main{display:flex;flex-direction:column;gap:16px}
 .panel{background:transparent;border-radius:var(--radius)}
 .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+/* Utility span for full row */
+.span-2{grid-column:1/-1}
 /* Выравнивание высоты локального и удалённых контейнеров */
 #remoteContainer{display:flex;flex-direction:column}
 #remoteContainer .peers-grid{flex:1 1 auto}
@@ -782,6 +784,15 @@ body.theme-red #btnToggleTheme.theme-dot{ color:var(--primary); text-shadow:0 0 
 /* Сетка участников: упорядочим брейки, чтобы не было конфликтов 220px/140px */
 @media (max-width: 900px){
   .peers-grid{ grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); }
+}
+/* Desktop layout adjustments */
+@media (min-width:960px){
+  #roomCard{ display:flex; flex-direction:column; }
+  #roomCard h2{ text-align:center; }
+  #roomCard .form-grid{ max-width:860px; margin:0 auto; }
+  #roomCard .row{ justify-content:center; }
+  #inCallControls{ justify-content:center; }
+  #roomCard input#roomId{ max-width:480px; }
 }
 @media (max-width: 760px){
   /* Уже есть общее уменьшение – подправим peers-grid */
