@@ -362,11 +362,7 @@ function bindPeerMedia(peerId){
       }
       if (vids.length === 1){
         const ms = new MediaStream([vids[0]]);
-        if (mainVideo){
-          try { mainVideo.playsInline=true; mainVideo.autoplay=true; if (!mainVideo.hasAttribute('data-remote-audio')) mainVideo.muted=true; } catch {}
-          mainVideo.srcObject = ms;
-          mainVideo.play?.().catch(()=> setTimeout(()=> mainVideo.play?.().catch(()=>{}), 300));
-        }
+        if (mainVideo) mainVideo.srcObject = ms;
         if (pipWrap){ pipWrap.style.display='none'; if (pipVideo){ pipVideo.srcObject=null; pipVideo.load?.(); } }
       } else {
         // Эвристика: экран обычно шире и имеет label с 'screen'/'display'
@@ -376,12 +372,8 @@ function bindPeerMedia(peerId){
         log(`[diag] peer ${peerId.slice(0,6)} screenGuess=${screen && screen.id} camGuess=${camera && camera.id}`);
         const msScreen = new MediaStream([screen]);
         const msCam = new MediaStream([camera]);
-        if (mainVideo){
-          try { mainVideo.playsInline=true; mainVideo.autoplay=true; if (!mainVideo.hasAttribute('data-remote-audio')) mainVideo.muted=true; } catch {}
-          mainVideo.srcObject = msScreen;
-          mainVideo.play?.().catch(()=> setTimeout(()=> mainVideo.play?.().catch(()=>{}), 300));
-        }
-        if (pipVideo){ pipVideo.srcObject = msCam; pipVideo.playsInline=true; pipVideo.autoplay=true; pipVideo.muted=true; pipVideo.play?.().catch(()=>{}); }
+        if (mainVideo) mainVideo.srcObject = msScreen;
+        if (pipVideo){ pipVideo.srcObject = msCam; }
         if (pipWrap) pipWrap.style.display='';
       }
     } catch(e){ log(`assignTracks(${peerId.slice(0,6)}): ${e}`); }
