@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Dict, List
+import time
 from uuid import UUID
 from asyncio import Lock
 
@@ -25,12 +26,14 @@ class InMemoryCallInviteService(CallInviteService):
         self._lock = Lock()
 
     async def invite(self, from_user_id: UUID, to_user_id: UUID, room_id: str, from_username: str | None, from_email: str | None) -> None:
+        ts = int(time.time() * 1000)
         async with self._lock:
             self._pending[room_id] = {
                 'fromUserId': str(from_user_id),
                 'toUserId': str(to_user_id),
                 'fromUsername': from_username,
                 'fromEmail': from_email,
+                'ts': ts,  # ms timestamp для восстановления после оффлайна
             }
         from ...presentation.ws import friends as friends_ws  # локальный импорт чтобы избежать цикла
         await friends_ws.publish_call_invite(from_user_id, to_user_id, room_id, from_username, from_email)
@@ -55,9 +58,16 @@ class InMemoryCallInviteService(CallInviteService):
         await friends_ws.publish_call_cancel(from_user_id, to_user_id, room_id)
 
     async def list_pending_for(self, user_id: UUID) -> List[dict]:
+        now = int(time.time() * 1000)
+        # Жизненный цикл инвайта: 30 секунд (синхронизировано с RING_TIMEOUT_MS на клиенте 25s + небольшой запас)
+        MAX_AGE_MS = 30000
         async with self._lock:
+            # Очистим устаревшие
+            stale = [rid for rid, data in self._pending.items() if (now - int(data.get('ts', 0))) > MAX_AGE_MS]
+            for rid in stale:
+                self._pending.pop(rid, None)
             return [
-                {'roomId': rid, **data}
+                {'roomId': rid, **data, 'createdAt': data.get('ts')}
                 for rid, data in self._pending.items()
                 if str(user_id) in (data.get('fromUserId'), data.get('toUserId'))
             ]

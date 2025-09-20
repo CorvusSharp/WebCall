@@ -139,6 +139,8 @@ async def ws_friends(
                     'roomId': p['roomId'],
                     'fromUsername': p.get('fromUsername'),
                     'fromEmail': p.get('fromEmail'),
+                    'createdAt': p.get('createdAt') or p.get('ts'),
+                    'pendingReplay': True,
                 })
 
     try:
@@ -257,6 +259,7 @@ async def publish_call_invite(from_user: UUID, to_user: UUID, room_id: str, from
         'fromEmail': (str(from_email) if from_email is not None else None),
         'roomId': room_id,
     }
+    import time
     payload = {
         'type': 'call_invite',
         'fromUserId': str(from_user),
@@ -264,6 +267,7 @@ async def publish_call_invite(from_user: UUID, to_user: UUID, room_id: str, from
         'roomId': room_id,
         'fromUsername': (str(from_username) if from_username is not None else None),
         'fromEmail': (str(from_email) if from_email is not None else None),
+        'createdAt': int(time.time()*1000),
     }
     # Диагностика: сколько активных WS у отправителя и получателя на момент рассылки
     try:

@@ -14,16 +14,48 @@ let hooks = {
   connectRoom: ()=>{},           // () => void (подключение к roomId из els.roomId)
 };
 
+// ===== Онлайн статус друзей =====
+// Простая эвристика: если видели активность (сообщение, сигнал звонка, вступление в звонок) < FRIEND_ONLINE_WINDOW -> online
+const FRIEND_ONLINE_WINDOW = 35000; // 35s
+const friendLastSeen = new Map(); // friendId -> ts
+
+export function markFriendSeen(friendId){
+  if (!friendId) return; friendLastSeen.set(friendId, Date.now()); refreshFriendStatuses();
+}
+
+function isFriendOnline(friendId){
+  const ts = friendLastSeen.get(friendId); if (!ts) return false; return (Date.now() - ts) < FRIEND_ONLINE_WINDOW;
+}
+
+export function refreshFriendStatuses(){
+  try {
+    document.querySelectorAll('#friendsList .list-item').forEach(li => {
+      const fid = li.getAttribute('data-friend-id'); if (!fid) return;
+      const dot = li.querySelector('.status-dot'); if (!dot) return;
+      const online = isFriendOnline(fid);
+      dot.classList.toggle('online', online);
+      dot.classList.toggle('offline', !online);
+      dot.title = online ? 'Онлайн' : 'Оффлайн';
+    });
+  } catch {}
+}
+
+setInterval(()=> refreshFriendStatuses(), 8000);
+
 export function initFriendsModule(options={}){ hooks = { ...hooks, ...options }; }
 
 function renderUserRow(container, u, opts={}){
   const row = document.createElement('div');
   row.className = 'list-item';
+  row.setAttribute('data-friend-id', u.id || u.user_id || '');
   const left = document.createElement('div'); left.className = 'grow';
-  const bold = document.createElement('div'); bold.className = 'bold'; bold.textContent = u.username;
+  const bold = document.createElement('div'); bold.className = 'bold';
+  const statusDot = document.createElement('span'); statusDot.className='status-dot offline'; statusDot.title='Оффлайн';
+  bold.appendChild(statusDot);
+  const nameSpan = document.createElement('span'); nameSpan.textContent = u.username; bold.appendChild(nameSpan);
   const meta = document.createElement('div'); meta.className = 'muted small'; meta.textContent = `${u.email} • ${u.id?.slice?.(0,8)||''}`;
   left.appendChild(bold); left.appendChild(meta);
-  const actions = document.createElement('div'); actions.setAttribute('style','display:flex; gap:8px;');
+  const actions = document.createElement('div'); actions.className='list-item-actions';
   row.appendChild(left); row.appendChild(actions);
   (opts.actions || []).forEach(a => actions.appendChild(a));
   if (opts.onSelectDirect){
@@ -112,6 +144,8 @@ export async function loadFriends(){
         onSelectDirect: (user)=> selectDirectFriend(user.id, user.username || user.id)
       });
       updateFriendUnreadBadge(f.user_id);
+      // Если раньше видели его активность — обновим точку после вставки
+      markFriendSeen(f.user_id);
     });
     if (prevDirect && friends.some(fr => fr.user_id === prevDirect)){
       const fr = friends.find(fr => fr.user_id === prevDirect);
@@ -126,6 +160,8 @@ export async function loadFriends(){
       const btnAccept = makeBtn('Принять','btn success', async ()=>{ try { await acceptFriend(r.user_id); await loadFriends(); } catch(e){ alert(String(e)); } });
       renderUserRow(els.friendRequests, { id:r.user_id, username:r.username || r.user_id, email:r.email || '' }, { actions:[btnAccept] });
     });
+    // Обновим статусы после полной перерисовки
+    refreshFriendStatuses();
   } catch(e){
     els.friendsList.innerHTML = '<div class="muted">Ошибка</div>';
     els.friendRequests.innerHTML = '<div class="muted">Ошибка</div>';

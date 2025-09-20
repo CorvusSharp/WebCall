@@ -452,9 +452,30 @@ input[type="range"]::-moz-range-thumb{
 .list{ display:flex; flex-direction:column; gap:8px }
 .list-item{ display:flex; gap:12px; align-items:center; padding:10px; border:1px solid var(--border); border-radius:10px; background:linear-gradient(180deg, rgba(255,255,255,.02), rgba(255,255,255,.01)); flex-wrap:wrap }
 .list-item .grow{ flex:1; min-width:0 }
+.list-item-actions{ display:flex; gap:8px; flex-wrap:wrap }
+
+/* Кнопка переключения темы в виде цветной точки */
+#btnToggleTheme.theme-dot{ width:30px; height:30px; padding:0; font-size:20px; line-height:1; border-radius:50%; background:var(--card); border:1px solid var(--border); color:var(--primary); text-shadow:0 0 8px color-mix(in srgb, var(--primary) 65%, transparent); box-shadow:0 2px 8px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.05); }
+#btnToggleTheme.theme-dot:hover{ background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)); }
+body.dark #btnToggleTheme.theme-dot{ color:var(--primary); text-shadow:0 0 10px rgba(16,185,129,.6) }
+body.theme-red #btnToggleTheme.theme-dot{ color:var(--primary); text-shadow:0 0 10px rgba(255,59,48,.65) }
+
+/* Мобильный фикс перекрытия кнопки "Позвонить" и email в списке друзей */
+@media (max-width:520px){
+  #friendsCard .list-item{ flex-direction:column; align-items:stretch; }
+  #friendsCard .list-item .grow{ width:100%; }
+  #friendsCard .list-item .list-item-actions{ width:100%; justify-content:flex-start; }
+  #friendsCard .list-item .list-item-actions .btn{ flex:1 1 auto; min-width:110px; }
+  #friendsCard .list-item .muted.small{ word-break:break-word; }
+}
 .bold{ font-weight:600 }
 .small{ font-size:12px }
 .muted{ color: var(--muted) }
+
+/* ======= FRIEND STATUS DOT ======= */
+.status-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle;box-shadow:0 0 0 2px rgba(0,0,0,.35),0 0 6px rgba(0,0,0,.4);background:#666;position:relative;top:-1px}
+.status-dot.online{background:#10b981;box-shadow:0 0 0 2px rgba(0,0,0,.3),0 0 0 4px rgba(16,185,129,0.15),0 0 8px rgba(16,185,129,.8)}
+.status-dot.offline{background:#555;opacity:.65}
 
 /* ======= LOCAL VIDEO CARD ======= */
 .video-card .video-wrap{ background:#000 }

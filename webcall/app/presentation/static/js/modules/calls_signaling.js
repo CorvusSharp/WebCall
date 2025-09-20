@@ -322,6 +322,14 @@ function _normId(v){ return (v||'').toString().toLowerCase().replace(/[^a-f0-9]/
 function _eqId(a,b){ if (!a||!b) return false; return _normId(a) === _normId(b); }
 
 function onInvite(m, acc){
+  const nowMs = Date.now();
+  const createdAt = typeof m.createdAt === 'number' ? m.createdAt : nowMs;
+  const age = nowMs - createdAt;
+  const MAX_AGE_MS = 30000; // должно быть синхронизировано с backend MAX_AGE_MS
+  if (age > MAX_AGE_MS){
+    log('ignore stale call_invite (age ms)', age, m.roomId);
+    return;
+  }
   // Дополнительная гибкость: поддержим альтернативные поля (snake_case) если когда-то появятся
   if (!m.fromUserId && m.from_user_id) m.fromUserId = m.from_user_id;
   if (!m.toUserId && m.to_user_id) m.toUserId = m.to_user_id;
@@ -335,7 +343,7 @@ function onInvite(m, acc){
   if (isMine){
     // Echo подтверждение: если мы в dialing -> переходим в outgoing_ringing
     if (state.phase==='dialing' && state.roomId === m.roomId){
-      transition('outgoing_ringing', { otherUsername: m.toUsername || state.otherUsername, meta:{ optimistic:false, confirmed:true } });
+      transition('outgoing_ringing', { otherUsername: m.toUsername || state.otherUsername, meta:{ optimistic:false, confirmed:true, createdAt } });
     } else if (state.phase==='outgoing_ringing' && state.roomId === m.roomId){
       // Обновляем meta если это был оптимистический режим
       if (state.meta && state.meta.optimistic && !state.meta.confirmed){
@@ -360,7 +368,18 @@ function onInvite(m, acc){
         return;
       }
     }
-    transition('incoming_ringing', { roomId: m.roomId, otherUserId: m.fromUserId, otherUsername: m.fromUsername, incoming:true });
+    // Корректируем оставшийся ring timeout если invite пришёл из pending replay
+    const remaining = Math.max(500, RING_TIMEOUT_MS - age);
+    if (_ringTimer){ clearTimeout(_ringTimer); _ringTimer=null; }
+    transition('incoming_ringing', { roomId: m.roomId, otherUserId: m.fromUserId, otherUsername: m.fromUsername, incoming:true, meta:{ createdAt, replay: !!m.pendingReplay, age } });
+    // Переназначаем ring timeout под оставшееся окно
+    if (_ringTimer) { clearTimeout(_ringTimer); _ringTimer=null; }
+    _ringTimer = setTimeout(()=>{
+      if (state.phase==='incoming_ringing' && state.roomId === m.roomId){
+        warn('ring timeout (adjusted) auto end');
+        transition('ended', { reason:'timeout' });
+      }
+    }, remaining);
     // Браузерное уведомление
     try {
       const showNotif = () => {

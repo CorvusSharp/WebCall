@@ -7,7 +7,7 @@ import { WebRTCManager } from '../../webrtc.js';
 import { els, appendLog, appendChat, setText, setEnabled, showToast } from './dom.js';
 import { appState } from './state.js';
 import { loadVisitedRooms } from '../visited_rooms.js';
-import { initFriendsModule, loadFriends, scheduleFriendsReload, initFriendsUI } from '../friends_ui.js';
+import { initFriendsModule, loadFriends, scheduleFriendsReload, initFriendsUI, markFriendSeen, refreshFriendStatuses } from '../friends_ui.js';
 import { initDirectChatModule, handleIncomingDirect, handleDirectCleared, bindSendDirect } from '../direct_chat.js';
 // Legacy calls.js оставляем временно для обратной совместимости (звук, часть тестов)
 import { startSpecialRingtone, stopSpecialRingtone, resetActiveCall, getActiveCall, initCallModule } from '../calls.js';
@@ -425,7 +425,7 @@ function startFriendsWs(){
       switch(msg.type){
         case 'friend_request': case 'friend_accepted': case 'friend_cancelled': scheduleFriendsReload(); break;
         case 'friend_removed': scheduleFriendsReload(); break;
-        case 'direct_message': handleIncomingDirect(msg); try { const acc=getAccountId(); const other= msg.fromUserId === acc ? msg.toUserId : msg.fromUserId; const isActiveChat = appState.currentDirectFriend && other === appState.currentDirectFriend; const iAmRecipient = msg.toUserId === acc; if (iAmRecipient && !isActiveChat && 'Notification' in window && Notification.permission==='granted'){ const title = 'Новое сообщение'; const body = msg.fromUsername ? `От ${msg.fromUsername}` : 'Личное сообщение'; const reg = await navigator.serviceWorker.getRegistration('/static/sw.js'); if (reg && reg.showNotification){ reg.showNotification(title, { body, data:{ type:'direct', from: other } }); } else { new Notification(title, { body, data:{ type:'direct', from: other } }); } } } catch {} break;
+  case 'direct_message': handleIncomingDirect(msg); try { const acc=getAccountId(); const other= msg.fromUserId === acc ? msg.toUserId : msg.fromUserId; markFriendSeen(other); const isActiveChat = appState.currentDirectFriend && other === appState.currentDirectFriend; const iAmRecipient = msg.toUserId === acc; if (iAmRecipient && !isActiveChat && 'Notification' in window && Notification.permission==='granted'){ const title = 'Новое сообщение'; const body = msg.fromUsername ? `От ${msg.fromUsername}` : 'Личное сообщение'; const reg = await navigator.serviceWorker.getRegistration('/static/sw.js'); if (reg && reg.showNotification){ reg.showNotification(title, { body, data:{ type:'direct', from: other } }); } else { new Notification(title, { body, data:{ type:'direct', from: other } }); } } } catch {} break;
         case 'direct_cleared': handleDirectCleared(msg); break;
         case 'call_invite':
         case 'call_accept':
@@ -433,6 +433,7 @@ function startFriendsWs(){
         case 'call_cancel':
         case 'call_end': {
           log(`📞 Call signal: ${msg.type} from ${msg.fromUserId} to ${msg.toUserId}`);
+          try { const acc=getAccountId(); const other = msg.fromUserId === acc ? msg.toUserId : msg.fromUserId; markFriendSeen(other); } catch {}
           try { handleCallSignal(msg); } catch (e) { log(`❌ Error handling call signal: ${e.message}`); }
           break;
         }
@@ -527,25 +528,23 @@ function setupUI(){
   els.btnToggleMic?.addEventListener('click', async ()=>{ if (!appState.rtc) return; const enabled = await appState.rtc.toggleMic(); els.btnToggleMic.textContent = enabled ? 'Выкл.микро' : 'Вкл.микро'; });
   els.btnDiag?.addEventListener('click', ()=> appState.rtc?.diagnoseAudio());
   els.btnToggleTheme?.addEventListener('click', ()=>{
-    // Цикл: light -> dark -> red -> light
+    // Цикл тем: light -> dark -> red -> light (визуально один кружок меняет цвет)
     const body = document.body;
     let mode = localStorage.getItem('theme') || 'light';
     if (mode === 'light'){
       mode='dark';
       body.classList.add('dark');
       body.classList.remove('theme-red');
-      els.btnToggleTheme.textContent='🔴'; // показываем что следующая красная
     } else if (mode === 'dark'){
       mode='red';
       body.classList.remove('dark');
       body.classList.add('theme-red');
-      els.btnToggleTheme.textContent='☀️'; // после red вернёмся к светлой
     } else {
       mode='light';
       body.classList.remove('dark','theme-red');
-      els.btnToggleTheme.textContent='🌙'; // готов перейти в dark
     }
     localStorage.setItem('theme', mode);
+    if (els.btnToggleTheme){ els.btnToggleTheme.title = 'Тема: '+mode; }
   });
   els.btnLogout?.addEventListener('click', ()=>{ try { localStorage.removeItem('wc_token'); localStorage.removeItem('wc_username'); } catch {}; try { sessionStorage.removeItem('wc_connid'); } catch {}; if (appState.ws){ try { appState.ws.close(); } catch {} } const params = new URLSearchParams({ redirect:'/call' }); if (els.roomId.value) params.set('room', els.roomId.value); location.href = `/auth?${params.toString()}`; });
 
@@ -564,15 +563,13 @@ function setupUI(){
     if (savedTheme === 'dark'){
       document.body.classList.add('dark');
       document.body.classList.remove('theme-red');
-      if (els.btnToggleTheme) els.btnToggleTheme.textContent='🔴';
     } else if (savedTheme === 'red'){
       document.body.classList.add('theme-red');
       document.body.classList.remove('dark');
-      if (els.btnToggleTheme) els.btnToggleTheme.textContent='☀️';
     } else {
       document.body.classList.remove('dark','theme-red');
-      if (els.btnToggleTheme) els.btnToggleTheme.textContent='🌙';
     }
+    if (els.btnToggleTheme){ els.btnToggleTheme.title = 'Тема: '+(savedTheme||'light'); }
   } catch {}
   const u = new URL(location.href); if (u.searchParams.has('room')) els.roomId.value = u.searchParams.get('room');
   showPreJoin();
