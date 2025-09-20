@@ -154,10 +154,12 @@ async def ws_friends(
             await broadcast_all({'type': 'presence_join', 'userId': str(user_id)}, exclude=user_id)
         except Exception:
             logger.warning("PRESENCE_JOIN_BROADCAST_FAIL user=%s", user_id)
-        # Ретрансляция ожидающих инвайтов через сервис
+        # Ретрансляция ожидающих инвайтов через сервис + fallback локального кэша
+        replayed_rooms = set()
         with contextlib.suppress(Exception):
             pending = await call_invites.list_pending_for(user_id)
             for p in pending:
+                created_at = p.get('createdAt') or p.get('ts')
                 await websocket.send_json({
                     'type': 'call_invite',
                     'fromUserId': p['fromUserId'],
@@ -165,9 +167,37 @@ async def ws_friends(
                     'roomId': p['roomId'],
                     'fromUsername': p.get('fromUsername'),
                     'fromEmail': p.get('fromEmail'),
-                    'createdAt': p.get('createdAt') or p.get('ts'),
+                    'createdAt': created_at,
                     'pendingReplay': True,
                 })
+                replayed_rooms.add(p['roomId'])
+        # Fallback: используем _pending_calls если по каким-то причинам сервис статуса не сохранил
+        with contextlib.suppress(Exception):
+            import time as _t
+            now_ms = int(_t.time()*1000)
+            MAX_AGE_MS = 40000
+            stale = []
+            for rid, data in list(_pending_calls.items()):
+                ts = int(data.get('ts') or 0)
+                if not ts or (now_ms - ts) > MAX_AGE_MS:
+                    stale.append(rid)
+                    continue
+                if rid in replayed_rooms:
+                    continue
+                if str(user_id) not in (data.get('fromUserId'), data.get('toUserId')):
+                    continue
+                await websocket.send_json({
+                    'type': 'call_invite',
+                    'fromUserId': data.get('fromUserId'),
+                    'toUserId': data.get('toUserId'),
+                    'roomId': rid,
+                    'fromUsername': data.get('fromUsername'),
+                    'fromEmail': data.get('fromEmail'),
+                    'createdAt': ts,
+                    'pendingReplay': True,
+                })
+            for rid in stale:
+                _pending_calls.pop(rid, None)
 
     try:
         while True:
@@ -284,15 +314,16 @@ def _inc_call_metric(name: str):  # helper
 
 
 async def publish_call_invite(from_user: UUID, to_user: UUID, room_id: str, from_username: str | None = None, from_email: str | None = None):
+    import time
+    ts = int(time.time()*1000)
     _pending_calls[room_id] = {
         'fromUserId': str(from_user),
         'toUserId': str(to_user),
-        # Приводим к простым str чтобы исключить pydantic/ORM объекты (ошибка JSON serializable)
         'fromUsername': (str(from_username) if from_username is not None else None),
         'fromEmail': (str(from_email) if from_email is not None else None),
         'roomId': room_id,
+        'ts': ts,
     }
-    import time
     payload = {
         'type': 'call_invite',
         'fromUserId': str(from_user),
@@ -300,7 +331,7 @@ async def publish_call_invite(from_user: UUID, to_user: UUID, room_id: str, from
         'roomId': room_id,
         'fromUsername': (str(from_username) if from_username is not None else None),
         'fromEmail': (str(from_email) if from_email is not None else None),
-        'createdAt': int(time.time()*1000),
+        'createdAt': ts,
     }
     # Диагностика: сколько активных WS у отправителя и получателя на момент рассылки
     try:
