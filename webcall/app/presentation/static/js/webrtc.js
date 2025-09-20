@@ -71,10 +71,10 @@ export class WebRTCManager {
       videoTrans: null,
     };
 
-    // Предсоздаём transceivers (sendrecv) — гарант m=строк.
+    // Предсоздаём transceivers: audio сразу sendrecv, video стартует recvonly (пока камера не включена)
     try {
       state.audioTrans = pc.addTransceiver('audio', { direction:'sendrecv' });
-      state.videoTrans = pc.addTransceiver('video', { direction:'sendrecv' });
+      state.videoTrans = pc.addTransceiver('video', { direction:'recvonly' });
       this._log(`➕ transceivers preset for ${peerId.slice(0,8)}`);
       // Привяжем локальный аудио трек если есть.
       const at = this.localAudioStream?.getAudioTracks?.()[0];
@@ -93,15 +93,8 @@ export class WebRTCManager {
       if (state.handlers?.onTrack){ try { state.handlers.onTrack(state.stream); } catch{} }
     };
     pc.onnegotiationneeded = async ()=>{
-      try {
-        if (state.makingOffer) return;
-        state.makingOffer = true;
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        sendSignal(this.ws,'offer',{ sdp: offer.sdp }, this.userId, peerId);
-        this._log(`📤 offer → ${peerId.slice(0,8)}`);
-      } catch(e){ this._log('offer err: '+(e?.name||e)); }
-      finally { state.makingOffer=false; }
+      if (state.polite) { this._log(`negotiationneeded defer (polite) ${peerId.slice(0,8)}`); return; }
+      await this._maybeOffer(peerId, state);
     };
     this.peers.set(peerId, state);
     return state;
@@ -119,7 +112,7 @@ export class WebRTCManager {
         setTimeout(()=>{
           try {
             const stillEmpty = !st.stream.getVideoTracks().some(t=> t.readyState==='live');
-            if (stillEmpty){ this._log(`🕒 video watchdog -> renegotiate for ${peerId.slice(0,8)}`); this._negotiateAll(); }
+            if (stillEmpty){ this._log(`🕒 video watchdog -> targeted offer for ${peerId.slice(0,8)}`); this._maybeOffer(peerId, st); }
           } catch{}
         }, 1200);
       }
@@ -159,33 +152,23 @@ export class WebRTCManager {
     }
   }
 
-  async _negotiateAll(){
-    for (const [pid, st] of this.peers){
-      const pc = st.pc;
-      if (pc.signalingState !== 'stable') continue;
-      try {
-        st.makingOffer = true;
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        sendSignal(this.ws,'offer',{ sdp: offer.sdp }, this.userId, pid);
-        this._log(`♻️ renegotiate → ${pid.slice(0,8)}`);
-      } catch(e){ this._log('renegotiate err: '+(e?.name||e)); }
-      finally { st.makingOffer=false; }
-    }
-  }
-
-  async startOffer(peerId){
-    const st = await this._ensurePeer(peerId);
-    if (st.polite) return; // только "невежливый" инициирует первично
-    if (st.pc.signalingState !== 'stable') return;
+  async _maybeOffer(peerId, st){
     try {
+      if (st.polite) return;
+      if (st.makingOffer) return;
+      if (st.pc.signalingState !== 'stable') return;
       st.makingOffer = true;
       const offer = await st.pc.createOffer();
       await st.pc.setLocalDescription(offer);
       sendSignal(this.ws,'offer',{ sdp: offer.sdp }, this.userId, peerId);
-      this._log(`📤 initial offer → ${peerId.slice(0,8)}`);
-    } catch(e){ this._log('init offer err '+(e?.name||e)); }
+      this._log(`📤 offer → ${peerId.slice(0,8)}`);
+    } catch(e){ this._log('offer err: '+(e?.name||e)); }
     finally { st.makingOffer=false; }
+  }
+
+  async startOffer(peerId){
+    const st = await this._ensurePeer(peerId);
+    await this._maybeOffer(peerId, st);
   }
 
   async toggleMic(){
@@ -208,8 +191,24 @@ export class WebRTCManager {
       this._currentVideoKind = 'camera';
       this.onVideoState('camera', vt);
       this._log('🎥 Камера запущена');
-      // renegotiate если уже есть соединения
-      await this._negotiateAll();
+      // Обновляем direction видео транссивера на sendrecv и инициируем оффер только на инициаторе
+      for (const [pid, st] of this.peers){
+        try {
+          if (st.videoTrans && st.videoTrans.direction !== 'sendrecv') {
+            st.videoTrans.direction = 'sendrecv';
+          }
+          // fallback Safari: если negotiationneeded не сработает
+          setTimeout(()=>{
+            try {
+              if (!st.polite && st.pc.signalingState==='stable' && st.videoTrans?.sender?.track===this.localVideoTrack) {
+                const sdp = st.pc.localDescription?.sdp||'';
+                const hasVideo = /m=video[\s\S]*a=ssrc:/i.test(sdp);
+                if (!hasVideo) this._maybeOffer(pid, st);
+              }
+            } catch{}
+          }, 400);
+        } catch{}
+      }
       return true;
     } catch(e){ this._log('startCamera '+(e?.name||e)); return false; }
   }
