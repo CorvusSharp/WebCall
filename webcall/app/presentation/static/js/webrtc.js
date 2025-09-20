@@ -484,12 +484,42 @@ async startOffer(peerId){
 
         if (type==='screen') this._screenSender = targetSender;
         else this._cameraSender = targetSender;
+
+        // Диагностика/форс переговоров если sender появился, но SDP мог быть без m=video
+        this._ensureVideoFlow(pid, peer);
       }
       // Сохраняем ссылку на первого sender как основной
       const firstPeer = this.peers.values().next().value;
       if (firstPeer){
         this._videoSender = firstPeer.pc.getSenders().find(s=> s.track && s.track.kind==='video') || this._videoSender; // legacy
       }
+    } catch {}
+  }
+
+  _ensureVideoFlow(peerId, peerState){
+    try {
+      const pc = peerState.pc;
+      // Отложенный анализ чтобы дождаться возможного native negotiationneeded
+      setTimeout(()=>{
+        try {
+          const hasVideoSender = pc.getSenders().some(s=> s.track && s.track.kind==='video');
+          if (!hasVideoSender) return;
+          const sdp = pc.localDescription?.sdp || '';
+          const mVideoCount = (sdp.match(/\nm=video /g)||[]).length;
+            // currentDirection может быть ещё пустым сразу после добавления
+          const anyActive = pc.getTransceivers().some(t=> t.sender?.track?.kind==='video' && /send/.test(t.currentDirection||''));
+          if (hasVideoSender && !anyActive && mVideoCount===0 && pc.signalingState==='stable'){
+            this._log(`⚠️ Force offer (no m=video yet) → ${peerId.slice(0,8)}`);
+            pc.createOffer().then(of=>{
+              pc.setLocalDescription(of).then(()=>{
+                try { sendSignal(this.ws, 'offer', { sdp: of.sdp }, this.userId, peerId); } catch {}
+                const count = (of.sdp.match(/^m=video /gm)||[]).length;
+                this._log(`📤 Sent forced offer (m=video=${count}) → ${peerId.slice(0,8)}`);
+              }).catch(()=>{});
+            }).catch(()=>{});
+          }
+        } catch {}
+      }, 220);
     } catch {}
   }
 
