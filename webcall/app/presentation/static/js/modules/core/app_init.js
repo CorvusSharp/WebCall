@@ -340,6 +340,8 @@ function bindPeerMedia(peerId){
   const tpl = document.getElementById('tpl-peer-tile');
   const tile = tpl.content.firstElementChild.cloneNode(true); tile.dataset.peer = peerId; els.peersGrid.appendChild(tile);
   try { updatePeerLayout(); } catch {}
+  // Помечаем как компактный до первого успешного кадра
+  tile.classList.add('initial-small');
   // Кнопка развёртывания для single-peer режима (создаём заранее, прячем если не нужно)
   let expandBtn = document.createElement('button');
   expandBtn.type='button';
@@ -478,6 +480,15 @@ function bindPeerMedia(peerId){
     onTrack: (stream) => {
       log(`Получен медиа-поток от ${peerId.slice(0,6)}`); stopSpecialRingtone(); assignTracks(stream);
       try { updatePeerLayout(); } catch {}
+      // Снимаем initial-small после появления первого кадра
+      try {
+        const v = tile.querySelector('video.peer-main');
+        if (v){
+          const onMeta = ()=>{ tile.classList.remove('initial-small'); v.removeEventListener('loadeddata', onMeta); };
+          if (v.readyState >= 2){ tile.classList.remove('initial-small'); }
+          else { v.addEventListener('loadeddata', onMeta); }
+        }
+      } catch {}
       if (audio){
         audio.srcObject=stream; try{ audio._peerStream=stream; }catch{}; audio.muted=false;
         audio.volume = vol ? (Math.min(100, Math.max(0, Number(vol.value)||100))/100) : 1.0;
@@ -496,6 +507,8 @@ function updatePeerLayout(){
     const tiles = Array.from(document.querySelectorAll('#peersGrid .tile'));
     const grid = document.getElementById('peersGrid');
     if (!grid) return;
+    // Сортировка перед применением классов
+    sortPeerTiles();
     // Сбрасываем классы
     tiles.forEach(t=> t.classList.remove('single-peer')); grid.classList.remove('layout-single-peer');
     if (tiles.length === 1){
@@ -517,6 +530,24 @@ function updatePeerLayout(){
       // Скрыть expand кнопки
       tiles.forEach(t=>{ const btn=t.querySelector('.btn-expand-peer'); if (btn){ btn.style.display='none'; } t.classList.remove('single-peer-expanded'); try { t.style.removeProperty('max-width'); } catch {}; });
     }
+  } catch {}
+}
+
+// Сортировка плиток по имени
+function sortPeerTiles(){
+  try {
+    const grid = document.getElementById('peersGrid'); if (!grid) return;
+    const tiles = Array.from(grid.querySelectorAll('.tile'));
+    if (tiles.length < 2) return;
+    const withNames = tiles.map(t=>({
+      el: t,
+      name: (t.querySelector('.name')?.textContent||'').toLowerCase(),
+      peer: t.getAttribute('data-peer')||''
+    }));
+    withNames.sort((a,b)=> a.name.localeCompare(b.name, 'ru')); // сортировка по отображаемому имени
+    const frag = document.createDocumentFragment();
+    withNames.forEach(o=> frag.appendChild(o.el));
+    grid.appendChild(frag);
   } catch {}
 }
 
