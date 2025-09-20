@@ -82,18 +82,25 @@ async def update_me(
     return MeOut(id=str(updated.id), email=str(updated.email), username=str(updated.username))
 
 
-@router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)
+from fastapi import Response
+
+@router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def change_password(
     data: ChangePasswordInput,
     current=Depends(get_current_user),
     users: UserRepository = Depends(get_user_repo),
     hasher: PasswordHasher = Depends(get_password_hasher),
 ) -> None:  # type: ignore[override]
-    # Verify old password
+    """Смена пароля текущего пользователя.
+
+    Используем 204 No Content — поэтому явно указываем response_class=Response и
+    ничего не возвращаем (без JSON null), иначе FastAPI сочтёт что есть тело.
+    """
     if not hasher.verify(data.old_password, str(current.password_hash)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Старый пароль неверен")
     new_hash = hasher.hash(data.new_password)
     ok = await users.update_password(current.id, new_hash)
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    return None
+    # Ничего не возвращаем: 204 No Content
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
