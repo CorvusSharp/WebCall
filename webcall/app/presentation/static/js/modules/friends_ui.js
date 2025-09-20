@@ -16,7 +16,7 @@ let hooks = {
 
 // ===== Онлайн статус друзей =====
 // Простая эвристика: если видели активность (сообщение, сигнал звонка, вступление в звонок) < FRIEND_ONLINE_WINDOW -> online
-const FRIEND_ONLINE_WINDOW = 35000; // 35s
+const FRIEND_ONLINE_WINDOW = 20000; // 20s (снижено с 35s)
 const friendLastSeen = new Map(); // friendId -> ts
 
 export function markFriendSeen(friendId){
@@ -144,8 +144,6 @@ export async function loadFriends(){
         onSelectDirect: (user)=> selectDirectFriend(user.id, user.username || user.id)
       });
       updateFriendUnreadBadge(f.user_id);
-      // Если раньше видели его активность — обновим точку после вставки
-      markFriendSeen(f.user_id);
     });
     if (prevDirect && friends.some(fr => fr.user_id === prevDirect)){
       const fr = friends.find(fr => fr.user_id === prevDirect);
