@@ -387,7 +387,21 @@ function onAccept(m, acc){
   if (['outgoing_ringing','incoming_ringing','dialing','connecting'].includes(state.phase)){
     transition('active', {});
     try { deps.unlockAudio(); resumeAudio(); stopAllRings(); } catch{}
-    if (m.roomId) deps.navigateToRoom(m.roomId);
+    if (m.roomId) {
+      deps.navigateToRoom(m.roomId);
+      // Fallback: через 900мс если нет открытогo ws к этой комнате – повтор
+      setTimeout(()=>{
+        try {
+          if (!window.appState) return;
+          const wsOk = window.appState.ws && window.appState.ws.readyState === WebSocket.OPEN;
+          const same = window.appState.currentRoomId === m.roomId;
+          if (!wsOk || !same){
+            log('accept fallback: re-invoking navigateToRoom');
+            deps.navigateToRoom(m.roomId);
+          }
+        } catch{}
+      }, 900);
+    }
   }
 }
 function onDecline(m, acc){

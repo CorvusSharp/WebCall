@@ -626,7 +626,19 @@ export async function appInit(){
             appState.ws = null;
           }
           // Подключаемся
+          try { appState.currentRoomId = roomId; } catch {}
           connectRoom();
+          // Fallback: если через 1.2с не подключены к нужной комнате – повторяем попытку
+          setTimeout(()=>{
+            try {
+              const need = roomId;
+              const have = appState.currentRoomId;
+              if (need === roomId && (!appState.ws || appState.ws.readyState !== WebSocket.OPEN)){
+                log('navigateToRoom fallback retry connectRoom');
+                if (!appState.ws) connectRoom();
+              }
+            } catch {}
+          }, 1200);
         } catch(e){ log('navigateToRoom error: '+ (e?.message||e)); }
       }
     });
