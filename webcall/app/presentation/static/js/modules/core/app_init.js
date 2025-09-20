@@ -340,6 +340,23 @@ function bindPeerMedia(peerId){
   const tpl = document.getElementById('tpl-peer-tile');
   const tile = tpl.content.firstElementChild.cloneNode(true); tile.dataset.peer = peerId; els.peersGrid.appendChild(tile);
   try { updatePeerLayout(); } catch {}
+  // Кнопка развёртывания для single-peer режима (создаём заранее, прячем если не нужно)
+  let expandBtn = document.createElement('button');
+  expandBtn.type='button';
+  expandBtn.className='btn btn-fullscreen btn-expand-peer';
+  expandBtn.textContent='↕';
+  expandBtn.style.position='absolute';
+  expandBtn.style.top='8px';
+  expandBtn.style.right='8px';
+  expandBtn.style.zIndex='7';
+  expandBtn.style.opacity='0';
+  expandBtn.style.transition='opacity .25s ease';
+  expandBtn.addEventListener('click', ()=>{
+    tile.classList.toggle('single-peer-expanded');
+  });
+  tile.appendChild(expandBtn);
+  tile.addEventListener('mouseenter', ()=>{ if (tile.classList.contains('single-peer')) expandBtn.style.opacity='1'; });
+  tile.addEventListener('mouseleave', ()=>{ expandBtn.style.opacity='0'; });
   const mainVideo = tile.querySelector('video.peer-main');
   const pipWrap = tile.querySelector('.pip');
   const pipVideo = tile.querySelector('video.peer-pip');
@@ -416,6 +433,23 @@ function bindPeerMedia(peerId){
       if (mainVideo && mainVideo.srcObject !== msScreen) mainVideo.srcObject = msScreen;
       if (pipVideo && msCam){ pipVideo.srcObject = msCam; }
       if (pipWrap) pipWrap.style.display = msCam ? '' : 'none';
+
+      // Пост-эвристика: если вставили предполагаемый экран, но фактически кадры не идут → через 500мс свап
+      try {
+        if (mainVideo){
+          setTimeout(()=>{
+            try {
+              if (!tile.isConnected) return; // уже удалён
+              if (mainVideo.videoWidth === 0 && pipVideo && pipVideo.srcObject){
+                log(`[diag] main video no frames, swapping with pip for ${peerId.slice(0,6)}`);
+                const mvStream = mainVideo.srcObject; const pvStream = pipVideo.srcObject;
+                if (pvStream){ mainVideo.srcObject = pvStream; }
+                if (mvStream && msCam){ pipVideo.srcObject = mvStream; }
+              }
+            } catch {}
+          }, 500);
+        }
+      } catch {}
     } catch(e){ log(`assignTracks(${peerId.slice(0,6)}): ${e}`); }
   };
 
@@ -447,6 +481,12 @@ function updatePeerLayout(){
       const t = tiles[0];
       t.classList.add('single-peer');
       grid.classList.add('layout-single-peer');
+      // Показать кнопку expand если есть
+      const btn = t.querySelector('.btn-expand-peer');
+      if (btn){ btn.style.display=''; }
+    } else {
+      // Скрыть expand кнопки
+      tiles.forEach(t=>{ const btn=t.querySelector('.btn-expand-peer'); if (btn){ btn.style.display='none'; } t.classList.remove('single-peer-expanded'); });
     }
   } catch {}
 }

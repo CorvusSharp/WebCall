@@ -397,23 +397,22 @@ body.theme-red .share-badge{ background: linear-gradient(140deg, rgba(255,59,48,
 }
 .tile.single-peer{
   width:100%;
-  max-width:1600px; /* ограничиваем чтобы на ультрашироких не растягивалось слишком */
+  max-width:1080px; /* Базовый умеренный размер */
   margin:0 auto;
-  /* Усилим визуальный акцент */
-  box-shadow:0 0 0 .35rem rgba(124,58,237,0.10), 0 16px 52px -8px rgba(0,0,0,.55);
-  border-color:color-mix(in srgb, var(--primary) 55%, var(--border));
-  transition:box-shadow .35s ease, border-color .35s ease, transform .35s ease;
+  box-shadow:0 0 0 .25rem rgba(124,58,237,0.08), 0 10px 34px -6px rgba(0,0,0,.55);
+  border-color:color-mix(in srgb, var(--primary) 45%, var(--border));
+  transition:box-shadow .30s ease, border-color .30s ease, transform .30s ease;
 }
-.tile.single-peer:hover{
-  transform:translateY(-3px);
-  box-shadow:0 0 0 .42rem rgba(6,182,212,0.14), 0 20px 60px -6px rgba(0,0,0,.65);
-}
+.tile.single-peer:hover{ transform:translateY(-2px); }
 .tile.single-peer .media{
-  /* Убираем жёсткое отношение сторон и делаем адаптивную высоту */
-  aspect-ratio:auto;
-  height:clamp(320px, 72vh, 880px);
-  background:#000; /* гарантируем чёрный фон вокруг видео при letterbox */
+  aspect-ratio:16/9; /* Стабильное отношение */
+  height:auto;
+  background:#000;
 }
+/* Расширенный режим (кнопка «Развернуть») */
+.tile.single-peer.single-peer-expanded{ max-width:none; width:100%; }
+.tile.single-peer.single-peer-expanded .media{ aspect-ratio:auto; height:clamp(360px, 78vh, 1000px); }
+.tile.single-peer.single-peer-expanded{ box-shadow:0 0 0 .42rem rgba(6,182,212,0.18), 0 20px 60px -6px rgba(0,0,0,.65); }
 .tile.single-peer .media .video-stack .peer-main,
 .tile.single-peer .media video.peer-main{
   object-fit:cover; /* Заполняем полностью, допускаем обрезку краёв */
@@ -425,15 +424,17 @@ body.theme-red .share-badge{ background: linear-gradient(140deg, rgba(255,59,48,
   box-shadow:0 6px 26px rgba(0,0,0,.65), 0 0 0 .25rem rgba(0,0,0,.35);
 }
 @media (max-width:900px){
-  .tile.single-peer .media{ height:clamp(260px, 58vh, 640px); }
+  .tile.single-peer{ max-width:880px; }
+  .tile.single-peer.single-peer-expanded .media{ height:clamp(300px, 72vh, 900px); }
   .tile.single-peer .pip{ width:28%; }
 }
 @media (max-width:640px){
-  .tile.single-peer .media{ height:clamp(200px, 54vh, 520px); }
+  .tile.single-peer{ max-width:100%; }
   .tile.single-peer .pip{ width:32%; }
+  .tile.single-peer.single-peer-expanded .media{ height:clamp(260px, 70vh, 820px); }
 }
 @media (orientation:portrait) and (min-height:900px){
-  .tile.single-peer .media{ height:clamp(360px, 70vh, 900px); }
+  .tile.single-peer.single-peer-expanded .media{ height:clamp(420px, 80vh, 1100px); }
 }
 
 
