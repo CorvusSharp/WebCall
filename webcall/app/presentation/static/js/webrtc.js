@@ -25,8 +25,13 @@ constructor(opts){
 
   this._offerLocks = new Map(); // <— анти-дубль createOffer() по пиру
   this._videoSender = null; // RTCRtpSender для локального видео
-  this._currentVideoKind = 'none'; // none | camera | screen
-  this._screenStream = null; // отдельный stream для шаринга
+  // Поддержка двух одновременных видеотреков (камера + экран)
+  this._currentVideoKind = 'none'; // none | camera | screen | multi (для внутренней диагностики)
+  this._cameraTrack = null;
+  this._screenTrack = null;
+  this._cameraSender = null;
+  this._screenSender = null;
+  this._screenStream = null; // отдельный stream для шаринга (оригинальный getDisplayMedia)
   this.videoConstraints = {
     camera: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } },
     screen: { frameRate: 15 }
@@ -426,29 +431,46 @@ async startOffer(peerId){
   _attachOrReplaceVideoSender(track){
     try {
       for (const [pid,peer] of this.peers){
-        let sender = peer.pc.getSenders().find(s=> s.track && s.track.kind==='video');
-        if (!sender){
-          sender = peer.pc.addTrack(track, this.localStream);
-          this._log(`➕ add video track → ${pid.slice(0,8)} (id=${track.id})`);
-        } else if (sender.track !== track){
-          const oldId = sender.track?.id;
-          sender.replaceTrack(track).then(()=>{
-            this._log(`♻️ replace video track → ${pid.slice(0,8)} (${oldId}→${track.id})`);
+        // Для двух параллельных видеотреков нужно иметь ДО 2-х sender.
+        const senders = peer.pc.getSenders().filter(s=> s.track && s.track.kind==='video');
+        // Определим тип трека
+        const type = track._wcType || (track.label.toLowerCase().includes('screen') ? 'screen' : 'camera');
+        let targetSender = (type==='screen'? this._screenSender : this._cameraSender);
+        if (targetSender && !senders.includes(targetSender)) targetSender = null; // устарел
+
+        if (!targetSender){
+          // Ищем свободный sender (без трека) или добавляем
+            let free = peer.pc.getSenders().find(s=> !s.track && s.transport);
+            if (free){
+              free.replaceTrack(track).catch(()=>{});
+              targetSender = free;
+              this._log(`➕ reuse empty video sender → ${pid.slice(0,8)} (${type}, id=${track.id})`);
+            } else {
+              targetSender = peer.pc.addTrack(track, this.localStream);
+              this._log(`➕ add video track → ${pid.slice(0,8)} (${type}, id=${track.id})`);
+            }
+        } else if (targetSender.track !== track){
+          const oldId = targetSender.track?.id;
+          targetSender.replaceTrack(track).then(()=>{
+            this._log(`♻️ replace ${type} track → ${pid.slice(0,8)} (${oldId}→${track.id})`);
           }).catch(()=>{});
         } else {
-          this._log(`↔️ video track already set for ${pid.slice(0,8)} (id=${track.id})`);
+          this._log(`↔️ ${type} track already set for ${pid.slice(0,8)} (id=${track.id})`);
         }
+
+        if (type==='screen') this._screenSender = targetSender;
+        else this._cameraSender = targetSender;
       }
       // Сохраняем ссылку на первого sender как основной
       const firstPeer = this.peers.values().next().value;
       if (firstPeer){
-        this._videoSender = firstPeer.pc.getSenders().find(s=> s.track && s.track.kind==='video') || this._videoSender;
+        this._videoSender = firstPeer.pc.getSenders().find(s=> s.track && s.track.kind==='video') || this._videoSender; // legacy
       }
     } catch {}
   }
 
   async startCamera(){
-    if (this._currentVideoKind === 'camera' && this.localStream?.getVideoTracks()[0]){
+    if (this._cameraTrack && this._cameraTrack.readyState === 'live'){
       this._log('Камера уже активна');
       return true;
     }
@@ -457,15 +479,17 @@ async startOffer(peerId){
       const gum = await navigator.mediaDevices.getUserMedia({ video: base, audio: false });
       const track = gum.getVideoTracks()[0];
       if (!track) { this._log('Нет video track после getUserMedia'); return false; }
-      // Удаляем предыдущие video треки из localStream
+      track._wcType = 'camera';
       if (!this.localStream){ this.localStream = await this._getLocalMedia() || new MediaStream(); }
-      this.localStream.getVideoTracks().forEach(t=>{ t.stop(); this.localStream.removeTrack(t); });
+      // Удалим старую камеру если была
+      if (this._cameraTrack){ try { this._cameraTrack.stop(); } catch{}; try { this.localStream.removeTrack(this._cameraTrack); } catch{} }
+      this._cameraTrack = track;
       this.localStream.addTrack(track);
       this._attachOrReplaceVideoSender(track);
-      if (this.localVideo) this.localVideo.srcObject = this.localStream;
+      this._updateLocalPreview();
   try { this.localVideo?.play?.().catch(()=>{}); } catch {}
-      this._currentVideoKind = 'camera';
-      track.onended = () => { this._log('Камера трек завершён'); if (this._currentVideoKind==='camera') this.stopVideo(); };
+      this._refreshVideoKind();
+      track.onended = () => { this._log('Камера трек завершён'); if (this._cameraTrack === track) this.stopCamera(); };
       this._log(`Камера запущена (track id=${track.id}, label="${track.label}")`);
       this.onVideoState('camera', track);
 
@@ -495,64 +519,76 @@ async startOffer(peerId){
   }
 
   async startScreenShare(){
-    if (this._currentVideoKind === 'screen') { this._log('Screen share уже активен'); return true; }
+    if (this._screenTrack && this._screenTrack.readyState === 'live'){ this._log('Screen share уже активен'); return true; }
     try {
       const ds = await navigator.mediaDevices.getDisplayMedia({ video: this.videoConstraints.screen, audio: false });
       const track = ds.getVideoTracks()[0];
       if (!track){ this._log('Нет трека экрана'); return false; }
       this._screenStream = ds;
+      track._wcType = 'screen';
       if (!this.localStream){ this.localStream = await this._getLocalMedia() || new MediaStream(); }
-      // Заменяем текущий видеотрек
-      this.localStream.getVideoTracks().forEach(t=>{ t.stop(); this.localStream.removeTrack(t); });
+      if (this._screenTrack){ try { this._screenTrack.stop(); } catch{}; try { this.localStream.removeTrack(this._screenTrack); } catch{} }
+      this._screenTrack = track;
       this.localStream.addTrack(track);
       this._attachOrReplaceVideoSender(track);
-      if (this.localVideo) this.localVideo.srcObject = this.localStream;
+      this._updateLocalPreview();
   try { this.localVideo?.play?.().catch(()=>{}); } catch {}
-      this._currentVideoKind = 'screen';
       track.onended = () => {
         this._log('Screen share завершён пользователем');
-        if (this._currentVideoKind === 'screen') {
-          this._screenStream?.getTracks().forEach(t=>t.stop());
-          this._screenStream = null;
-          // Пытаемся вернуть камеру, если пользователь включал её ранее
-          this.startCamera().catch(()=> this.stopVideo());
-        }
+        if (this._screenTrack === track) this.stopScreenShare();
       };
       this._log('Демонстрация экрана запущена');
+      this._refreshVideoKind();
       this.onVideoState('screen', track);
       return true;
     } catch(e){ this._log(`startScreenShare error: ${e?.name||e}`); return false; }
   }
 
-  stopVideo(){
-    try {
-      if (!this.localStream) return;
-      this.localStream.getVideoTracks().forEach(t=>{ try { t.stop(); } catch{}; this.localStream.removeTrack(t); });
-      if (this.localVideo) {
-        // Сохраняем аудио, но очистим video отображение
-        this.localVideo.srcObject = this.localStream;
-        try { this.localVideo?.play?.().catch(()=>{}); } catch {}
-      }
-      this._currentVideoKind = 'none';
-      this._log('Видео выключено');
+  stopCamera(){
+    if (!this._cameraTrack) return;
+    try { this._cameraTrack.stop(); } catch{}
+    if (this.localStream){ try { this.localStream.removeTrack(this._cameraTrack); } catch{} }
+    for (const [,peer] of this.peers){
+      const sender = this._cameraSender && peer.pc.getSenders().includes(this._cameraSender) ? this._cameraSender : null;
+      if (sender && sender.track){ sender.replaceTrack(null).catch(()=>{}); }
+    }
+    this._cameraTrack = null; this._cameraSender = null;
+    this._updateLocalPreview();
+    this._refreshVideoKind();
+    this._log('Камера остановлена');
+    this.onVideoState('camera', null);
+  }
+
+  stopScreenShare(){
+    if (!this._screenTrack) return;
+    try { this._screenTrack.stop(); } catch{}
+    if (this.localStream){ try { this.localStream.removeTrack(this._screenTrack); } catch{} }
+    for (const [,peer] of this.peers){
+      const sender = this._screenSender && peer.pc.getSenders().includes(this._screenSender) ? this._screenSender : null;
+      if (sender && sender.track){ sender.replaceTrack(null).catch(()=>{}); }
+    }
+    this._screenStream?.getTracks().forEach(t=>{ try { t.stop(); } catch{} });
+    this._screenStream = null;
+    this._screenTrack = null; this._screenSender = null;
+    this._updateLocalPreview();
+    this._refreshVideoKind();
+    this._log('Screen share остановлен');
+    this.onVideoState('screen', null);
+  }
+
+  stopVideo(){ // legacy: выключить всё
+    this.stopCamera();
+    this.stopScreenShare();
+    if (!this._cameraTrack && !this._screenTrack){
+      this._log('Все видео треки остановлены');
       this.onVideoState('none', null);
-      // Обновляем senders: заменяем видеотрек на null
-      for (const [,peer] of this.peers){
-        const sender = peer.pc.getSenders().find(s=> s.track && s.track.kind==='video');
-        if (sender){ sender.replaceTrack(null).catch(()=>{}); }
-      }
-    } catch(e){ this._log(`stopVideo error: ${e?.name||e}`); }
+    }
   }
 
   async toggleScreenShare(){
-    if (this._currentVideoKind === 'screen'){
-      this._log('Отключаем screen share');
-      this.stopVideo();
-      return false;
-    } else {
-      const ok = await this.startScreenShare();
-      return ok;
-    }
+    if (this._screenTrack){ this._log('Отключаем screen share'); this.stopScreenShare(); return false; }
+    const ok = await this.startScreenShare();
+    return ok;
   }
 
   async switchCamera(deviceId){
@@ -575,14 +611,28 @@ async startOffer(peerId){
   }
 
   async toggleCameraStream(){
-    if (this._currentVideoKind === 'camera'){
-      this._log('Отключаем камеру');
-      this.stopVideo();
-      return false;
-    } else {
-      const ok = await this.startCamera();
-      return ok;
-    }
+    if (this._cameraTrack){ this._log('Отключаем камеру'); this.stopCamera(); return false; }
+    const ok = await this.startCamera();
+    return ok;
+  }
+
+  async switchScreenShareWindow(){
+    if (!this._screenTrack){ this._log('switchScreenShareWindow: нет активного screen share'); return false; }
+    try {
+      const ds = await navigator.mediaDevices.getDisplayMedia({ video: this.videoConstraints.screen, audio: false });
+      const newTrack = ds.getVideoTracks()[0]; if (!newTrack){ this._log('switchScreenShareWindow: нет нового трека'); return false; }
+      newTrack._wcType = 'screen';
+      const old = this._screenTrack;
+      this._screenTrack = newTrack;
+      if (this.localStream){
+        try { if (old) { old.stop(); this.localStream.removeTrack(old); } } catch{}
+        this.localStream.addTrack(newTrack);
+      }
+      this._attachOrReplaceVideoSender(newTrack);
+      this._updateLocalPreview();
+      this._log('switchScreenShareWindow: трек заменён');
+      return true;
+    } catch(e){ this._log(`switchScreenShareWindow error: ${e?.name||e}`); return false; }
   }
 
 
@@ -600,7 +650,34 @@ async startOffer(peerId){
       this.peers.clear();
       if (this.localStream) this.localStream.getTracks().forEach(t=>t.stop());
       this.localStream = null;
+      this._cameraTrack = null; this._screenTrack = null;
+      this._cameraSender = null; this._screenSender = null;
       this._log('WebRTC соединения закрыты');
+  }
+
+  _updateLocalPreview(){
+    if (!this.localVideo) return;
+    if (!this.localStream){ this.localVideo.srcObject = null; return; }
+    // Если есть экран — показываем его, иначе камеру, иначе очищаем
+    let showTrack = this._screenTrack || this._cameraTrack;
+    if (!showTrack){
+      // Очистка кадра (убираем последний frame)
+      this.localVideo.srcObject = null;
+      try { this.localVideo.load(); } catch{}
+      return;
+    }
+    // Собираем временный поток только с выбранным треком, чтобы не было артефактов
+    const ms = new MediaStream([showTrack]);
+    this.localVideo.srcObject = ms;
+  }
+
+  _refreshVideoKind(){
+    const cam = !!this._cameraTrack && this._cameraTrack.readyState==='live';
+    const scr = !!this._screenTrack && this._screenTrack.readyState==='live';
+    if (cam && scr) this._currentVideoKind = 'multi';
+    else if (scr) this._currentVideoKind = 'screen';
+    else if (cam) this._currentVideoKind = 'camera';
+    else this._currentVideoKind = 'none';
   }
 
   async updateAllPeerTracks() {
