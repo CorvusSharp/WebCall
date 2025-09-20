@@ -180,13 +180,21 @@ export function initCallSignaling(options){
 /** @param {{user_id:string, username?:string}} friend */
 export function startOutgoingCall(friend){
   if (!friend || !friend.user_id){ warn('invalid friend'); return false; }
-  // Разрешаем мгновенно начинать новый звонок после ended (ещё до авто-очистки)
-  if (state.phase === 'ended') {
-    clearTimers();
-    state = { phase:'idle', sinceTs: Date.now() };
-    emit();
+  // Автовосстановление: если состояние не idle, но оно "устарело" или зависло – делаем мягкий сброс
+  if (state.phase !== 'idle'){
+    const age = Date.now() - state.sinceTs;
+    const recoverable = ['ended','active','connecting'].includes(state.phase) && age > 1500;
+    if (recoverable){
+      warn('recovering stale call state', state.phase, age);
+      clearTimers();
+      state = { phase:'idle', sinceTs: Date.now() };
+      emit();
+    }
   }
-  if (state.phase !== 'idle'){ warn('call already in progress'); return false; }
+  if (state.phase !== 'idle'){
+    warn('call already in progress');
+    return false;
+  }
   if (deps.getAccountId && String(deps.getAccountId()) === String(friend.user_id)){ warn('self-call blocked'); return false; }
 
   if (!isFriendsWsOpen()){
@@ -426,6 +434,14 @@ export const startOutgoingCallOld = startOutgoingCall;
 export const cancelOutgoingOld = cancelOutgoing;
 export const declineIncomingOld = declineIncoming;
 export const acceptIncomingOld = acceptIncoming;
+
+// Принудительный внешний сброс, если вдруг UI остался в невалидном состоянии
+export function forceResetCall(){
+  try { warn('forceResetCall invoked'); } catch{}
+  clearTimers();
+  state = { phase:'idle', sinceTs: Date.now() };
+  emit();
+}
 
 // Для консольной диагностики
 try {
