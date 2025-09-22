@@ -93,6 +93,20 @@ class SummaryCollector:
         else:
             summary_text = _fallback_summary(plain_messages)
 
+        # Постобработка: если ответ слишком шаблонный/поверхностный при наличии всего 1-2 сообщений — добавим исходное сообщение.
+        try:
+            norm = summary_text.strip().lower()
+            # эвристика: AI дал структуру пунктов без конкретики, и сообщений мало
+            if len(msgs) <= 2 and (
+                norm.startswith('1) основные темы:') or
+                'основные темы:' in norm and 'принятые решения:' in norm
+            ):
+                tail_src = "\n\nИсточники:\n" + "\n".join(m.content for m in msgs)
+                if 'источники:' not in norm:
+                    summary_text = summary_text.rstrip() + tail_src
+        except Exception:
+            pass
+
         return SummaryResult(
             room_id=room_id,
             message_count=len(msgs),
