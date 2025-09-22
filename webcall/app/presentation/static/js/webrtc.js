@@ -26,6 +26,15 @@ export class WebRTCManager {
   close(...a){ return this._client.close(...a); }
   setPreferredDevices(...a){ return this._client.setPreferredDevices(...a); }
   getOutputDeviceId(...a){ return this._client.getOutputDeviceId(...a); }
+
+  // === Back-compat property proxies (старый код обращается к этим полям напрямую) ===
+  get peers(){ return this._client.peers; }
+  get localStream(){ return this._client.localStream; }
+  get preferred(){ return this._client.preferred; }
+  get _currentVideoKind(){ return this._client._currentVideoKind; }
+  get _cameraTrack(){ return this._client._cameraTrack; }
+  get _screenTrack(){ return this._client._screenTrack; }
+  // Не делаем сеттеры — изменение через возвращённые объекты (preferred.camId=) затронет оригинал.
 }
 
 export { WebCallClient };
