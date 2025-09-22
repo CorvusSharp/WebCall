@@ -4,8 +4,8 @@ import time, contextlib
 from .message_log import MessageLog
 from .models import SummaryResult, ChatMessage
 from .strategies import ChatStrategy, CombinedVoiceChatStrategy
-from ...infrastructure.config import get_settings
-from ...infrastructure.services.ai_provider import get_user_system_prompt
+from ...config import get_settings
+from ..ai_provider import get_user_system_prompt
 
 
 class SummaryOrchestrator:

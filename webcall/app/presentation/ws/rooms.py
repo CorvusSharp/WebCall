@@ -72,6 +72,11 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
     # Персональный режим: если инициатор указан — генерируем snapshot-based summary индивидуально
     if initiator_user_id:
         orchestrator = get_summary_orchestrator()
+        # Попытка получить актуальный voice транскрипт и зарегистрировать его в orchestrator (не pop, чтобы не мешать групповому пути)
+        with contextlib.suppress(Exception):
+            v_cur = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(original_room_id)
+            if v_cur and getattr(v_cur, 'text', None) and len(v_cur.text.strip()) > 10 and not v_cur.text.startswith('(no audio'):
+                orchestrator.add_voice_transcript(str(room_uuid), v_cur.text.strip())
         # Запрашиваем персональное summary через orchestrator
         personal = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session)
         if settings.TELEGRAM_BOT_TOKEN and session is not None:
