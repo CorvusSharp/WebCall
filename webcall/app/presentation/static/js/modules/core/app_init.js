@@ -1337,30 +1337,54 @@ function initSettingsExtras(panel){
   promptWrap.style.border='1px solid #3a3f44';
   promptWrap.style.borderRadius='8px';
   promptWrap.innerHTML = '<div style="font-weight:600;margin-bottom:6px;">AI Summary Prompt</div>'
-    +'<div style="font-size:11px;color:#bbb;line-height:1.3;margin-bottom:6px;">Настраиваемый системный prompt для оценки встречи. Используется при генерации выжимки (OpenAI). Оставьте пустым или нажмите Сброс — вернётся дефолт.</div>'
+    +'<div style="font-size:11px;color:#bbb;line-height:1.3;margin-bottom:6px;">Настраиваемый системный prompt для оценки встречи. Используется при генерации выжимки (OpenAI). Оставьте пустым или нажмите Сброс — вернётся стандартный. Ниже можно посмотреть текст стандартного и итогового (учитывая очистку/кастомизацию) prompt.</div>'
     +'<textarea id="aiPromptTxt" style="width:100%;min-height:90px;resize:vertical;background:#1e2124;color:#fff;border:1px solid #3a3f44;border-radius:6px;padding:6px;font:12px/1.4 system-ui, sans-serif;outline:none;"></textarea>'
     +'<div style="display:flex;gap:8px;margin-top:6px;">'
     +'<button id="aiPromptSave" class="btn btn-primary" style="flex:1;">Сохранить</button>'
     +'<button id="aiPromptReset" class="btn btn-secondary" style="flex:0 0 auto;">Сброс</button>'
     +'</div>'
-    +'<div id="aiPromptStatus" style="margin-top:4px;font-size:11px;color:#888;">&nbsp;</div>';
+    +'<div style="display:flex;gap:6px;margin-top:6px;">'
+    +'<button id="aiPromptUseDefault" class="btn btn-secondary" style="flex:1;font-size:11px;padding:4px 6px;">Вставить стандартный</button>'
+    +'<button id="aiPromptClear" class="btn btn-secondary" style="flex:0 0 auto;font-size:11px;padding:4px 8px;">Очистить</button>'
+    +'</div>'
+    +'<div id="aiPromptStatus" style="margin-top:4px;font-size:11px;color:#888;">&nbsp;</div>'
+    +'<details id="aiPromptDetails" style="margin-top:6px;">'
+      +'<summary style="cursor:pointer;font-size:12px;color:#ccc;">Показать стандартный и итоговый prompt</summary>'
+      +'<div style="margin-top:6px;">'
+        +'<div style="font-size:11px;color:#8fa;">Стандартный:</div>'
+        +'<pre id="aiPromptDefault" style="white-space:pre-wrap;max-height:160px;overflow:auto;background:#1e2124;padding:6px;border:1px solid #3a3f44;border-radius:6px;font:11px/1.35 ui-monospace,monospace;color:#d0d0d0;"></pre>'
+        +'<div style="font-size:11px;color:#8fa;margin-top:8px;">Итоговый (effective):</div>'
+        +'<pre id="aiPromptEffective" style="white-space:pre-wrap;max-height:160px;overflow:auto;background:#1e2124;padding:6px;border:1px solid #3a3f44;border-radius:6px;font:11px/1.35 ui-monospace,monospace;color:#d0d0d0;"></pre>'
+      +'</div>'
+    +'</details>';
   panel.appendChild(promptWrap);
 
   async function loadPrompt(){
     const token = localStorage.getItem('wc_token'); if (!token) return;
     const stEl = document.getElementById('aiPromptStatus'); if (stEl) stEl.textContent='Загрузка...';
+    let data = null;
     try {
       const r = await fetch('/api/v1/ai/prompt', { headers:{ 'Authorization':'Bearer '+token } });
       if (!r.ok) throw new Error('HTTP '+r.status);
-      const data = await r.json();
+      data = await r.json();
       const ta = document.getElementById('aiPromptTxt');
       if (ta) ta.value = data.is_default ? '' : (data.prompt||'');
       if (stEl) stEl.textContent = data.is_default ? 'Используется стандартный prompt' : 'Кастомный prompt активен';
+      // Заполняем блоки просмотра
+      try {
+        const defEl = document.getElementById('aiPromptDefault');
+        const effEl = document.getElementById('aiPromptEffective');
+        if (defEl) defEl.textContent = data.default_prompt || '';
+        if (effEl) effEl.textContent = data.effective_prompt || (data.prompt || '');
+      } catch {}
     } catch(e){ const stEl2 = document.getElementById('aiPromptStatus'); if (stEl2) stEl2.textContent='Ошибка загрузки prompt'; }
+    return data;
   }
   loadPrompt();
   const saveBtn = document.getElementById('aiPromptSave');
   const resetBtn = document.getElementById('aiPromptReset');
+  const useDefaultBtn = document.getElementById('aiPromptUseDefault');
+  const clearBtn = document.getElementById('aiPromptClear');
   saveBtn?.addEventListener('click', async ()=>{
     const token = localStorage.getItem('wc_token'); if (!token) return;
     const ta = document.getElementById('aiPromptTxt'); if (!ta) return;
@@ -1372,6 +1396,13 @@ function initSettingsExtras(panel){
       const data = await r.json();
       if (data.is_default) ta.value='';
       if (stEl) stEl.textContent = data.is_default ? 'Сохранён стандартный prompt' : 'Сохранён кастомный prompt';
+      // Обновляем просмотр
+      try {
+        const defEl = document.getElementById('aiPromptDefault');
+        const effEl = document.getElementById('aiPromptEffective');
+        if (defEl) defEl.textContent = data.default_prompt || '';
+        if (effEl) effEl.textContent = data.effective_prompt || (data.prompt || '');
+      } catch {}
       showToast('Prompt сохранён', 'info');
     } catch(e){ const stEl2 = document.getElementById('aiPromptStatus'); if (stEl2) stEl2.textContent='Ошибка сохранения'; showToast('Ошибка сохранения prompt', 'error'); }
   });
@@ -1382,11 +1413,33 @@ function initSettingsExtras(panel){
     try {
       const r = await fetch('/api/v1/ai/prompt', { method:'DELETE', headers:{ 'Authorization':'Bearer '+token } });
       if (!r.ok) throw new Error('HTTP '+r.status);
-      await r.json();
+      const data = await r.json();
       ta.value='';
       if (stEl) stEl.textContent='Используется стандартный prompt';
+      try {
+        const defEl = document.getElementById('aiPromptDefault');
+        const effEl = document.getElementById('aiPromptEffective');
+        if (defEl) defEl.textContent = data.default_prompt || '';
+        if (effEl) effEl.textContent = data.effective_prompt || (data.prompt || '');
+      } catch {}
       showToast('Prompt сброшен', 'info');
     } catch(e){ const stEl2 = document.getElementById('aiPromptStatus'); if (stEl2) stEl2.textContent='Ошибка сброса'; showToast('Ошибка сброса prompt', 'error'); }
+  });
+  useDefaultBtn?.addEventListener('click', async ()=>{
+    try {
+      const ta = document.getElementById('aiPromptTxt'); if (!ta) return;
+      // Если уже загружен блок просмотра – берём оттуда
+      const defEl = document.getElementById('aiPromptDefault');
+      const defaultTxt = defEl?.textContent || '';
+      if (defaultTxt){ ta.value = defaultTxt; const stEl = document.getElementById('aiPromptStatus'); if (stEl) stEl.textContent='Стандартный prompt вставлен (не сохранён)'; }
+      else {
+        const data = await loadPrompt();
+        if (data?.default_prompt){ ta.value = data.default_prompt; const stEl = document.getElementById('aiPromptStatus'); if (stEl) stEl.textContent='Стандартный prompt вставлен (не сохранён)'; }
+      }
+    } catch {}
+  });
+  clearBtn?.addEventListener('click', ()=>{
+    const ta = document.getElementById('aiPromptTxt'); if (!ta) return; ta.value=''; const stEl = document.getElementById('aiPromptStatus'); if (stEl) stEl.textContent='Поле очищено (не сохранено)';
   });
 }
 async function fetchJson(url, opts){

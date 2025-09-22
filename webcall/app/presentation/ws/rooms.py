@@ -88,7 +88,20 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
     else:
         # Голос отсутствует/пустой — используем чат
         print(f"[summary] Voice transcript missing or empty for room {original_room_id}; fallback to chat. reason={reason}")
-    summary = await collector.summarize(str(room_uuid), ai_provider, system_prompt=custom_prompt)
+    chat_summary = await collector.summarize(str(room_uuid), ai_provider, system_prompt=custom_prompt)
+    # Если ранее получили voice summary выше и оно не пустое — используем его.
+    # Если voice не дал summary (None) но есть chat_summary — используем chat.
+    # Если оба None, но есть транскрипт (значит не удалось распарсить предложения?) — форсируем добавление транскрипта в collector и повторяем.
+    if summary is None:
+        summary = chat_summary
+    if summary is None and v and v.text and not v.text.startswith('(no audio')):
+        # Форс: добавим весь текст одним сообщением и повторим summarize
+        try:
+            await collector.add_message(str(room_uuid), None, 'voice', v.text.strip())
+            summary = await collector.summarize(str(room_uuid), ai_provider, system_prompt=custom_prompt)
+            print(f"[summary] Forced voice fallback collected room={original_room_id} len={len(v.text.strip())}")
+        except Exception as e:
+            print(f"[summary] Force-add transcript failed room={original_room_id} err={e}")
     if summary:
         if settings.TELEGRAM_BOT_TOKEN:
             try:
