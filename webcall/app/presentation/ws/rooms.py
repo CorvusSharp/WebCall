@@ -14,6 +14,7 @@ from ...infrastructure.services.summary import get_summary_collector
 from ...infrastructure.services.summary import SummaryCollector, SummaryResult
 from ...infrastructure.services.voice_transcript import get_voice_collector
 from ...infrastructure.services.ai_provider import get_ai_provider, get_user_system_prompt
+from ...infrastructure.services.summary_v2.orchestrator import get_summary_orchestrator
 from ...infrastructure.services.telegram import send_message as tg_send_message
 from sqlalchemy.ext.asyncio import AsyncSession
 from ...infrastructure.db.session import get_db_session
@@ -70,104 +71,19 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
     settings = get_settings()
     # Персональный режим: если инициатор указан — генерируем snapshot-based summary индивидуально
     if initiator_user_id:
-        key = (room_uuid, initiator_user_id)
-        cached_user = _user_manual_summary_cache.get(key)
-        if cached_user and (key in _user_manual_summary_served):
-            print(f"[summary] User-personal summary already served room={original_room_id} user={initiator_user_id}")
-            return
-        # Snapshot сообщений (не очищаем collector)
-        from ...infrastructure.services.summary import summarize_messages  # локальный импорт чтобы избежать циклов
-        # Polling до 3 сек: ждём появления сообщений или voice (каждые 300мс), если сейчас пусто.
-        import time as _t_poll
-        start_poll = _t_poll.time()
-        msgs_snapshot = await collector.get_messages_snapshot(str(room_uuid))
-        if not msgs_snapshot:
-            # пробуем альтернативный ключ (original_room_id) если отличается от UUID-варианта
-            if original_room_id != str(room_uuid):
-                alt = await collector.get_messages_snapshot(original_room_id)
-                if alt:
-                    msgs_snapshot = alt
-        while not msgs_snapshot and (_t_poll.time() - start_poll) < 3.0:
-            await asyncio.sleep(0.3)
-            msgs_snapshot = await collector.get_messages_snapshot(str(room_uuid))
-            if not msgs_snapshot and original_room_id != str(room_uuid):
-                alt = await collector.get_messages_snapshot(original_room_id)
-                if alt:
-                    msgs_snapshot = alt
-        # Если всё ещё пусто — пробуем архив (могло быть ранее групповой destructive summarize)
-        if not msgs_snapshot:
-            archived = _room_messages_archive.get(room_uuid)
-            if archived:
-                msgs_snapshot = list(archived)
-                print(f"[summary] Personal fallback uses archived messages room={original_room_id} count={len(msgs_snapshot)}")
-        # Попытка заменить snapshot на персистентный лог (он содержит ВСЮ историю, не удалённую первым summarize)
-        try:
-            from ...infrastructure.services.summary import ChatMessage as _CM
-            log_msgs = _room_message_log.get(room_uuid)
-            if log_msgs:
-                # Конвертируем (если типы совпадают — уже ChatMessage). Ограничим глубину до последних 1000.
-                log_tail = list(log_msgs)[-1000:]
-                # Отсечь по времени старта агента пользователя
-                start_key = (room_uuid, initiator_user_id)
-                start_ts = _room_agent_start.get(start_key)
-                if start_ts:
-                    filtered = [m for m in log_tail if getattr(m, 'ts', 0) >= start_ts]
-                    # Если отфильтрованный набор слишком мал (<=1), расширяем до всего лога чтобы пользователь не видел пустоту
-                    if len(filtered) <= 1:
-                        filtered = log_tail
-                        print(f"[summary] Personal log fallback to full history (filtered <=1) room={original_room_id} full_count={len(filtered)}")
-                    if filtered:
-                        msgs_snapshot = filtered
-                        print(f"[summary] Personal summary uses message_log filtered count={len(filtered)} start_ts={start_ts} room={original_room_id}")
-                else:
-                    # Нет отметки старта — используем весь лог (но если snapshot уже есть — приоритет snapshot только если он длиннее)
-                    if len(log_tail) > len(msgs_snapshot):
-                        msgs_snapshot = log_tail
-                        print(f"[summary] Personal summary uses entire message_log count={len(log_tail)} room={original_room_id}")
-        except Exception as e:
-            print(f"[summary] Personal message_log integration failed room={original_room_id} err={e}")
-        # Если есть voice транскрипт предпочтём его как отдельный flow (как раньше) — добавим его предложения временно
-        v_snap = None
-        with contextlib.suppress(Exception):
-            v_snap = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(original_room_id)
-        if v_snap and v_snap.text and not v_snap.text.startswith('(no audio'):
-            # Простая инъекция дополнительного ChatMessage (без автора)
-            from ...infrastructure.services.summary import ChatMessage
-            import time as _t
-            msgs_snapshot = list(msgs_snapshot)
-            msgs_snapshot.append(ChatMessage(room_id=str(room_uuid), author_id=None, author_name='voice', content=v_snap.text.strip(), ts=int(_t.time()*1000)))
-        # Если совсем пусто (нет ни сообщений, ни voice) — отправим fallback и выйдем
-        if (not msgs_snapshot) and (not (v_snap and v_snap.text and not v_snap.text.startswith('(no audio'))):
-            if settings.TELEGRAM_BOT_TOKEN and session is not None:
-                with contextlib.suppress(Exception):
-                    chat_id = await get_confirmed_chat_id(session, initiator_user_id)
-                    if chat_id:
-                        text = (
-                            f"Room {original_room_id} персональное summary (trigger={reason}).\nНет сообщений для суммаризации."  # краткий fallback без кэша
-                        )
-                        await tg_send_message(text, chat_ids=[chat_id], session=session)
-                        _user_manual_summary_served.add(key)
-                        print(f"[summary] Personal empty fallback sent user={initiator_user_id} room={original_room_id}")
-            return
-        # Кастомный prompt
-        custom_prompt: str | None = None
-        if session is not None:
-            with contextlib.suppress(Exception):
-                custom_prompt = await get_user_system_prompt(session, initiator_user_id)
-        user_summary = await summarize_messages(msgs_snapshot, ai_provider, system_prompt=custom_prompt)
-        _user_manual_summary_cache[key] = user_summary
-        # Отправка только инициатору
+        orchestrator = get_summary_orchestrator()
+        # Запрашиваем персональное summary через orchestrator
+        personal = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session)
         if settings.TELEGRAM_BOT_TOKEN and session is not None:
             with contextlib.suppress(Exception):
                 chat_id = await get_confirmed_chat_id(session, initiator_user_id)
                 if chat_id:
                     text = (
-                        f"Room {user_summary.room_id} персональное summary (trigger={reason}). Сообщений: {user_summary.message_count}.\n--- Summary ---\n{user_summary.summary_text}"
+                        f"Room {personal.room_id} персональное summary (trigger={reason}). Сообщений: {personal.message_count}.\n--- Summary ---\n{personal.summary_text}"
                     )
                     await tg_send_message(text, chat_ids=[chat_id], session=session)
-                    _user_manual_summary_served.add(key)
-                    print(f"[summary] Personal summary sent user={initiator_user_id} room={original_room_id}")
-            return
+                    print(f"[summary] Personal summary (v2) sent user={initiator_user_id} room={original_room_id}")
+        return
 
     # Групповой режим (без initiator): старый кэш + лок
     lock = _room_summary_locks[room_uuid]
@@ -528,6 +444,12 @@ async def ws_room(
                         # Фиксируем точку старта персонального окна для владельца агента (ms epoch)
                         import time as _t
                         _room_agent_start[(room_uuid, account_uid)] = int(_t.time()*1000)
+                        # Регистрируем окно для новой архитектуры orchestrator
+                        try:
+                            orchestrator = get_summary_orchestrator()
+                            orchestrator.start_user_window(str(room_uuid), str(account_uid))
+                        except Exception:
+                            pass
                 # broadcast presence list to room (with id->name map)
                 members = [str(u) for u in sorted(_room_members[room_uuid], key=str)]
                 names = { str(uid): _display_names.get(uid, str(uid)[:8]) for uid in _room_members[room_uuid] }
@@ -599,6 +521,12 @@ async def ws_room(
                             overflow = len(_room_message_log[room_uuid]) - 2000
                             if overflow > 0:
                                 del _room_message_log[room_uuid][0:overflow]
+                    except Exception:
+                        pass
+                    # summary_v2 лог
+                    try:
+                        orchestrator = get_summary_orchestrator()
+                        orchestrator.add_chat(str(room_uuid), author_id, author_name, content or "")
                     except Exception:
                         pass
 
