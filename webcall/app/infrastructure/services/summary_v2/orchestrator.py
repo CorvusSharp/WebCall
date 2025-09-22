@@ -129,6 +129,13 @@ class SummaryOrchestrator:
             if not sess:
                 logger.info("summary_v2: build_personal_summary empty (no session) room=%s user=%s", room_id, user_id)
                 return SummaryResult.empty(room_id)
+        # Диагностика текущего состояния сессии ДО ленивого voice attach
+        try:
+            logger.debug(
+                "summary_v2: pre-build state room=%s user=%s msgs=%s has_voice=%s", room_id, user_id, len(getattr(sess, '_messages', [])), bool(getattr(sess, '_voice_text', None))
+            )
+        except Exception:
+            pass
         # Если в сессии нет voice, попробуем подтянуть (лениво) готовую транскрипцию, чтобы не было окна, когда агент стартовал чуть позже окончания речи
         if sess._voice_text is None:  # type: ignore[attr-defined]
             try:
@@ -155,7 +162,14 @@ class SummaryOrchestrator:
         if db_session is not None:
             with contextlib.suppress(Exception):
                 system_prompt = await get_user_system_prompt(db_session, user_id)
-        return await sess.build_summary(ai_provider=ai_provider, system_prompt=system_prompt)
+        result = await sess.build_summary(ai_provider=ai_provider, system_prompt=system_prompt)
+        try:
+            logger.debug(
+                "summary_v2: post-build result room=%s user=%s msg_count=%s used_voice=%s", room_id, user_id, result.message_count, getattr(result, 'used_voice', False)
+            )
+        except Exception:
+            pass
+        return result
 
 # singleton accessor
 _orchestrator_singleton: SummaryOrchestrator | None = None
