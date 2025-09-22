@@ -5,13 +5,8 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from ..api.deps.containers import get_token_provider
 from ...core.ports.services import TokenProvider
 from ...infrastructure.config import get_settings
-from ...infrastructure.services.voice_transcript import get_voice_collector
-from ...infrastructure.services.voice_transcript import (
-    get_voice_collector,
-    VoiceChunk,
-    VoiceTranscript,
-    transcribe_chunks,
-)
+from ...infrastructure.services.voice_transcript import get_voice_collector, transcribe_chunks
+from ...infrastructure.services.summary_v2.orchestrator import get_summary_orchestrator
 from uuid import UUID, uuid5, NAMESPACE_URL
 import logging
 
@@ -87,6 +82,13 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                 try:
                     preview = (text or '')[:120].replace('\n',' ')
                     logger.info("VOICE_CAPTURE transcript room=%s preview=%r", room_id, preview)
+                except Exception:
+                    pass
+                # Передаём транскрипт в orchestrator (summary_v2)
+                try:
+                    orch = get_summary_orchestrator()
+                    if text and len(text.strip()) > 0:
+                        orch.add_voice_transcript(canonical_key, text.strip())
                 except Exception:
                     pass
             else:

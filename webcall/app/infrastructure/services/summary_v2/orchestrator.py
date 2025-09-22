@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Dict, Tuple, List
 import time, contextlib
 from .message_log import MessageLog
-from .models import SummaryResult, ChatMessage
+from .models import SummaryResult, ChatMessage, TECHNICAL_PATTERNS
 from .strategies import ChatStrategy, CombinedVoiceChatStrategy
 from ...config import get_settings
 from ..ai_provider import get_user_system_prompt
@@ -24,7 +24,21 @@ class SummaryOrchestrator:
     def add_voice_transcript(self, room_id: str, transcript: str) -> None:
         if not transcript:
             return
-        self._voice_buffer[room_id] = transcript
+        txt = transcript.strip()
+        if not txt:
+            return
+        low = txt.lower()
+        is_tech = any(p in low for p in TECHNICAL_PATTERNS)
+        # Если уже хранится нормальный (не технический) текст — не затираем его техническим
+        if is_tech:
+            current = self._voice_buffer.get(room_id)
+            if current:
+                cur_low = current.lower()
+                # если текущий не технический — игнорируем новый технический
+                if not any(p in cur_low for p in TECHNICAL_PATTERNS):
+                    return
+        # Иначе сохраняем (обычный перезаписывает технический)
+        self._voice_buffer[room_id] = txt
 
     def start_user_window(self, room_id: str, user_id: str) -> None:
         self._user_windows[(room_id, user_id)] = int(time.time()*1000)
@@ -32,12 +46,43 @@ class SummaryOrchestrator:
     async def build_personal_summary(self, *, room_id: str, user_id: str, ai_provider, db_session) -> SummaryResult:
         settings = get_settings()
         start_ts = self._user_windows.get((room_id, user_id))
-        # Срез сообщений с момента подключения агента пользователя
         msgs = self._log.slice_since(room_id, start_ts)
-        if not msgs:
-            return SummaryResult.empty(room_id)
-        # voice? добавим как pseudo message list только если достаточно информативно
         voice_text = self._voice_buffer.get(room_id)
+        # Voice-only путь: если нет чат сообщений, но есть валидный voice
+        if not msgs:
+            if voice_text and len(voice_text.strip()) > 10:
+                low = voice_text.lower()
+                if not any(p in low for p in TECHNICAL_PATTERNS):
+                    # создаём псевдо сообщения только из voice
+                    import re
+                    norm = re.sub(r"\s+", " ", voice_text.strip())
+                    parts = re.split(r'(?<=[.!?])\s+', norm)
+                    sentences = [p.strip() for p in parts if p.strip()]
+                    if not sentences:
+                        sentences = [voice_text.strip()]
+                    now_ms = int(time.time()*1000)
+                    voice_msgs = [ChatMessage(room_id=room_id, author_id=None, author_name='voice', content=s, ts=now_ms) for s in sentences]
+                    strategy = self._combined_strategy
+                    result = await strategy.build(voice_msgs, ai_provider=ai_provider, system_prompt=None)
+                    return result
+            return SummaryResult.empty(room_id)
+        # Если все сообщения технические, но есть валидный voice — используем voice
+        non_tech = [m for m in msgs if not any(p in m.content.lower() for p in TECHNICAL_PATTERNS)]
+        if not non_tech and voice_text and len(voice_text.strip()) > 10:
+            low = voice_text.lower()
+            if not any(p in low for p in TECHNICAL_PATTERNS):
+                import re
+                norm = re.sub(r"\s+", " ", voice_text.strip())
+                parts = re.split(r'(?<=[.!?])\s+', norm)
+                sentences = [p.strip() for p in parts if p.strip()]
+                if not sentences:
+                    sentences = [voice_text.strip()]
+                now_ms = int(time.time()*1000)
+                voice_msgs = [ChatMessage(room_id=room_id, author_id=None, author_name='voice', content=s, ts=now_ms) for s in sentences]
+                strategy = self._combined_strategy
+                result = await strategy.build(voice_msgs, ai_provider=ai_provider, system_prompt=None)
+                return result
+        # voice? добавим как pseudo message list только если достаточно информативно
         merged: List[ChatMessage]
         if voice_text and len(voice_text.strip()) > 10:
             # Разбиваем на предложения (простая эвристика)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any
 from collections import defaultdict
 import contextlib
@@ -71,24 +72,84 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
     settings = get_settings()
     # Персональный режим: если инициатор указан — генерируем snapshot-based summary индивидуально
     if initiator_user_id:
-        orchestrator = get_summary_orchestrator()
-        # Попытка получить актуальный voice транскрипт и зарегистрировать его в orchestrator (не pop, чтобы не мешать групповому пути)
-        with contextlib.suppress(Exception):
-            v_cur = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(original_room_id)
-            if v_cur and getattr(v_cur, 'text', None) and len(v_cur.text.strip()) > 10 and not v_cur.text.startswith('(no audio'):
-                orchestrator.add_voice_transcript(str(room_uuid), v_cur.text.strip())
-        # Запрашиваем персональное summary через orchestrator
-        personal = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session)
-        if settings.TELEGRAM_BOT_TOKEN and session is not None:
+        # Feature flag: отключить новую архитектуру, установить USE_SUMMARY_V2=0
+        use_v2 = os.getenv("USE_SUMMARY_V2", "1").lower() not in {"0", "false", "no"}
+        if use_v2:
+            orchestrator = get_summary_orchestrator()
+            # Оппортунистически зарегистрируем последний voice транскрипт (не разрушая для групповой логики)
             with contextlib.suppress(Exception):
-                chat_id = await get_confirmed_chat_id(session, initiator_user_id)
-                if chat_id:
-                    text = (
-                        f"Room {personal.room_id} персональное summary (trigger={reason}). Сообщений: {personal.message_count}.\n--- Summary ---\n{personal.summary_text}"
-                    )
-                    await tg_send_message(text, chat_ids=[chat_id], session=session)
-                    print(f"[summary] Personal summary (v2) sent user={initiator_user_id} room={original_room_id}")
-        return
+                v_cur = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(original_room_id)
+                if v_cur and getattr(v_cur, 'text', None) and len(v_cur.text.strip()) > 10 and not v_cur.text.startswith('(no audio'):
+                    orchestrator.add_voice_transcript(str(room_uuid), v_cur.text.strip())
+            # Первая попытка построить персональное summary
+            personal = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session)
+            # Polling если пусто (возможна гонка: транскрипт ещё в пути)
+            if personal.message_count == 0:
+                max_wait_ms = 2500
+                step_ms = 300
+                waited = 0
+                while waited < max_wait_ms:
+                    await asyncio.sleep(step_ms / 1000)
+                    waited += step_ms
+                    personal2 = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session)
+                    if personal2.message_count > 0:
+                        personal = personal2
+                        print(f"[summary] Personal summary filled after wait={waited}ms room={original_room_id} user={initiator_user_id}")
+                        break
+            if settings.TELEGRAM_BOT_TOKEN and session is not None:
+                with contextlib.suppress(Exception):
+                    chat_id = await get_confirmed_chat_id(session, initiator_user_id)
+                    if chat_id:
+                        if personal.message_count == 0:
+                            body = (
+                                "Персональное резюме пока пусто: сообщений ещё нет или продолжается обработка голоса. "
+                                "Попробуйте запросить ещё раз через несколько секунд."
+                            )
+                        else:
+                            body = personal.summary_text
+                        text = (
+                            f"Room {personal.room_id} персональное summary (trigger={reason}). Сообщений: {personal.message_count}.\n--- Summary ---\n{body}"
+                        )
+                        await tg_send_message(text, chat_ids=[chat_id], session=session)
+                        print(f"[summary] Personal summary (v2) sent user={initiator_user_id} room={original_room_id} empty={personal.message_count==0}")
+            return
+        else:
+            # Fallback: старая логика snapshot + summarize_messages (без orchestrator)
+            from ...infrastructure.services.summary import summarize_messages as _sm
+            # Снимок сообщений + voice если готов
+            v_cur = None
+            with contextlib.suppress(Exception):
+                v_cur = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(original_room_id)
+            msgs = []
+            with contextlib.suppress(Exception):
+                msgs = await collector.get_messages_snapshot(str(room_uuid))  # type: ignore[attr-defined]
+            merged = list(msgs)
+            if v_cur and getattr(v_cur, 'text', None) and v_cur.text.strip() and not v_cur.text.startswith('(no audio'):
+                try:
+                    from ...infrastructure.services.summary import ChatMessage as _CM
+                    import time as _t
+                    merged.append(_CM(room_id=str(room_uuid), author_id=None, author_name='voice', content=v_cur.text.strip(), ts=int(_t.time()*1000)))
+                except Exception:
+                    pass
+            legacy_result = None
+            if merged:
+                with contextlib.suppress(Exception):
+                    legacy_result = await _sm(merged, ai_provider)
+            if settings.TELEGRAM_BOT_TOKEN and session is not None:
+                with contextlib.suppress(Exception):
+                    chat_id = await get_confirmed_chat_id(session, initiator_user_id)
+                    if chat_id:
+                        if legacy_result:
+                            text = (
+                                f"Room {legacy_result.room_id} персональное summary (legacy, trigger={reason}). Сообщений: {legacy_result.message_count}.\n--- Summary ---\n{legacy_result.summary_text}"
+                            )
+                        else:
+                            text = (
+                                f"Room {room_uuid} персональное summary (legacy, trigger={reason}). Сообщений нет."\
+                                " Возможно, данных ещё недостаточно."
+                            )
+                        await tg_send_message(text, chat_ids=[chat_id], session=session)
+            return
 
     # Групповой режим (без initiator): старый кэш + лок
     lock = _room_summary_locks[room_uuid]
