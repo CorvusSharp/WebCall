@@ -245,6 +245,7 @@ export async function connectRoom(){
       await appState.rtc.handleSignal(msg, bindPeerMedia);
     } else if (msg.type === 'presence'){
       appState.latestUserNames = msg.userNames || {};
+      const agentIds = new Set(msg.agentIds || []);
       const readable = msg.users.map(u => appState.latestUserNames[u] || u.slice(0,6));
       log(`В комнате: ${readable.join(', ')}`);
       document.querySelectorAll('.tile').forEach(tile => {
@@ -255,7 +256,21 @@ export async function connectRoom(){
       const allowed = new Set(msg.users.filter(u => u !== myId));
       document.querySelectorAll('.tile').forEach(tile => { const pid=tile.getAttribute('data-peer'); if (pid && !allowed.has(pid)){ safeReleaseMedia(tile); tile.remove(); } });
       if (appState.rtc && appState.rtc.peers){ for (const [pid,st] of Array.from(appState.rtc.peers.entries())){ if (!allowed.has(pid)){ try { st.pc.onicecandidate=null; st.pc.close(); } catch {}; try { if (st.level?.raf) cancelAnimationFrame(st.level.raf); } catch {}; appState.rtc.peers.delete(pid); } } }
-      for (const peerId of msg.users){ if (peerId === myId) continue; try { const last = appState.recentOffer.get(peerId) || 0; const now=Date.now(); if (now - last < 3000){ log(`Пропущен повторный старт для ${peerId}`); continue; } appState.recentOffer.set(peerId, now); } catch {}
+      for (const peerId of msg.users){
+        if (peerId === myId) continue;
+        if (agentIds.has(peerId)){
+          // Рисуем/обновляем placeholder тайл агента (без медиапотоков)
+          if (!document.querySelector(`.tile[data-peer="${peerId}"]`)){
+            const tpl = document.getElementById('tpl-peer-tile');
+            if (tpl && tpl.content){
+              const tile = tpl.content.firstElementChild.cloneNode(true); tile.dataset.peer = peerId; els.peersGrid.appendChild(tile);
+              const name = tile.querySelector('.name'); if (name) name.textContent = appState.latestUserNames[peerId] || 'AI AGENT';
+              tile.classList.add('agent-tile');
+            }
+          }
+          continue; // Не инициируем WebRTC к агенту
+        }
+        try { const last = appState.recentOffer.get(peerId) || 0; const now=Date.now(); if (now - last < 3000){ log(`Пропущен повторный старт для ${peerId}`); continue; } appState.recentOffer.set(peerId, now); } catch {}
         try { log(`Обнаружен пир ${peerId}, инициирую звонок...`); await appState.rtc.startOffer(peerId); } catch(e){ log(`startOffer(${peerId}) failed: ${e}`); }
       }
       try { updatePeerLayout(); } catch {}

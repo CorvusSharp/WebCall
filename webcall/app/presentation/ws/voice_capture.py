@@ -12,6 +12,10 @@ from ...infrastructure.services.voice_transcript import (
     VoiceTranscript,
     transcribe_chunks,
 )
+from uuid import UUID, uuid5, NAMESPACE_URL
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -38,6 +42,12 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
             return
 
     coll = get_voice_collector()
+    # Преобразуем room_id в канонический UUID (так же как в rooms.py), чтобы ключи совпадали
+    try:
+        canonical_uuid = UUID(room_id)
+    except Exception:
+        canonical_uuid = uuid5(NAMESPACE_URL, f"webcall:{room_id}")
+    canonical_key = str(canonical_uuid)
     started = False
     total_bytes = 0
     try:
@@ -64,17 +74,18 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                 if total_bytes > settings.VOICE_MAX_TOTAL_MB * 1024 * 1024:
                     # превышение лимита
                     break
-                await coll.add_chunk(room_id, chunk)
+                await coll.add_chunk(canonical_key, chunk)
     except WebSocketDisconnect:
         pass
     finally:
-        # Здесь позже запустим транскрипцию (асинхронно). Пока создадим заглушку.
+        # Финализируем: транскрипция и сохранение. Если нет чанков — пропускаем.
         with contextlib.suppress(Exception):
-            chunks = await coll.get_and_clear_chunks(room_id)
+            chunks = await coll.get_and_clear_chunks(canonical_key)
             if chunks:
-                text = await transcribe_chunks(room_id, chunks)
+                logger.info("VOICE_CAPTURE finalize room=%s chunks=%s bytes=%s", room_id, len(chunks), sum(len(c.data) for c in chunks))
+                text = await transcribe_chunks(canonical_key, chunks)
             else:
                 text = "(no audio chunks)"
-            await coll.store_transcript(room_id, text)
+            await coll.store_transcript(canonical_key, text)
         with contextlib.suppress(Exception):
             await ws.close(code=1000)

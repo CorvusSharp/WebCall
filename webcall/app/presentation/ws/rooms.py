@@ -189,9 +189,10 @@ async def ws_room(
                 # broadcast presence list to room (with id->name map)
                 members = [str(u) for u in sorted(_room_members[room_uuid], key=str)]
                 names = { str(uid): _display_names.get(uid, str(uid)[:8]) for uid in _room_members[room_uuid] }
+                agent_ids = [str(u) for u in _room_members[room_uuid] if str(u).startswith(str(uuid5(NAMESPACE_URL, f"webcall:agent:{room_uuid}")).split('-')[0])]
                 for ws in list(_room_clients.get(room_uuid, set())):
                     with contextlib.suppress(Exception):
-                        await ws.send_json({"type": "presence", "users": members, "userNames": names})
+                        await ws.send_json({"type": "presence", "users": members, "userNames": names, "agentIds": agent_ids})
 
                 # Persist visit in DB for authenticated users
                 if account_uid is not None:
@@ -296,7 +297,7 @@ async def ws_room(
             names = { str(mid): _display_names.get(UUID(mid), mid[:8]) if isinstance(mid, str) else _display_names.get(mid, str(mid)[:8]) for mid in _room_members[room_uuid] }
             for ws in list(_room_clients.get(room_uuid, set())):
                 with contextlib.suppress(Exception):
-                    await ws.send_json({"type": "presence", "users": members, "userNames": names})
+                    await ws.send_json({"type": "presence", "users": members, "userNames": names, "agentIds": []})
 
         # try to mark DB participation left_at for authenticated user
         if token:
@@ -328,7 +329,9 @@ async def ws_room(
                 # Генерируем summary если ещё не делали
                 if room_uuid not in _room_summary_finalized:
                     with contextlib.suppress(Exception):
-                        v = await voice_coll.pop_transcript(str(room_uuid))
+                        v = await voice_coll.pop_transcript(str(room_uuid)) or await voice_coll.pop_transcript(room_id)
+                        if v:
+                            print(f"[summary] Using voice transcript for room {room_id}")
                         if v:
                             from ...infrastructure.services.summary import SummaryCollector
                             temp = SummaryCollector()
@@ -345,12 +348,15 @@ async def ws_room(
                                     f"--- Summary ---\n{summary.summary_text}"
                                 )
                                 await tg_send_message(text)
+                                print(f"[summary] Telegram sent for room {room_id}")
                         _room_summary_finalized.add(room_uuid)
             else:
                 # Для обычных комнат: генерируем summary только когда последний пользователь ушёл (и ещё не финализировано)
                 if remaining == 0 and room_uuid not in _room_summary_finalized:
                     with contextlib.suppress(Exception):
-                        v = await voice_coll.pop_transcript(str(room_uuid))
+                        v = await voice_coll.pop_transcript(str(room_uuid)) or await voice_coll.pop_transcript(room_id)
+                        if v:
+                            print(f"[summary] Using voice transcript for room {room_id}")
                         if v:
                             from ...infrastructure.services.summary import SummaryCollector
                             temp = SummaryCollector()
@@ -367,6 +373,7 @@ async def ws_room(
                                     f"--- Summary ---\n{summary.summary_text}"
                                 )
                                 await tg_send_message(text)
+                                print(f"[summary] Telegram sent for room {room_id}")
                         _room_summary_finalized.add(room_uuid)
         except Exception:
             pass
