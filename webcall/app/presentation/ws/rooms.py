@@ -71,7 +71,23 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
             return
         # Snapshot сообщений (не очищаем collector)
         from ...infrastructure.services.summary import summarize_messages  # локальный импорт чтобы избежать циклов
+        # Polling до 3 сек: ждём появления сообщений или voice (каждые 300мс), если сейчас пусто.
+        import time as _t_poll
+        start_poll = _t_poll.time()
         msgs_snapshot = await collector.get_messages_snapshot(str(room_uuid))
+        if not msgs_snapshot:
+            # пробуем альтернативный ключ (original_room_id) если отличается от UUID-варианта
+            if original_room_id != str(room_uuid):
+                alt = await collector.get_messages_snapshot(original_room_id)
+                if alt:
+                    msgs_snapshot = alt
+        while not msgs_snapshot and (_t_poll.time() - start_poll) < 3.0:
+            await asyncio.sleep(0.3)
+            msgs_snapshot = await collector.get_messages_snapshot(str(room_uuid))
+            if not msgs_snapshot and original_room_id != str(room_uuid):
+                alt = await collector.get_messages_snapshot(original_room_id)
+                if alt:
+                    msgs_snapshot = alt
         # Если есть voice транскрипт предпочтём его как отдельный flow (как раньше) — добавим его предложения временно
         v_snap = None
         with contextlib.suppress(Exception):
