@@ -91,10 +91,10 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
             # Первая попытка построить персональное summary
             cutoff_ms = int(__import__('time').time()*1000)
             personal = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session, cutoff_ms=cutoff_ms)
-            # Polling если пусто (возможна гонка: транскрипт ещё в пути)
+            # Polling если пусто (возможна гонка: транскрипт ещё в пути / задержка ASR)
             if personal.message_count == 0:
-                max_wait_ms = 2500
-                step_ms = 300
+                max_wait_ms = 8000  # увеличено с 2500 чтобы дождаться медленной транскрипции
+                step_ms = 400
                 waited = 0
                 while waited < max_wait_ms:
                     await asyncio.sleep(step_ms / 1000)
@@ -104,6 +104,20 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                         personal = personal2
                         print(f"[summary] Personal summary filled after wait={waited}ms room={original_room_id} user={initiator_user_id}")
                         break
+                else:
+                    # Финальный повторный захват транскрипта и ре-генерация если voice появился но не прикрепился
+                    try:
+                        v_cur2 = None
+                        with contextlib.suppress(Exception):
+                            v_cur2 = await voice_coll.get_transcript(f"{room_uuid}:{initiator_user_id}")
+                        if v_cur2 and getattr(v_cur2, 'text', None) and len(v_cur2.text.strip()) > 10 and not v_cur2.text.startswith('(no audio'):
+                            orchestrator.add_voice_transcript(str(room_uuid), v_cur2.text.strip(), user_id=str(initiator_user_id))
+                            personal3 = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session, cutoff_ms=cutoff_ms)
+                            if personal3.message_count > 0:
+                                personal = personal3
+                                print(f"[summary] Personal summary recovered after final voice attach room={original_room_id} user={initiator_user_id}")
+                    except Exception:
+                        pass
             if settings.TELEGRAM_BOT_TOKEN and session is not None:
                 with contextlib.suppress(Exception):
                     chat_id = await get_confirmed_chat_id(session, initiator_user_id)
