@@ -334,9 +334,27 @@ async def ws_room(
                             print(f"[summary] Using voice transcript for room {room_id}")
                         if v:
                             from ...infrastructure.services.summary import SummaryCollector
+                            import re
                             temp = SummaryCollector()
-                            for line in (v.text.splitlines() if v.text else []):
-                                await temp.add_message(str(room_uuid), None, 'voice', line)
+                            text = v.text or ''
+                            # Разбиваем транскрипт на предложения по .!? с пробелом/концом строки
+                            # fallback: если не найдено разделителей — используем оригинальный текст одной строкой
+                            sentences = []
+                            if text.strip():
+                                # Нормализуем пробелы
+                                norm = re.sub(r"\s+", " ", text.strip())
+                                # Разбиваем, сохраняя границы
+                                parts = re.split(r'(?<=[.!?])\s+', norm)
+                                sentences = [p.strip() for p in parts if p.strip()]
+                            if not sentences and text.strip():
+                                sentences = [text.strip()]
+                            total_chars = sum(len(s) for s in sentences)
+                            settings = get_settings()
+                            min_chars = getattr(settings, 'AI_SUMMARY_MIN_CHARS', 0) or 0
+                            if min_chars and total_chars < min_chars:
+                                print(f"[summary] Voice transcript too short {total_chars} < {min_chars} (room={room_id}); still sending fallback.")
+                            for sent in sentences:
+                                await temp.add_message(str(room_uuid), None, 'voice', sent)
                             summary = await temp.summarize(str(room_uuid), ai_provider)
                         else:
                             summary = await collector.summarize(str(room_uuid), ai_provider)

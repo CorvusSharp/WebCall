@@ -72,10 +72,21 @@ class SummaryCollector:
         ]
         summary_text: str
         if settings.AI_SUMMARY_ENABLED and ai_provider is not None:
-            try:
-                summary_text = await ai_provider.generate_summary(plain_messages)  # type: ignore[attr-defined]
-            except Exception as e:  # pragma: no cover - fallback
-                summary_text = _fallback_summary(plain_messages, error=str(e))
+            # Порог минимального содержимого (суммируем длину контента сообщений без служебной обвязки)
+            total_chars = sum(len(m.content) for m in msgs)
+            min_chars = getattr(settings, 'AI_SUMMARY_MIN_CHARS', 0) or 0
+            if min_chars > 0 and total_chars < min_chars:
+                # Слишком короткая сессия — не вызываем внешнего AI, сразу эвристический вывод
+                print(f"[summary] Skipping AI: content too short {total_chars} < {min_chars} (room={room_id})")
+                summary_text = (
+                    f"Сессия слишком короткая ({total_chars} < {min_chars}); содержательное резюме не сформировано.\n"
+                    + _fallback_summary(plain_messages)
+                )
+            else:
+                try:
+                    summary_text = await ai_provider.generate_summary(plain_messages)  # type: ignore[attr-defined]
+                except Exception as e:  # pragma: no cover - fallback
+                    summary_text = _fallback_summary(plain_messages, error=str(e))
         else:
             summary_text = _fallback_summary(plain_messages)
 
