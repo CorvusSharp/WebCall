@@ -82,6 +82,19 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
             import time as _t
             msgs_snapshot = list(msgs_snapshot)
             msgs_snapshot.append(ChatMessage(room_id=str(room_uuid), author_id=None, author_name='voice', content=v_snap.text.strip(), ts=int(_t.time()*1000)))
+        # Если совсем пусто (нет ни сообщений, ни voice) — отправим fallback и выйдем
+        if (not msgs_snapshot) and (not (v_snap and v_snap.text and not v_snap.text.startswith('(no audio'))):
+            if settings.TELEGRAM_BOT_TOKEN and session is not None:
+                with contextlib.suppress(Exception):
+                    chat_id = await get_confirmed_chat_id(session, initiator_user_id)
+                    if chat_id:
+                        text = (
+                            f"Room {original_room_id} персональное summary (trigger={reason}).\nНет сообщений для суммаризации."  # краткий fallback без кэша
+                        )
+                        await tg_send_message(text, chat_ids=[chat_id], session=session)
+                        _user_manual_summary_served.add(key)
+                        print(f"[summary] Personal empty fallback sent user={initiator_user_id} room={original_room_id}")
+            return
         # Кастомный prompt
         custom_prompt: str | None = None
         if session is not None:
