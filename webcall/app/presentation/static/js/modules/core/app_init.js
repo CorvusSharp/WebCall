@@ -1288,11 +1288,107 @@ function setupUI(){
       gearBtn.addEventListener('click', ()=>{ panel.style.display = panel.style.display==='none' ? 'block' : 'none'; });
       document.addEventListener('click', (e)=>{ if (!panel.contains(e.target) && e.target!==gearBtn){ if (panel.style.display==='block') panel.style.display='none'; } }, { capture:true });
       apply(prefs);
+      // Добавляем дополнительные блоки (Telegram / AI Prompt) отложенно, чтобы не было ReferenceError до создания панели
+      try { initSettingsExtras(panel); } catch(e){ console.warn('initSettingsExtras error', e); }
     }
   } catch {}
 }
 
 // ===== Telegram linking (AI summary delivery) =====
+// Доп. UI элементы (кнопка отвязки и prompt) инициализируем только после создания панели настроек.
+function initSettingsExtras(panel){
+  if (!panel) return;
+  // Предотвращаем повторную инициализацию
+  if (panel._extrasInitialized) return; panel._extrasInitialized = true;
+
+  // Кнопка отвязки Telegram (появляется если уже был confirmed)
+  const tgRevokeBtn = document.createElement('button');
+  tgRevokeBtn.type='button';
+  tgRevokeBtn.textContent='Отвязать Telegram';
+  tgRevokeBtn.style.marginTop='8px';
+  tgRevokeBtn.style.width='100%';
+  tgRevokeBtn.style.background='#7a2d2d';
+  tgRevokeBtn.style.color='#fff';
+  tgRevokeBtn.style.border='none';
+  tgRevokeBtn.style.padding='8px 10px';
+  tgRevokeBtn.style.borderRadius='6px';
+  tgRevokeBtn.style.cursor='pointer';
+  tgRevokeBtn.addEventListener('click', async (e)=>{
+    e.stopPropagation();
+    try {
+      const st = await getTelegramStatus();
+      if (st.status !== 'confirmed') { showToast('Telegram не привязан', 'warn'); return; }
+      if (!confirm('Вы уверены, что хотите отвязать Telegram? Придётся привязывать заново для получения summary.')) return;
+      tgRevokeBtn.disabled = true; tgRevokeBtn.textContent='Отвязываем...';
+      try {
+        await revokeTelegramLink();
+        showToast('Telegram отвязан', 'info');
+        appState.telegramLinked = false; appState.telegramLinkChecked = false;
+      } catch(e2){ showToast('Ошибка отвязки: '+e2.message, 'error'); }
+    } finally { tgRevokeBtn.disabled=false; tgRevokeBtn.textContent='Отвязать Telegram'; }
+  });
+  panel.appendChild(tgRevokeBtn);
+
+  // Блок настроек AI System Prompt
+  const promptWrap = document.createElement('div');
+  promptWrap.style.marginTop='14px';
+  promptWrap.style.padding='8px 10px';
+  promptWrap.style.background='#26292e';
+  promptWrap.style.border='1px solid #3a3f44';
+  promptWrap.style.borderRadius='8px';
+  promptWrap.innerHTML = '<div style="font-weight:600;margin-bottom:6px;">AI Summary Prompt</div>'
+    +'<div style="font-size:11px;color:#bbb;line-height:1.3;margin-bottom:6px;">Настраиваемый системный prompt для оценки встречи. Используется при генерации выжимки (OpenAI). Оставьте пустым или нажмите Сброс — вернётся дефолт.</div>'
+    +'<textarea id="aiPromptTxt" style="width:100%;min-height:90px;resize:vertical;background:#1e2124;color:#fff;border:1px solid #3a3f44;border-radius:6px;padding:6px;font:12px/1.4 system-ui, sans-serif;outline:none;"></textarea>'
+    +'<div style="display:flex;gap:8px;margin-top:6px;">'
+    +'<button id="aiPromptSave" class="btn btn-primary" style="flex:1;">Сохранить</button>'
+    +'<button id="aiPromptReset" class="btn btn-secondary" style="flex:0 0 auto;">Сброс</button>'
+    +'</div>'
+    +'<div id="aiPromptStatus" style="margin-top:4px;font-size:11px;color:#888;">&nbsp;</div>';
+  panel.appendChild(promptWrap);
+
+  async function loadPrompt(){
+    const token = localStorage.getItem('wc_token'); if (!token) return;
+    const stEl = document.getElementById('aiPromptStatus'); if (stEl) stEl.textContent='Загрузка...';
+    try {
+      const r = await fetch('/api/v1/ai/prompt', { headers:{ 'Authorization':'Bearer '+token } });
+      if (!r.ok) throw new Error('HTTP '+r.status);
+      const data = await r.json();
+      const ta = document.getElementById('aiPromptTxt');
+      if (ta) ta.value = data.is_default ? '' : (data.prompt||'');
+      if (stEl) stEl.textContent = data.is_default ? 'Используется стандартный prompt' : 'Кастомный prompt активен';
+    } catch(e){ const stEl2 = document.getElementById('aiPromptStatus'); if (stEl2) stEl2.textContent='Ошибка загрузки prompt'; }
+  }
+  loadPrompt();
+  const saveBtn = document.getElementById('aiPromptSave');
+  const resetBtn = document.getElementById('aiPromptReset');
+  saveBtn?.addEventListener('click', async ()=>{
+    const token = localStorage.getItem('wc_token'); if (!token) return;
+    const ta = document.getElementById('aiPromptTxt'); if (!ta) return;
+    const val = ta.value.trim();
+    const stEl = document.getElementById('aiPromptStatus'); if (stEl) stEl.textContent='Сохранение...';
+    try {
+      const r = await fetch('/api/v1/ai/prompt', { method:'PUT', headers:{ 'Authorization':'Bearer '+token, 'Content-Type':'application/json' }, body: JSON.stringify({ prompt: val }) });
+      if (!r.ok){ const txt = await r.text(); throw new Error(txt); }
+      const data = await r.json();
+      if (data.is_default) ta.value='';
+      if (stEl) stEl.textContent = data.is_default ? 'Сохранён стандартный prompt' : 'Сохранён кастомный prompt';
+      showToast('Prompt сохранён', 'info');
+    } catch(e){ const stEl2 = document.getElementById('aiPromptStatus'); if (stEl2) stEl2.textContent='Ошибка сохранения'; showToast('Ошибка сохранения prompt', 'error'); }
+  });
+  resetBtn?.addEventListener('click', async ()=>{
+    const token = localStorage.getItem('wc_token'); if (!token) return;
+    const ta = document.getElementById('aiPromptTxt'); if (!ta) return;
+    const stEl = document.getElementById('aiPromptStatus'); if (stEl) stEl.textContent='Сброс...';
+    try {
+      const r = await fetch('/api/v1/ai/prompt', { method:'DELETE', headers:{ 'Authorization':'Bearer '+token } });
+      if (!r.ok) throw new Error('HTTP '+r.status);
+      await r.json();
+      ta.value='';
+      if (stEl) stEl.textContent='Используется стандартный prompt';
+      showToast('Prompt сброшен', 'info');
+    } catch(e){ const stEl2 = document.getElementById('aiPromptStatus'); if (stEl2) stEl2.textContent='Ошибка сброса'; showToast('Ошибка сброса prompt', 'error'); }
+  });
+}
 async function fetchJson(url, opts){
   const r = await fetch(url, opts);
   if (!r.ok) throw new Error('HTTP '+r.status);
@@ -1317,93 +1413,6 @@ async function revokeTelegramLink(){
   const token = localStorage.getItem('wc_token'); if (!token) throw new Error('no token');
   return await fetchJson('/api/v1/telegram/link', { method:'DELETE', headers:{ 'Authorization':'Bearer '+token } });
 }
-  // Кнопка отвязки Telegram (появляется если уже был confirmed)
-  const tgRevokeBtn = document.createElement('button');
-  tgRevokeBtn.type='button';
-  tgRevokeBtn.textContent='Отвязать Telegram';
-  tgRevokeBtn.style.marginTop='8px';
-  tgRevokeBtn.style.width='100%';
-  tgRevokeBtn.style.background='#7a2d2d';
-  tgRevokeBtn.style.color='#fff';
-  tgRevokeBtn.style.border='none';
-  tgRevokeBtn.style.padding='8px 10px';
-  tgRevokeBtn.style.borderRadius='6px';
-  tgRevokeBtn.style.cursor='pointer';
-  tgRevokeBtn.addEventListener('click', async (e)=>{
-    e.stopPropagation();
-    try {
-      const st = await getTelegramStatus();
-      if (st.status !== 'confirmed') { showToast('Telegram не привязан', 'warn'); return; }
-      if (!confirm('Вы уверены, что хотите отвязать Telegram? Придётся привязывать заново для получения summary.')) return;
-      tgRevokeBtn.disabled = true; tgRevokeBtn.textContent='Отвязываем...';
-      try {
-        await revokeTelegramLink();
-        showToast('Telegram отвязан', 'info');
-        appState.telegramLinked = false; appState.telegramLinkChecked = false;
-      } catch(e){ showToast('Ошибка отвязки: '+e.message, 'error'); }
-    } finally { tgRevokeBtn.disabled=false; tgRevokeBtn.textContent='Отвязать Telegram'; }
-  });
-  panel.appendChild(tgRevokeBtn);
-
-  // Placeholder: блок настроек AI System Prompt (будет расширен позже)
-  const promptWrap = document.createElement('div');
-  promptWrap.style.marginTop='14px';
-  promptWrap.style.padding='8px 10px';
-  promptWrap.style.background='#26292e';
-  promptWrap.style.border='1px solid #3a3f44';
-  promptWrap.style.borderRadius='8px';
-  promptWrap.innerHTML = '<div style="font-weight:600;margin-bottom:6px;">AI Summary Prompt</div>'
-    +'<div style="font-size:11px;color:#bbb;line-height:1.3;margin-bottom:6px;">Настраиваемый системный prompt для оценки встречи. Используется при генерации выжимки (OpenAI). Оставьте пустым или нажмите Сброс — вернётся дефолт.</div>'
-    +'<textarea id="aiPromptTxt" style="width:100%;min-height:90px;resize:vertical;background:#1e2124;color:#fff;border:1px solid #3a3f44;border-radius:6px;padding:6px;font:12px/1.4 system-ui, sans-serif;outline:none;"></textarea>'
-    +'<div style="display:flex;gap:8px;margin-top:6px;">'
-    +'<button id="aiPromptSave" class="btn btn-primary" style="flex:1;">Сохранить</button>'
-    +'<button id="aiPromptReset" class="btn btn-secondary" style="flex:0 0 auto;">Сброс</button>'
-    +'</div>'
-    +'<div id="aiPromptStatus" style="margin-top:4px;font-size:11px;color:#888;">&nbsp;</div>';
-  panel.appendChild(promptWrap);
-  // Логика prompt UI
-  async function loadPrompt(){
-    const token = localStorage.getItem('wc_token'); if (!token) return;
-    const stEl = document.getElementById('aiPromptStatus'); if (stEl) stEl.textContent='Загрузка...';
-    try {
-      const r = await fetch('/api/v1/ai/prompt', { headers:{ 'Authorization':'Bearer '+token } });
-      if (!r.ok) throw new Error('HTTP '+r.status);
-      const data = await r.json();
-      const ta = document.getElementById('aiPromptTxt');
-      if (ta) ta.value = data.is_default ? '' : (data.prompt||'');
-      if (stEl) stEl.textContent = data.is_default ? 'Используется стандартный prompt' : 'Кастомный prompt активен';
-    } catch(e){ if (stEl) stEl.textContent='Ошибка загрузки prompt'; }
-  }
-  loadPrompt();
-  const saveBtn = document.getElementById('aiPromptSave');
-  const resetBtn = document.getElementById('aiPromptReset');
-  saveBtn?.addEventListener('click', async ()=>{
-    const token = localStorage.getItem('wc_token'); if (!token) return;
-    const ta = document.getElementById('aiPromptTxt'); if (!ta) return;
-    const val = ta.value.trim();
-    const stEl = document.getElementById('aiPromptStatus'); if (stEl) stEl.textContent='Сохранение...';
-    try {
-      const r = await fetch('/api/v1/ai/prompt', { method:'PUT', headers:{ 'Authorization':'Bearer '+token, 'Content-Type':'application/json' }, body: JSON.stringify({ prompt: val }) });
-      if (!r.ok){ const txt = await r.text(); throw new Error(txt); }
-      const data = await r.json();
-      if (data.is_default) ta.value='';
-      if (stEl) stEl.textContent = data.is_default ? 'Сохранён стандартный prompt' : 'Сохранён кастомный prompt';
-      showToast('Prompt сохранён', 'info');
-    } catch(e){ if (stEl) stEl.textContent='Ошибка сохранения'; showToast('Ошибка сохранения prompt', 'error'); }
-  });
-  resetBtn?.addEventListener('click', async ()=>{
-    const token = localStorage.getItem('wc_token'); if (!token) return;
-    const ta = document.getElementById('aiPromptTxt'); if (!ta) return;
-    const stEl = document.getElementById('aiPromptStatus'); if (stEl) stEl.textContent='Сброс...';
-    try {
-      const r = await fetch('/api/v1/ai/prompt', { method:'DELETE', headers:{ 'Authorization':'Bearer '+token } });
-      if (!r.ok) throw new Error('HTTP '+r.status);
-      await r.json();
-      ta.value='';
-      if (stEl) stEl.textContent='Используется стандартный prompt';
-      showToast('Prompt сброшен', 'info');
-    } catch(e){ if (stEl) stEl.textContent='Ошибка сброса'; showToast('Ошибка сброса prompt', 'error'); }
-  });
 async function pollTelegramStatus(timeoutMs=60000, intervalMs=2000){
   const started = Date.now();
   while (Date.now() - started < timeoutMs){
