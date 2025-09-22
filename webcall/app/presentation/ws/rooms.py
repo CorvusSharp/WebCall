@@ -48,6 +48,8 @@ _room_summary_locks: dict[UUID, asyncio.Lock] = defaultdict(asyncio.Lock)
 _user_manual_summary_cache: dict[tuple[UUID, UUID], SummaryResult] = {}
 _user_manual_summary_served: set[tuple[UUID, UUID]] = set()
 _room_participant_users: dict[UUID, set[UUID]] = defaultdict(set)
+# Архив последних сообщений комнаты (для персональных запросов после группового destructive summarize)
+_room_messages_archive: dict[UUID, list] = {}
 
 
 async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, reason: str, *,
@@ -88,6 +90,12 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                 alt = await collector.get_messages_snapshot(original_room_id)
                 if alt:
                     msgs_snapshot = alt
+        # Если всё ещё пусто — пробуем архив (могло быть ранее групповой destructive summarize)
+        if not msgs_snapshot:
+            archived = _room_messages_archive.get(room_uuid)
+            if archived:
+                msgs_snapshot = list(archived)
+                print(f"[summary] Personal fallback uses archived messages room={original_room_id} count={len(msgs_snapshot)}")
         # Если есть voice транскрипт предпочтём его как отдельный flow (как раньше) — добавим его предложения временно
         v_snap = None
         with contextlib.suppress(Exception):
@@ -216,6 +224,11 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
     pre_count = None
     with contextlib.suppress(Exception):
         pre_count = await collector.message_count(str(room_uuid))  # type: ignore[attr-defined]
+    # Снимем pre-snapshot (неочищенный) чтобы можно было сохранить его в архив
+    _pre_chat_snapshot = []
+    with contextlib.suppress(Exception):
+        from ...infrastructure.services.summary import ChatMessage as _CM
+        _pre_chat_snapshot = await collector.get_messages_snapshot(str(room_uuid))  # type: ignore[attr-defined]
     chat_summary = await collector.summarize(str(room_uuid), ai_provider, system_prompt=custom_prompt)
     # Если ранее получили voice summary выше и оно не пустое — используем его.
     # Если voice не дал summary (None) но есть chat_summary — используем chat.
@@ -231,6 +244,9 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
         except Exception as e:
             print(f"[summary] Force-add transcript failed room={original_room_id} err={e}")
     if summary:
+        # Сохраняем архив (только если ещё не сохранён и есть что сохранять)
+        if _pre_chat_snapshot and room_uuid not in _room_messages_archive:
+            _room_messages_archive[room_uuid] = list(_pre_chat_snapshot)
         # Кладём в кэш
         _room_summary_cache[room_uuid] = summary
         # Формируем набор целевых пользователей: инициатор или владельцы всех агентов
