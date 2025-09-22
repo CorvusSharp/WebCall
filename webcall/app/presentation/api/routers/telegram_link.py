@@ -12,7 +12,8 @@ from ....infrastructure.config import get_settings
 from ..deps.auth import get_current_user
 
 settings = get_settings()
-router = APIRouter(prefix="/telegram", tags=["telegram"])
+api_prefix = settings.API_PREFIX.rstrip('/')  # ожидаемо /api/v1
+router = APIRouter(prefix=f"{api_prefix}/telegram", tags=["telegram"])
 
 
 class LinkCreateOut(BaseModel):
