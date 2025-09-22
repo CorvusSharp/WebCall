@@ -14,6 +14,8 @@ export class VoiceCaptureMixer {
     this._dest = null;
     this._lastTracksKey = '';
     this._rebuildInterval = null;
+    this._sources = [];
+    this._closing = false;
   }
 
   start(){
@@ -41,8 +43,16 @@ export class VoiceCaptureMixer {
     this._rebuildInterval = null;
     try { this._rec && this._rec.state !== 'inactive' && this._rec.stop(); } catch {}
     this._rec = null;
-    try { this._ctx && this._ctx.close(); } catch {}
-    this._ctx = null; this._dest = null;
+    // Отвязываем источники
+    try { this._sources.forEach(src=>{ try { src.disconnect(); } catch {} }); } catch {}
+    this._sources = [];
+    // Закрываем аудио-контекст один раз
+    if (this._ctx && !this._closing && this._ctx.state !== 'closed'){
+      this._closing = true;
+      try { this._ctx.close().catch(()=>{}).finally(()=>{ this._ctx=null; this._dest=null; this._closing=false; }); } catch { this._closing=false; this._ctx=null; this._dest=null; }
+    } else {
+      this._ctx = null; this._dest = null;
+    }
   }
 
   _ensureContext(){
@@ -70,14 +80,17 @@ export class VoiceCaptureMixer {
     if (key === this._lastTracksKey) return; // нет изменений
     this.onLog(`VoiceMixer: update graph tracks=${tracks.length}`);
     this._lastTracksKey = key;
-    // Пересоздаём контекст (проще для MVP, т.к. отсоединять ноды не всегда корректно)
-    try { this._ctx && this._ctx.close(); } catch {}
-    this._ensureContext();
+    // Отключаем старые
+    try { this._sources.forEach(src=>{ try { src.disconnect(); } catch {} }); } catch {}
+    this._sources = [];
+    // Подключаем новые
     for (const tr of tracks){
       try {
-        const src = this._ctx.createMediaStreamSource(new MediaStream([tr]));
+        const ms = new MediaStream([tr]);
+        const src = this._ctx.createMediaStreamSource(ms);
         src.connect(this._dest);
-      } catch {}
+        this._sources.push(src);
+      } catch(e){ this.onLog('VoiceMixer: source err '+e); }
     }
   }
 }
