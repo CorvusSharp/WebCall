@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+import logging
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +15,7 @@ from ..deps.auth import get_current_user
 settings = get_settings()
 api_prefix = settings.API_PREFIX.rstrip('/')  # ожидаемо /api/v1
 router = APIRouter(prefix=f"{api_prefix}/telegram", tags=["telegram"])
+log = logging.getLogger("telegram")
 
 
 class LinkCreateOut(BaseModel):
@@ -55,48 +57,78 @@ class WebhookIn(BaseModel):
 
 @router.post("/webhook")
 async def webhook(data: WebhookIn, session: AsyncSession = Depends(get_db_session)):
-    # Примитивный webhook: ожидаем message.text вида '/start <token>'
+    # Логируем сырое обновление (уровень info для диагностики; можно сменить на debug при шуме)
+    try:
+        log.info("TG webhook update: %s", data.model_dump())
+    except Exception:  # pragma: no cover - защитный
+        pass
     if not data.message:
         return {"ok": True}
     msg = data.message
     text = (msg.get("text") or "").strip()
     chat = msg.get("chat") or {}
     chat_id = str(chat.get("id")) if chat.get("id") is not None else None
-    if text.startswith("/start ") and chat_id:
-        token = text.split(maxsplit=1)[1]
-        ok = await confirm_link(session, token, chat_id)
+    # Принимаем также вариант без пробела ("/start<token>") для надёжности
+    token_candidate = None
+    if text.startswith("/start "):
+        token_candidate = text.split(maxsplit=1)[1]
+    elif text.startswith("/start") and len(text) > 6:
+        token_candidate = text[6:].strip()
+    if token_candidate and chat_id:
+        ok = await confirm_link(session, token_candidate, chat_id)
         if ok:
             await session.commit()
+            # Пытаемся отправить подтверждающее сообщение пользователю
+            from ....infrastructure.services.telegram import send_message  # локальный импорт чтобы избежать циклов
+            try:
+                await send_message("Привязка Telegram успешна. Теперь вы будете получать AI summary.", chat_ids=[chat_id])
+            except Exception:  # pragma: no cover
+                log.warning("Failed to send confirmation message to chat_id=%s", chat_id)
             return {"ok": True, "linked": True}
     return {"ok": True}
 
 
 @router.get("/selftest")
 async def telegram_selftest():
-    """Проверка доступности Bot API и соответствия username.
+    """Проверка Bot API: getMe + getWebhookInfo.
 
-    Возвращает краткий JSON; не делает побочных эффектов.
+    Возвращает JSON с:
+      - api_username / configured_name / match
+      - webhook_url / has_custom_certificate / pending_update_count / last_error_* (если есть)
     """
     import httpx
     bot_token = settings.TELEGRAM_BOT_TOKEN
     bot_name = settings.TELEGRAM_BOT_NAME
     if not bot_token:
         raise HTTPException(500, detail="TELEGRAM_BOT_TOKEN not set")
-    url = f"https://api.telegram.org/bot{bot_token}/getMe"
+
+    base = f"https://api.telegram.org/bot{bot_token}"
+    timeout = httpx.Timeout(10.0, connect=5.0)
     try:
-        r = httpx.get(url, timeout=10)
+        r_me = httpx.get(f"{base}/getMe", timeout=timeout)
+        r_wh = httpx.get(f"{base}/getWebhookInfo", timeout=timeout)
     except Exception as e:
         raise HTTPException(502, detail=f"Network error: {e.__class__.__name__}") from e
     try:
-        data = r.json()
+        data_me = r_me.json()
+        data_wh = r_wh.json()
     except Exception:
-        raise HTTPException(500, detail=f"Non-JSON response status={r.status_code}")
-    if not data.get("ok"):
-        return {"ok": False, "error": data}
-    api_username = data.get("result", {}).get("username")
+        raise HTTPException(500, detail="Non-JSON response from Telegram")
+    if not data_me.get("ok"):
+        return {"ok": False, "stage": "getMe", "error": data_me}
+    if not data_wh.get("ok"):
+        return {"ok": False, "stage": "getWebhookInfo", "error": data_wh}
+    api_username = data_me.get("result", {}).get("username")
+    wh = data_wh.get("result", {})
     return {
         "ok": True,
         "api_username": api_username,
         "configured_name": bot_name,
         "match": (api_username or "").lower() == (bot_name or "").lower(),
+        "webhook_url": wh.get("url"),
+        "pending_update_count": wh.get("pending_update_count"),
+        "last_error_date": wh.get("last_error_date"),
+        "last_error_message": wh.get("last_error_message"),
+        "ip_address": wh.get("ip_address"),
+        "has_custom_certificate": wh.get("has_custom_certificate"),
     }
