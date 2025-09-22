@@ -84,7 +84,9 @@ export class WebCallClient {
   async init(ws, userId, devices){
     this.ws = ws; this.userId = userId; devices = devices||{}; if(devices.micId) this.preferred.micId=devices.micId; if(devices.camId) this.preferred.camId=devices.camId;
     if(!this.localStream){ const s = await this._getLocalMedia(); this.localStream = s; if(s && this.localVideo) this.localVideo.srcObject = s; if(this.localStream) await this.updateAllPeerTracks(); }
-    this._peers.bindSession({ manager:this, ws:this.ws, addLocalTracks:(pc)=> this._addLocalTracks(pc), ensureVideoSender:(pid,track)=> this.ensureVideoSender(pid,track) });
+  // PeerConnectionManager ожидает { userId, ws }
+  this._peers.bindSession({ userId: this.userId, ws: this.ws });
+    if(!this.userId || !this.ws){ this._log('init warning: userId or ws missing, peers signaling will break'); }
   }
 
   async handleSignal(msg, mediaBinder){ return this._signaling.handle(msg, mediaBinder); }
