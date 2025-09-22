@@ -100,7 +100,25 @@ class SummaryOrchestrator:
         key = (room_id, user_id)
         sess = self._sessions.get(key)
         if not sess:
-            return SummaryResult.empty(room_id)
+            # Попытка аварийного восстановления: могли не вызвать start_user_window из‑за гонки, но voice уже есть.
+            recovered = False
+            try:
+                vc = get_voice_collector()
+                voice_key = f"{room_id}:{user_id}"
+                with contextlib.suppress(Exception):
+                    vt = await vc.get_transcript(voice_key)
+                    if vt and getattr(vt, 'text', None) and len(vt.text.strip()) > 0:
+                        sess = UserAgentSession(room_id=room_id, user_id=user_id)
+                        sess.add_voice_transcript(vt.text.strip())
+                        self._sessions[key] = sess
+                        self._room_sessions.setdefault(room_id, []).append(sess)
+                        recovered = True
+                        logger.warning("summary_v2: recovered session from voice transcript room=%s user=%s len=%s", room_id, user_id, len(vt.text))
+            except Exception:
+                pass
+            if not recovered or not sess:
+                logger.info("summary_v2: build_personal_summary empty (no session) room=%s user=%s", room_id, user_id)
+                return SummaryResult.empty(room_id)
         # Если в сессии нет voice, попробуем подтянуть (лениво) готовую транскрипцию, чтобы не было окна, когда агент стартовал чуть позже окончания речи
         if sess._voice_text is None:  # type: ignore[attr-defined]
             try:
