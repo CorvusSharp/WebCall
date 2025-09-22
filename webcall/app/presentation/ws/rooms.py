@@ -11,6 +11,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from ...infrastructure.config import get_settings
 from ...infrastructure.services.summary import get_summary_collector
+from ...infrastructure.services.summary import SummaryCollector, SummaryResult
 from ...infrastructure.services.voice_transcript import get_voice_collector
 from ...infrastructure.services.ai_provider import get_ai_provider, get_user_system_prompt
 from ...infrastructure.services.telegram import send_message as tg_send_message
@@ -35,6 +36,14 @@ _display_names: dict[UUID, str] = {}
 _room_summary_finalized: set[UUID] = set()
 # Множество AI агентов по комнатам (для поддержки нескольких персональных агентов)
 _room_agents: dict[UUID, set[UUID]] = defaultdict(set)
+# Кэш готового summary (одно на комнату)
+_room_summary_cache: dict[UUID, SummaryResult] = {}
+# Кому уже доставлено summary (персонально)
+_room_summary_served: dict[UUID, set[UUID]] = defaultdict(set)
+# Владелец агента: conn_id агента -> user_id владельца
+_agent_owner: dict[UUID, UUID] = {}
+# Локи генерации per комната
+_room_summary_locks: dict[UUID, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
 async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, reason: str, *,
@@ -48,9 +57,49 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
     # 1) отправить несколько chat сообщений;
     # 2) имитировать наличие voice транскрипта в voice_coll;
     # 3) отправить agent_summary и проверить одноразовую отправку.
-    if room_uuid in _room_summary_finalized:
-        print(f"[summary] Already finalized room={original_room_id}")
-        return
+    # Лок per-комната чтобы не делать параллельные генерации
+    lock = _room_summary_locks[room_uuid]
+    async with lock:
+        # Если уже есть готовый summary в кэше — просто доставим тем, кому не доставляли (если есть инициатор)
+        cached = _room_summary_cache.get(room_uuid)
+        if cached is not None:
+            # Определяем целевых пользователей: инициатор или все владельцы агентов
+            targets: set[UUID] = set()
+            if initiator_user_id:
+                targets.add(initiator_user_id)
+            else:
+                # все владельцы агентов комнаты
+                for aid in _room_agents.get(room_uuid, set()):
+                    owner = _agent_owner.get(aid)
+                    if owner:
+                        targets.add(owner)
+            if not targets:
+                print(f"[summary] Cached summary exists room={original_room_id} but no targets identified")
+                return
+            served = _room_summary_served[room_uuid]
+            pending = [u for u in targets if u not in served]
+            if not pending:
+                print(f"[summary] Cached summary already served to all targets room={original_room_id}")
+                return
+            # Отправляем тем, кто ещё не получил
+            settings = get_settings()
+            if settings.TELEGRAM_BOT_TOKEN:
+                for uid in pending:
+                    try:
+                        chat_id = None
+                        if session is not None:
+                            chat_id = await get_confirmed_chat_id(session, uid)
+                        if not chat_id:
+                            continue
+                        text = (
+                            f"Room {cached.room_id} завершена (trigger={reason}, cached). Сообщений: {cached.message_count}.\n--- Summary ---\n{cached.summary_text}"
+                        )
+                        await tg_send_message(text, chat_ids=[chat_id], session=session)
+                        served.add(uid)
+                        print(f"[summary] Cached summary delivered user={uid} room={original_room_id}")
+                    except Exception as e:
+                        print(f"[summary] Cached summary send failed user={uid} room={original_room_id} err={e}")
+            return
     settings = get_settings()
     v = None
     # Ожидаем до ~6с появления транскрипта (poll каждые 300мс)
@@ -109,23 +158,39 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
         except Exception as e:
             print(f"[summary] Force-add transcript failed room={original_room_id} err={e}")
     if summary:
-        if settings.TELEGRAM_BOT_TOKEN:
-            try:
-                text = (
-                    f"Room {summary.room_id} завершена (trigger={reason}). Источник: {'voice' if (v and v.text and not v.text.startswith('(no audio')) else 'chat'}. Сообщений: {summary.message_count}.\n"
-                    f"--- Summary ---\n{summary.summary_text}"
-                )
-                # Получаем персональные chat_id: если указан инициатор — только ему, иначе всем подтверждённым.
-                chat_ids: list[str] | None = None
-                if initiator_user_id and session is not None:
-                    single = await get_confirmed_chat_id(session, initiator_user_id)
-                    if single:
-                        chat_ids = [single]
-                await tg_send_message(text, chat_ids=chat_ids, session=session)
-                print(f"[summary] Telegram sent for room {original_room_id} trigger={reason}")
-            except Exception as e:
-                print(f"[summary] Telegram send failed: {e}")
-        _room_summary_finalized.add(room_uuid)
+        # Кладём в кэш
+        _room_summary_cache[room_uuid] = summary
+        # Формируем набор целевых пользователей: инициатор или владельцы всех агентов
+        targets: set[UUID] = set()
+        if initiator_user_id:
+            targets.add(initiator_user_id)
+        else:
+            for aid in _room_agents.get(room_uuid, set()):
+                owner = _agent_owner.get(aid)
+                if owner:
+                    targets.add(owner)
+        sent_any = False
+        if settings.TELEGRAM_BOT_TOKEN and targets:
+            for uid in targets:
+                if uid in _room_summary_served[room_uuid]:
+                    continue
+                try:
+                    chat_id = None
+                    if session is not None:
+                        chat_id = await get_confirmed_chat_id(session, uid)
+                    if not chat_id:
+                        continue
+                    text = (
+                        f"Room {summary.room_id} завершена (trigger={reason}). Источник: {'voice' if (v and v.text and not v.text.startswith('(no audio')) else 'chat'}. Сообщений: {summary.message_count}.\n--- Summary ---\n{summary.summary_text}"
+                    )
+                    await tg_send_message(text, chat_ids=[chat_id], session=session)
+                    _room_summary_served[room_uuid].add(uid)
+                    sent_any = True
+                    print(f"[summary] Telegram sent user={uid} room={original_room_id} trigger={reason}")
+                except Exception as e:
+                    print(f"[summary] Telegram send failed user={uid} room={original_room_id} err={e}")
+        if sent_any:
+            _room_summary_finalized.add(room_uuid)
     else:
         # Fallback: даже если нет сообщений, отправим минимальное уведомление, чтобы пользователь понял что завершение состоялось
         print(f"[summary] Nothing to summarize room={original_room_id} trigger={reason} pre_count={pre_count}; sending minimal fallback.")
@@ -317,6 +382,8 @@ async def ws_room(
                 _display_names[conn_id] = uname
                 if is_agent:
                     _room_agents[room_uuid].add(conn_id)
+                    if account_uid is not None:
+                        _agent_owner[conn_id] = account_uid
                 # broadcast presence list to room (with id->name map)
                 members = [str(u) for u in sorted(_room_members[room_uuid], key=str)]
                 names = { str(uid): _display_names.get(uid, str(uid)[:8]) for uid in _room_members[room_uuid] }
@@ -452,6 +519,9 @@ async def ws_room(
                     _room_agents[room_uuid].remove(uid)
                     if not _room_agents[room_uuid]:
                         _room_agents.pop(room_uuid, None)
+                # owner mapping
+                if uid in _agent_owner:
+                    _agent_owner.pop(uid, None)
             
             members = [str(u) for u in sorted(_room_members[room_uuid], key=str)]
             names = { str(mid): _display_names.get(UUID(mid), mid[:8]) if isinstance(mid, str) else _display_names.get(mid, str(mid)[:8]) for mid in _room_members[room_uuid] }
