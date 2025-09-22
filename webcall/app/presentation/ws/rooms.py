@@ -33,6 +33,8 @@ _room_members: dict[UUID, set[UUID]] = defaultdict(set)
 _display_names: dict[UUID, str] = {}
 # Однократная финализация summary по комнате (manual trigger)
 _room_summary_finalized: set[UUID] = set()
+# Множество AI агентов по комнатам (для поддержки нескольких персональных агентов)
+_room_agents: dict[UUID, set[UUID]] = defaultdict(set)
 
 
 async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, reason: str, *,
@@ -276,9 +278,18 @@ async def ws_room(
                     # if invalid id, skip presence for this socket
                     continue
 
-                # Если это AI агент – переопределим на детерминированный UUID чтобы не плодить лишние peer соединения при переподключениях
+                # Если это AI агент – используем детерминированный UUID зависящий от комнаты и пользователя (если есть)
                 if is_agent:
-                    conn_id = uuid5(NAMESPACE_URL, f"webcall:agent:{room_uuid}")
+                    temp_account_uid: UUID | None = None
+                    if token:
+                        with contextlib.suppress(Exception):
+                            payload = tokens.decode_token(token)
+                            uid_str = payload.get("sub")
+                            temp_account_uid = UUID(uid_str) if uid_str else None
+                    if temp_account_uid:
+                        conn_id = uuid5(NAMESPACE_URL, f"webcall:agent:{room_uuid}:{temp_account_uid}")
+                    else:
+                        conn_id = uuid5(NAMESPACE_URL, f"webcall:agent:{room_uuid}")  # fallback общий
                     data["username"] = data.get("username") or "AI AGENT"
 
                 # Try to attach real username from token subject
@@ -298,12 +309,18 @@ async def ws_room(
 
                 _ws_conn[websocket] = conn_id
                 _room_members[room_uuid].add(conn_id)
-                uname = (data.get("username") or real_name or ("AI AGENT" if is_agent else str(conn_id)[:8]))
+                uname_base = (data.get("username") or real_name or ("AI AGENT" if is_agent else str(conn_id)[:8]))
+                if is_agent and real_name:
+                    uname = f"AI-{real_name}"[:32]
+                else:
+                    uname = uname_base
                 _display_names[conn_id] = uname
+                if is_agent:
+                    _room_agents[room_uuid].add(conn_id)
                 # broadcast presence list to room (with id->name map)
                 members = [str(u) for u in sorted(_room_members[room_uuid], key=str)]
                 names = { str(uid): _display_names.get(uid, str(uid)[:8]) for uid in _room_members[room_uuid] }
-                agent_ids = [str(u) for u in _room_members[room_uuid] if str(u).startswith(str(uuid5(NAMESPACE_URL, f"webcall:agent:{room_uuid}")).split('-')[0])]
+                agent_ids = [str(a) for a in sorted(_room_agents.get(room_uuid, set()), key=str)]
                 for ws in list(_room_clients.get(room_uuid, set())):
                     with contextlib.suppress(Exception):
                         await ws.send_json({"type": "presence", "users": members, "userNames": names, "agentIds": agent_ids})
@@ -429,12 +446,19 @@ async def ws_room(
             if uid not in _room_members.get(room_uuid, set()):
                 with contextlib.suppress(KeyError):
                     _display_names.pop(uid)
+            # Если это агент — удаляем из структуры агентов
+            with contextlib.suppress(Exception):
+                if uid in _room_agents.get(room_uuid, set()):
+                    _room_agents[room_uuid].remove(uid)
+                    if not _room_agents[room_uuid]:
+                        _room_agents.pop(room_uuid, None)
             
             members = [str(u) for u in sorted(_room_members[room_uuid], key=str)]
             names = { str(mid): _display_names.get(UUID(mid), mid[:8]) if isinstance(mid, str) else _display_names.get(mid, str(mid)[:8]) for mid in _room_members[room_uuid] }
+            agent_ids = [str(a) for a in sorted(_room_agents.get(room_uuid, set()), key=str)]
             for ws in list(_room_clients.get(room_uuid, set())):
                 with contextlib.suppress(Exception):
-                    await ws.send_json({"type": "presence", "users": members, "userNames": names, "agentIds": []})
+                    await ws.send_json({"type": "presence", "users": members, "userNames": names, "agentIds": agent_ids})
 
         # try to mark DB participation left_at for authenticated user
         if token:
