@@ -43,43 +43,16 @@ services:
       - TURN_PASSWORD=${TURN_PASSWORD}
       - TURN_PUBLIC_IP=${TURN_PUBLIC_IP}
       - TURN_CLI_PASSWORD=${TURN_CLI_PASSWORD:-changeme}
-    # Передаём параметры явно через CLI, чтобы переменные окружения применялись напрямую.
-    # Убрали -n (no config) + статический конфиг с плейсхолдерами.
-    # Включаем long-term credentials и fingerprint.
-    command:
-      - turnserver
-      - --lt-cred-mech
-      - --realm
-      - ${TURN_REALM}
-      - --user
-      - ${TURN_USERNAME}:${TURN_PASSWORD}
-      - --listening-port
-      - "3478"
-      - --min-port
-      - "49152"
-      - --max-port
-      - "49200"
-      - --external-ip
-      - ${TURN_PUBLIC_IP}
-      - --fingerprint
-      - --log-file
-      - stdout
-      - --no-tlsv1
-      - --no-tlsv1_1
-      - --no-loopback-peers
-      - --no-loopback-relays
-      - --cli-password
-      - ${TURN_CLI_PASSWORD:-changeme}
-      # - --verbose  # раскомментируй для отладки
+    # Передаём параметры явно: coturn не интерполирует переменные в конфиге
+    command: ["/bin/sh","-c","turnserver -c /etc/coturn/turnserver.conf --log-file=stdout -n --realm=$TURN_REALM --user=$TURN_USERNAME:$TURN_PASSWORD ${TURN_PUBLIC_IP:+--external-ip=$TURN_PUBLIC_IP} --cli-password=$TURN_CLI_PASSWORD"]
     ports:
       - "3478:3478/udp"
       - "3478:3478/tcp"
       - "49152-49200:49152-49200/udp"
       # - "9641:9641" # (опционально) Prometheus metrics if enabled
-    # При желании можно вернуть файл и убрать часть параметров — тогда не используйте -n и обеспечьте подстановку значений.
-    # volumes:
-    #   - ./docker/turnserver.conf:/etc/coturn/turnserver.conf:ro
-    #   - ./certs:/certs:ro  # (опционально) TLS certs for TURN
+    volumes:
+      - ./docker/turnserver.conf:/etc/coturn/turnserver.conf:ro
+      # - ./certs:/certs:ro  # (опционально) TLS certs for TURN
 
   prometheus:
     image: prom/prometheus:v2.53.0

@@ -146,6 +146,37 @@ AI_MODEL_FALLBACK=gpt-4o-mini
 Во фронтенде в панели настроек доступно поле редактирования prompt с кнопками "Сохранить" и "Сброс". Если ввести дефолтный текст без изменений — он не дублируется в БД (поле очищается).
 
 При генерации summary (OpenAI провайдер) если инициатор ручного триггера имеет кастомный prompt — он используется как system message вместо дефолта.
+
+## Настройка TURN (coturn)
+
+Если в логах coturn появляется ошибка вида:
+
+```
+ERROR: session ... check_stun_auth: Cannot find credentials of user <webcall>
+```
+
+Причины и решение:
+
+1. Клиент (браузер / WebRTC) использует long-term auth и шлёт `username=webcall`, но сервер не знает пользователя.
+2. В исходной версии конфиг `turnserver.conf` содержал плейсхолдеры `${TURN_USERNAME}` и др. — coturn НЕ подставляет переменные окружения внутри файла.
+
+Актуальная схема:
+
+* В `docker-compose.yml` параметры пробрасываются через команду запуска: `--realm=... --user=USERNAME:PASSWORD --external-ip=...`.
+* Файл `turnserver.conf` содержит только статические опции (порты/флаги).
+
+Проверь, что переменные окружения заданы в `.env`:
+
+```
+TURN_REALM=example.com
+TURN_USERNAME=webcall
+TURN_PASSWORD=strongsecret
+TURN_PUBLIC_IP=YOUR_PUBLIC_IP
+TURN_CLI_PASSWORD=adminpass
+```
+
+И что клиент действительно использует те же `username`/`credential`. Если используется динамическая авторизация — нужно реализовать REST API или `userdb`, но для простоты сейчас применяется статический пользователь.
+
 5. При ручном триггере AI summary сервер отправляет отчёт ТОЛЬКО инициатору (его `chat_id`). Если привязки нет — пытается отправить всем подтверждённым (глобальный broadcast) или, в качестве устаревшего fallback, в `TELEGRAM_CHAT_ID`.
 
 ## Миграции / устранение multiple heads
