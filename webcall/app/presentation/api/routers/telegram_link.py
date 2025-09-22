@@ -22,11 +22,14 @@ class LinkCreateOut(BaseModel):
 
 @router.post("/link", response_model=LinkCreateOut)
 async def create_link(session: AsyncSession = Depends(get_db_session), current_user=Depends(get_current_user)):
+    bot_name = (settings.TELEGRAM_BOT_NAME or "").strip()
+    if not bot_name:
+        raise HTTPException(status_code=500, detail="TELEGRAM_BOT_NAME is not configured on server")
+    if bot_name.startswith("@"):
+        raise HTTPException(status_code=400, detail="TELEGRAM_BOT_NAME must be provided without '@'")
     link = await create_or_refresh_link(session, current_user.id)
     await session.commit()
-    bot_name = settings.TELEGRAM_BOT_NAME or ""
-    # Формат deep-link: https://t.me/<bot>?start=<token>
-    deeplink = f"https://t.me/{bot_name}?start={link.token}" if bot_name else link.token
+    deeplink = f"https://t.me/{bot_name}?start={link.token}"
     return LinkCreateOut(token=link.token, deeplink=deeplink, expires_at=link.expires_at.isoformat())
 
 
@@ -64,3 +67,34 @@ async def webhook(data: WebhookIn, session: AsyncSession = Depends(get_db_sessio
             await session.commit()
             return {"ok": True, "linked": True}
     return {"ok": True}
+
+
+@router.get("/selftest")
+async def telegram_selftest():
+    """Проверка доступности Bot API и соответствия username.
+
+    Возвращает краткий JSON; не делает побочных эффектов.
+    """
+    import httpx
+    bot_token = settings.TELEGRAM_BOT_TOKEN
+    bot_name = settings.TELEGRAM_BOT_NAME
+    if not bot_token:
+        raise HTTPException(500, detail="TELEGRAM_BOT_TOKEN not set")
+    url = f"https://api.telegram.org/bot{bot_token}/getMe"
+    try:
+        r = httpx.get(url, timeout=10)
+    except Exception as e:
+        raise HTTPException(502, detail=f"Network error: {e.__class__.__name__}") from e
+    try:
+        data = r.json()
+    except Exception:
+        raise HTTPException(500, detail=f"Non-JSON response status={r.status_code}")
+    if not data.get("ok"):
+        return {"ok": False, "error": data}
+    api_username = data.get("result", {}).get("username")
+    return {
+        "ok": True,
+        "api_username": api_username,
+        "configured_name": bot_name,
+        "match": (api_username or "").lower() == (bot_name or "").lower(),
+    }
