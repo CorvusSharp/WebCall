@@ -33,6 +33,7 @@ from ..presentation.api.routers import friends as friends_router
 from ..presentation.api.routers import push as push_router
 from ..presentation.api.routers import users as users_router
 from ..presentation.api.routers import direct as direct_router
+from ..presentation.api.routers import telegram_link as telegram_router
 from ..presentation.api.deps.containers import (
     get_user_repo,
     get_room_repo,
@@ -223,6 +224,8 @@ def create_app() -> FastAPI:
     app.include_router(push_router.router)
     app.include_router(users_router.router)
     app.include_router(direct_router.router)
+    app.include_router(telegram_router.router)
+    logging.getLogger("app.startup").info("Telegram routes registered")
 
     # WS
     app.include_router(ws_rooms.router)
