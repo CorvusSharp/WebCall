@@ -521,7 +521,7 @@ async def ws_room(
                         # Регистрируем окно для новой архитектуры orchestrator
                         try:
                             orchestrator = get_summary_orchestrator()
-                            orchestrator.start_user_window(str(room_uuid), str(account_uid))
+                            await orchestrator.start_user_window(str(room_uuid), str(account_uid))
                         except Exception:
                             pass
                 # broadcast presence list to room (with id->name map)

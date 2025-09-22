@@ -68,7 +68,7 @@ class SummaryOrchestrator:
         sess.add_voice_transcript(transcript)
         logger.info("summary_v2: add_voice_transcript room=%s user=%s chars=%s", room_id, user_id, len(transcript))
 
-    def start_user_window(self, room_id: str, user_id: str) -> None:
+    async def start_user_window(self, room_id: str, user_id: str) -> None:
         """Старт (или перезапуск) персонального окна пользователя."""
         key = (room_id, user_id)
         # перезапуск должен сбросить старую сессию
@@ -82,19 +82,7 @@ class SummaryOrchestrator:
         sess = UserAgentSession(room_id=room_id, user_id=user_id)
         self._sessions[key] = sess
         self._room_sessions.setdefault(room_id, []).append(sess)
-        # Заполняем стартовыми сообщениями после старта? Нет — нужны только будущие сообщения согласно требованию независимости.
-        # Попробуем сразу подтянуть уже готовую персональную voice транскрипцию (если пользователь успел говорить до старта агента)
-        try:
-            vc = get_voice_collector()
-            # ключ формата room:user (см. voice_capture)
-            voice_key = f"{room_id}:{user_id}"
-            with contextlib.suppress(Exception):
-                vt = await vc.get_transcript(voice_key)  # type: ignore
-                if vt and getattr(vt, 'text', None) and len(vt.text.strip()) > 0:
-                    sess.add_voice_transcript(vt.text.strip())
-                    logger.info("summary_v2: preload voice transcript for room=%s user=%s len=%s", room_id, user_id, len(vt.text))
-        except Exception:
-            pass
+        # Авто-прелоад voice транскрипта превращаем в ленивый (будет в build_personal_summary) чтобы не делать async вызов тут.
 
     def end_user_window(self, room_id: str, user_id: str) -> None:
         key = (room_id, user_id)
