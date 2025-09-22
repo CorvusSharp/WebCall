@@ -26,6 +26,7 @@ export class WebRTCManager {
   close(...a){ return this._client.close(...a); }
   setPreferredDevices(...a){ return this._client.setPreferredDevices(...a); }
   getOutputDeviceId(...a){ return this._client.getOutputDeviceId(...a); }
+  bindPeerMedia(...a){ return this._client.bindPeerMedia(...a); }
 
   // === Back-compat property proxies (старый код обращается к этим полям напрямую) ===
   get peers(){ return this._client.peers; }
