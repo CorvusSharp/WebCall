@@ -21,7 +21,7 @@ export const els = {
   micSel: document.getElementById('micSel'),
   camSel: document.getElementById('camSel'),
   spkSel: document.getElementById('spkSel'),
-  btnDiag: document.getElementById('btnDiag'),
+  btnAiAgent: document.getElementById('btnAiAgent'),
   btnToggleTheme: document.getElementById('btnToggleTheme'),
   btnLogout: document.getElementById('btnLogout'),
   currentUserBadge: document.getElementById('currentUserBadge'),

@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     TELEGRAM_CHAT_ID: str | None = None  # целевой chat/channel id для получения выжимок
     OPENAI_API_KEY: str | None = None  # ключ OpenAI (НЕ хранить в репо)
     AI_MODEL_FALLBACK: str | None = None  # запасная модель если основная недоступна
+    # Voice capture / ASR
+    VOICE_CAPTURE_ENABLED: bool = False
+    VOICE_CHUNK_MAX_MS: int = 5000  # длительность сегмента MediaRecorder
+    VOICE_ASR_MODEL: str = "whisper-1"  # модель для распознавания (OpenAI)
+    VOICE_MAX_TOTAL_MB: int = 30  # ограничение на суммарный объём аудиоданных
 
 
 @lru_cache()

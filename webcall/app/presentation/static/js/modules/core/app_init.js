@@ -24,6 +24,7 @@ import { checkAndRequestPermissionsInitial, updatePermBanner } from '../permissi
 import { initPush } from '../push_subscribe.js';
 import { bus } from './event_bus.js';
 import { startStatsLoop, stopStatsLoop, formatBitrate } from '../stats.js';
+import { VoiceCaptureMixer } from '../voice/capture_mixer.js';
 
 // ===== Helpers =====
 function log(msg){ appendLog(els.logs, msg); }
@@ -898,7 +899,82 @@ function setupUI(){
   els.btnToggleMic?.addEventListener('click', async ()=>{ if (!appState.rtc) return; const enabled = await appState.rtc.toggleMic(); els.btnToggleMic.textContent = enabled ? 'Выкл.микро' : 'Вкл.микро'; });
   els.btnToggleCam?.addEventListener('click', async ()=>{ if (!appState.rtc) return; const on = await appState.rtc.toggleCameraStream(); els.btnToggleCam.textContent = on ? '🎥 Камера выкл' : '🎥 Камера'; });
   els.btnScreenShare?.addEventListener('click', async ()=>{ if (!appState.rtc) return; const sharing = await appState.rtc.toggleScreenShare(); els.btnScreenShare.textContent = sharing ? '🛑 Остановить' : '🖥 Экран'; });
-  els.btnDiag?.addEventListener('click', ()=> appState.rtc?.diagnoseAudio());
+  // === AI Agent toggle ===
+  els.btnAiAgent?.addEventListener('click', async () => {
+    if (!appState.currentRoomId){ log('AI Agent: сначала подключитесь к комнате'); return; }
+    if (!appState._aiAgent){
+      // Подключаем
+      try {
+        const agentId = crypto.randomUUID();
+        const token = localStorage.getItem('wc_token');
+        const ws = buildWs(appState.currentRoomId, token);
+        appState._aiAgent = { ws, id: agentId, active: true };
+        log(`AI Agent: подключение (id=${agentId})...`);
+        // Инициализируем голосовой захват если включено
+        try {
+          if (!appState.voiceMixer){
+            appState.voiceMixer = new VoiceCaptureMixer({
+              getPeers: ()=> appState.rtc?.peers,
+              getLocalStream: ()=> appState.rtc?.localStream,
+              chunkMs: 5000,
+              onLog: (m)=> log(m),
+              onChunk: (bytes, meta)=>{
+                // Отправим в будущем во второй WS voice_capture (пока заглушка лог)
+                // TODO: интеграция с voice capture WS
+                // log(`Voice chunk ${bytes.length}b`);
+                try {
+                  if (appState._voiceWs && appState._voiceWs.readyState === WebSocket.OPEN){
+                    appState._voiceWs.send(bytes);
+                  }
+                } catch {}
+              }
+            });
+          }
+          // Открываем WS для потоковой передачи аудио (MVP один канал)
+          if (!appState._voiceWs){
+            const base = location.origin.replace('http','ws');
+            const url = `${base}/ws/voice_capture/${encodeURIComponent(appState.currentRoomId)}?token=${encodeURIComponent(token||'')}`;
+            appState._voiceWs = new WebSocket(url);
+            appState._voiceWs.binaryType = 'arraybuffer';
+            appState._voiceWs.onopen = () => {
+              log('VoiceCapture WS открыт');
+              try { appState._voiceWs.send(JSON.stringify({ type:'start', roomId: appState.currentRoomId, ts: Date.now() })); } catch {}
+              try { appState.voiceMixer.start(); } catch {}
+            };
+            appState._voiceWs.onclose = () => { log('VoiceCapture WS закрыт'); try { appState.voiceMixer?.stop(); } catch {}; appState._voiceWs = null; };
+            appState._voiceWs.onerror = () => { log('VoiceCapture WS ошибка'); };
+          } else {
+            try { appState.voiceMixer.start(); } catch {}
+          }
+        } catch(e){ log(`VoiceMixer init error: ${e}`); }
+        ws.onopen = () => {
+          log('AI Agent: WS открыт');
+          try { ws.send(JSON.stringify({ type:'join', fromUserId: agentId, username: 'AI AGENT' })); } catch {}
+          els.btnAiAgent?.classList.add('btn-media-active');
+          els.btnAiAgent.textContent = 'AI Agent ✓';
+        };
+        ws.onmessage = ev => {
+          try {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === 'signal'){ /* агент сейчас пассивен */ }
+            else if (msg.type === 'chat'){ /* не реагируем */ }
+          } catch {}
+        };
+        ws.onclose = ev => { log(`AI Agent: закрыт (${ev.code})`); if (appState._aiAgent){ appState._aiAgent.active = false; appState._aiAgent = null; } els.btnAiAgent?.classList.remove('btn-media-active'); els.btnAiAgent && (els.btnAiAgent.textContent='AI Agent'); };
+        ws.onerror = e => { log('AI Agent: ошибка WS'); };
+      } catch (e){ log(`AI Agent: ошибка подключения: ${e}`); }
+    } else {
+      // Отключаем
+      try { appState._aiAgent.ws.close(1000, 'manual'); } catch {}
+      appState._aiAgent = null;
+      els.btnAiAgent?.classList.remove('btn-media-active');
+      if (els.btnAiAgent) els.btnAiAgent.textContent='AI Agent';
+      log('AI Agent: отключен пользователем');
+      // Остановка voice capture
+      try { if (appState._voiceWs && appState._voiceWs.readyState === WebSocket.OPEN){ appState._voiceWs.send(JSON.stringify({ type:'stop' })); appState._voiceWs.close(); } } catch {}
+      try { appState.voiceMixer?.stop(); } catch {}
+    }
+  });
   els.btnToggleTheme?.addEventListener('click', ()=>{
     // Цикл тем: light -> dark -> red -> light (визуально один кружок меняет цвет)
     const body = document.body;

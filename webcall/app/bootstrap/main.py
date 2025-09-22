@@ -45,6 +45,7 @@ from ..presentation.api.deps.containers import (
 )
 from ..presentation.ws import rooms as ws_rooms
 from ..presentation.ws import friends as ws_friends
+from ..presentation.ws import voice_capture as ws_voice
 from ..presentation.api.deps.db import get_db_session
 from ..infrastructure.db.repositories.users import PgUserRepository
 from ..infrastructure.db.repositories.rooms import PgRoomRepository
@@ -226,6 +227,7 @@ def create_app() -> FastAPI:
     # WS
     app.include_router(ws_rooms.router)
     app.include_router(ws_friends.router)
+    app.include_router(ws_voice.router)
 
     # Static demo — use absolute path to avoid cwd-related issues and accidental exposure
     static_dir = str(Path(__file__).resolve().parent.parent.joinpath('presentation', 'static'))

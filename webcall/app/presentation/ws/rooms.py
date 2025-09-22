@@ -11,6 +11,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from ...infrastructure.config import get_settings
 from ...infrastructure.services.summary import get_summary_collector
+from ...infrastructure.services.voice_transcript import get_voice_collector
 from ...infrastructure.services.ai_provider import get_ai_provider
 from ...infrastructure.services.telegram import send_message as tg_send_message
 
@@ -109,6 +110,7 @@ async def ws_room(
 
     collector = get_summary_collector()
     ai_provider = None
+    voice_coll = get_voice_collector()
     with contextlib.suppress(Exception):  # AI провайдер не критичен
         ai_provider = get_ai_provider()
 
@@ -308,13 +310,25 @@ async def ws_room(
 
         # Попытка финализации summary (делаем после DB cleanup)
         with contextlib.suppress(Exception):
-            summary = await collector.summarize(str(room_uuid), ai_provider)
+            # Попытка получить голосовой транскрипт (приоритет над чатом)
+            v = await voice_coll.pop_transcript(str(room_uuid))
+            if v:
+                # оборачиваем как будто это набор сообщений
+                pseudo_messages = v.text.splitlines() if v.text else []
+                # Временный одноразовый AI провайдер вызов через collector (hack):
+                from ...infrastructure.services.summary import SummaryCollector
+                temp = SummaryCollector()
+                # эмулируем add_message
+                for line in pseudo_messages:
+                    await temp.add_message(str(room_uuid), None, 'voice', line)
+                summary = await temp.summarize(str(room_uuid), ai_provider)
+            else:
+                summary = await collector.summarize(str(room_uuid), ai_provider)
             if summary:
                 settings = get_settings()
                 if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID:
-                    # Формируем текст для Telegram
                     text = (
-                        f"Room {summary.room_id} завершена. Сообщений: {summary.message_count}.\n"
+                        f"Room {summary.room_id} завершена. Источник: {'voice' if v else 'chat'}. Сообщений: {summary.message_count}.\n"
                         f"--- Summary ---\n{summary.summary_text}"
                     )
                     await tg_send_message(text)
