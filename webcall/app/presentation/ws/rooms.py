@@ -50,6 +50,10 @@ _user_manual_summary_served: set[tuple[UUID, UUID]] = set()
 _room_participant_users: dict[UUID, set[UUID]] = defaultdict(set)
 # Архив последних сообщений комнаты (для персональных запросов после группового destructive summarize)
 _room_messages_archive: dict[UUID, list] = {}
+# Персистентный процессовый лог всех чат сообщений (не destructive)
+_room_message_log: dict[UUID, list] = defaultdict(list)
+# Время старта персонального агента для пользователя в комнате (ms epoch)
+_room_agent_start: dict[tuple[UUID, UUID], int] = {}
 
 
 async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, reason: str, *,
@@ -96,6 +100,28 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
             if archived:
                 msgs_snapshot = list(archived)
                 print(f"[summary] Personal fallback uses archived messages room={original_room_id} count={len(msgs_snapshot)}")
+        # Попытка заменить snapshot на персистентный лог (он содержит ВСЮ историю, не удалённую первым summarize)
+        try:
+            from ...infrastructure.services.summary import ChatMessage as _CM
+            log_msgs = _room_message_log.get(room_uuid)
+            if log_msgs:
+                # Конвертируем (если типы совпадают — уже ChatMessage). Ограничим глубину до последних 1000.
+                log_tail = list(log_msgs)[-1000:]
+                # Отсечь по времени старта агента пользователя
+                start_key = (room_uuid, initiator_user_id)
+                start_ts = _room_agent_start.get(start_key)
+                if start_ts:
+                    filtered = [m for m in log_tail if getattr(m, 'ts', 0) >= start_ts]
+                    if filtered:
+                        msgs_snapshot = filtered
+                        print(f"[summary] Personal summary uses message_log filtered count={len(filtered)} start_ts={start_ts} room={original_room_id}")
+                else:
+                    # Нет отметки старта — используем весь лог (но если snapshot уже есть — приоритет snapshot только если он длиннее)
+                    if len(log_tail) > len(msgs_snapshot):
+                        msgs_snapshot = log_tail
+                        print(f"[summary] Personal summary uses entire message_log count={len(log_tail)} room={original_room_id}")
+        except Exception as e:
+            print(f"[summary] Personal message_log integration failed room={original_room_id} err={e}")
         # Если есть voice транскрипт предпочтём его как отдельный flow (как раньше) — добавим его предложения временно
         v_snap = None
         with contextlib.suppress(Exception):
@@ -476,6 +502,9 @@ async def ws_room(
                     _room_agents[room_uuid].add(conn_id)
                     if account_uid is not None:
                         _agent_owner[conn_id] = account_uid
+                        # Фиксируем точку старта персонального окна для владельца агента (ms epoch)
+                        import time as _t
+                        _room_agent_start[(room_uuid, account_uid)] = int(_t.time()*1000)
                 # broadcast presence list to room (with id->name map)
                 members = [str(u) for u in sorted(_room_members[room_uuid], key=str)]
                 names = { str(uid): _display_names.get(uid, str(uid)[:8]) for uid in _room_members[room_uuid] }
@@ -536,6 +565,19 @@ async def ws_room(
                 # Сбор для последующей выжимки
                 with contextlib.suppress(Exception):
                     await collector.add_message(str(room_uuid), author_id, author_name, content or "")
+                    # Добавляем в персистентный лог
+                    try:
+                        from ...infrastructure.services.summary import ChatMessage as _CM
+                        import time as _t
+                        ts_now = int(_t.time()*1000)
+                        _room_message_log[room_uuid].append(_CM(room_id=str(room_uuid), author_id=author_id, author_name=author_name, content=(content or "").strip(), ts=ts_now))
+                        # Ограничим лог (хвост) до 2000 сообщений чтобы не рос бесконечно
+                        if len(_room_message_log[room_uuid]) > 2000:
+                            overflow = len(_room_message_log[room_uuid]) - 2000
+                            if overflow > 0:
+                                del _room_message_log[room_uuid][0:overflow]
+                    except Exception:
+                        pass
 
                 if isinstance(bus, RedisSignalBus):
                     # Publish to Redis channel so all processes deliver the message
