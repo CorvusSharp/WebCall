@@ -27,5 +27,12 @@ AsyncSessionLocal = sessionmaker(bind=ENGINE, class_=AsyncSession, expire_on_com
 
 @asynccontextmanager
 async def get_session() -> AsyncIterator[AsyncSession]:
+    """Базовый контекстный менеджер для получения AsyncSession (основной)."""
     async with AsyncSessionLocal() as session:  # type: ignore[misc]
         yield session
+
+
+# Backward compatibility alias expected by some imports (presentation.ws.rooms)
+async def get_db_session() -> AsyncIterator[AsyncSession]:  # pragma: no cover - thin wrapper
+    async with get_session() as s:  # type: ignore[misc]
+        yield s
