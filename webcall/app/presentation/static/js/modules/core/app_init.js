@@ -905,9 +905,22 @@ function setupUI(){
     if (!appState._aiAgent){
       // Подключаем
       try {
-        const agentId = crypto.randomUUID();
         const token = localStorage.getItem('wc_token');
-        const ws = buildWs(appState.currentRoomId, token);
+        // Детерминированный UUID агента на стороне клиента, синхронно с серверной формулой (uuid5 по namespace URL недоступен тут, поэтому просто локально генерируем и кешируем на комнату)
+        // Сервер всё равно переопределит на свой стабильный UUID для room+agent
+        const agentId = (()=>{
+          try {
+            const key = 'wc_agent_id_'+appState.currentRoomId;
+            let v = sessionStorage.getItem(key);
+            if (!v){ v = crypto.randomUUID(); sessionStorage.setItem(key, v); }
+            return v;
+          } catch { return crypto.randomUUID(); }
+        })();
+        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+        const url = new URL(`${proto}://${location.host}/ws/rooms/${encodeURIComponent(appState.currentRoomId)}`);
+        if (token) url.searchParams.set('token', token);
+        url.searchParams.set('agent','1');
+        const ws = new WebSocket(url.toString());
         appState._aiAgent = { ws, id: agentId, active: true };
         log(`AI Agent: подключение (id=${agentId})...`);
         // Инициализируем голосовой захват если включено
