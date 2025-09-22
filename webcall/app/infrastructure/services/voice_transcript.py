@@ -50,6 +50,11 @@ class VoiceTranscriptCollector:
         async with self._lock:
             return self._transcripts.pop(room_id, None)
 
+    async def get_transcript(self, room_id: str) -> VoiceTranscript | None:
+        """Вернёт транскрипт без удаления (для повторной проверки готовности)."""
+        async with self._lock:
+            return self._transcripts.get(room_id)
+
 
 _voice_collector_singleton: VoiceTranscriptCollector | None = None
 

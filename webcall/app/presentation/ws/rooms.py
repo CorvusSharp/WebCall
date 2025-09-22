@@ -47,9 +47,17 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
         return
     settings = get_settings()
     v = None
-    with contextlib.suppress(Exception):
-        # Пытаемся забрать транскрипт (voice_capture уже должен быть остановлен)
-        v = await voice_coll.pop_transcript(str(room_uuid)) or await voice_coll.pop_transcript(original_room_id)
+    # Ожидаем до ~6с появления транскрипта (poll каждые 300мс)
+    for attempt in range(20):
+        with contextlib.suppress(Exception):
+            v = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(original_room_id)
+        if v:  # готов
+            break
+        await asyncio.sleep(0.3)
+    # Если получили – извлекаем (pop) чтобы не использовать повторно
+    if v:
+        with contextlib.suppress(Exception):
+            v = await voice_coll.pop_transcript(str(room_uuid)) or await voice_coll.pop_transcript(original_room_id)
     from ...infrastructure.services.summary import SummaryCollector
     summary = None
     if v and v.text and not v.text.startswith('(no audio'):
@@ -82,9 +90,9 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                 print(f"[summary] Telegram sent for room {original_room_id} trigger={reason}")
             except Exception as e:
                 print(f"[summary] Telegram send failed: {e}")
+        _room_summary_finalized.add(room_uuid)
     else:
-        print(f"[summary] Nothing to summarize room={original_room_id} trigger={reason}")
-    _room_summary_finalized.add(room_uuid)
+        print(f"[summary] Nothing to summarize room={original_room_id} trigger={reason}; not finalizing so it can be retried.")
 
 
 @router.websocket("/ws/rooms/{room_id}")
@@ -326,8 +334,16 @@ async def ws_room(
                 # Ручной триггер от клиента (второй клик на кнопку AI Agent)
                 await websocket.send_json({"type": "agent_summary_ack", "status": "processing"})
                 try:
+                    before_voice = None
+                    with contextlib.suppress(Exception):
+                        before_voice = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(room_id)
                     await _generate_and_send_summary(room_uuid, room_id, "manual", ai_provider=ai_provider, collector=collector, voice_coll=voice_coll)
-                    await websocket.send_json({"type": "agent_summary_ack", "status": "done"})
+                    after_voice = None
+                    with contextlib.suppress(Exception):
+                        after_voice = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(room_id)
+                    src = 'voice' if (before_voice or after_voice) else 'chat'
+                    finalized = room_uuid in _room_summary_finalized
+                    await websocket.send_json({"type": "agent_summary_ack", "status": "done" if finalized else "empty", "source": src, "finalized": finalized})
                 except Exception as e:  # pragma: no cover
                     await websocket.send_json({"type": "agent_summary_ack", "status": "error", "error": str(e)})
                 continue
