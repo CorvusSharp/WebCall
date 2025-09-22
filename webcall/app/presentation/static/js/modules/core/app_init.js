@@ -1343,10 +1343,10 @@ function initSettingsExtras(panel){
     +'<button id="aiPromptSave" class="btn btn-primary" style="flex:1;">Сохранить</button>'
     +'<button id="aiPromptReset" class="btn btn-secondary" style="flex:0 0 auto;">Сброс</button>'
     +'</div>'
-    +'<div style="display:flex;gap:6px;margin-top:6px;">'
-    +'<button id="aiPromptUseDefault" class="btn btn-secondary" style="flex:1;font-size:11px;padding:4px 6px;">Вставить стандартный</button>'
-    +'<button id="aiPromptClear" class="btn btn-secondary" style="flex:0 0 auto;font-size:11px;padding:4px 8px;">Очистить</button>'
-    +'</div>'
+  +'<div style="display:flex;gap:6px;margin-top:6px;">'
+  +'<button id="aiPromptClear" class="btn btn-secondary" style="flex:0 0 auto;font-size:11px;padding:4px 8px;">Очистить</button>'
+  +'<div style="flex:1;font-size:10px;color:#777;align-self:center;text-align:right;">Пустое поле = стандартный</div>'
+  +'</div>'
     +'<div id="aiPromptStatus" style="margin-top:4px;font-size:11px;color:#888;">&nbsp;</div>'
     +'<details id="aiPromptDetails" style="margin-top:6px;">'
       +'<summary style="cursor:pointer;font-size:12px;color:#ccc;">Показать стандартный и итоговый prompt</summary>'
@@ -1383,7 +1383,6 @@ function initSettingsExtras(panel){
   loadPrompt();
   const saveBtn = document.getElementById('aiPromptSave');
   const resetBtn = document.getElementById('aiPromptReset');
-  const useDefaultBtn = document.getElementById('aiPromptUseDefault');
   const clearBtn = document.getElementById('aiPromptClear');
   saveBtn?.addEventListener('click', async ()=>{
     const token = localStorage.getItem('wc_token'); if (!token) return;
@@ -1402,6 +1401,7 @@ function initSettingsExtras(panel){
         const effEl = document.getElementById('aiPromptEffective');
         if (defEl) defEl.textContent = data.default_prompt || '';
         if (effEl) effEl.textContent = data.effective_prompt || (data.prompt || '');
+        if (ta && defEl && data.is_default){ ta.placeholder = defEl.textContent; }
       } catch {}
       showToast('Prompt сохранён', 'info');
     } catch(e){ const stEl2 = document.getElementById('aiPromptStatus'); if (stEl2) stEl2.textContent='Ошибка сохранения'; showToast('Ошибка сохранения prompt', 'error'); }
@@ -1421,26 +1421,23 @@ function initSettingsExtras(panel){
         const effEl = document.getElementById('aiPromptEffective');
         if (defEl) defEl.textContent = data.default_prompt || '';
         if (effEl) effEl.textContent = data.effective_prompt || (data.prompt || '');
+        if (ta && defEl){ ta.placeholder = defEl.textContent; }
       } catch {}
       showToast('Prompt сброшен', 'info');
     } catch(e){ const stEl2 = document.getElementById('aiPromptStatus'); if (stEl2) stEl2.textContent='Ошибка сброса'; showToast('Ошибка сброса prompt', 'error'); }
   });
-  useDefaultBtn?.addEventListener('click', async ()=>{
-    try {
-      const ta = document.getElementById('aiPromptTxt'); if (!ta) return;
-      // Если уже загружен блок просмотра – берём оттуда
-      const defEl = document.getElementById('aiPromptDefault');
-      const defaultTxt = defEl?.textContent || '';
-      if (defaultTxt){ ta.value = defaultTxt; const stEl = document.getElementById('aiPromptStatus'); if (stEl) stEl.textContent='Стандартный prompt вставлен (не сохранён)'; }
-      else {
-        const data = await loadPrompt();
-        if (data?.default_prompt){ ta.value = data.default_prompt; const stEl = document.getElementById('aiPromptStatus'); if (stEl) stEl.textContent='Стандартный prompt вставлен (не сохранён)'; }
-      }
-    } catch {}
-  });
   clearBtn?.addEventListener('click', ()=>{
     const ta = document.getElementById('aiPromptTxt'); if (!ta) return; ta.value=''; const stEl = document.getElementById('aiPromptStatus'); if (stEl) stEl.textContent='Поле очищено (не сохранено)';
   });
+  // Устанавливаем placeholder после первой загрузки
+  (async ()=>{
+    try {
+      const d = await loadPrompt();
+      const ta = document.getElementById('aiPromptTxt');
+      const defEl = document.getElementById('aiPromptDefault');
+      if (ta && defEl){ ta.placeholder = defEl.textContent || ''; }
+    } catch {}
+  })();
 }
 async function fetchJson(url, opts){
   const r = await fetch(url, opts);

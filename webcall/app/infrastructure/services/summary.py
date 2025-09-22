@@ -100,6 +100,11 @@ class SummaryCollector:
             summary_text=summary_text,
         )
 
+    async def message_count(self, room_id: str) -> int:
+        """Возвращает текущее число накопленных сообщений (без очистки)."""
+        async with self._lock:
+            return len(self._messages.get(room_id, []))
+
 
 def _fallback_summary(messages: List[str], error: str | None = None) -> str:
     if not messages:

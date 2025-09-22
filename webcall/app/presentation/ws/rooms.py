@@ -88,6 +88,10 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
     else:
         # Голос отсутствует/пустой — используем чат
         print(f"[summary] Voice transcript missing or empty for room {original_room_id}; fallback to chat. reason={reason}")
+    # Диагностика: сколько сообщений накоплено до summarize
+    pre_count = None
+    with contextlib.suppress(Exception):
+        pre_count = await collector.message_count(str(room_uuid))  # type: ignore[attr-defined]
     chat_summary = await collector.summarize(str(room_uuid), ai_provider, system_prompt=custom_prompt)
     # Если ранее получили voice summary выше и оно не пустое — используем его.
     # Если voice не дал summary (None) но есть chat_summary — используем chat.
@@ -121,7 +125,24 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                 print(f"[summary] Telegram send failed: {e}")
         _room_summary_finalized.add(room_uuid)
     else:
-        print(f"[summary] Nothing to summarize room={original_room_id} trigger={reason}; not finalizing so it can be retried.")
+        # Fallback: даже если нет сообщений, отправим минимальное уведомление, чтобы пользователь понял что завершение состоялось
+        print(f"[summary] Nothing to summarize room={original_room_id} trigger={reason} pre_count={pre_count}; sending minimal fallback.")
+        if settings.TELEGRAM_BOT_TOKEN:
+            try:
+                minimal = (
+                    f"Room {original_room_id} завершена (trigger={reason}). Сообщений не было или они не были зафиксированы."
+                )
+                chat_ids: list[str] | None = None
+                if initiator_user_id and session is not None:
+                    single = await get_confirmed_chat_id(session, initiator_user_id)
+                    if single:
+                        chat_ids = [single]
+                await tg_send_message(minimal, chat_ids=chat_ids, session=session)
+                print(f"[summary] Minimal fallback Telegram sent for room {original_room_id} trigger={reason}")
+            except Exception as e:
+                print(f"[summary] Minimal fallback Telegram send failed: {e}")
+        # Финализируем чтобы не спамить при повторных попытках
+        _room_summary_finalized.add(room_uuid)
 
 
 @router.websocket("/ws/rooms/{room_id}")
