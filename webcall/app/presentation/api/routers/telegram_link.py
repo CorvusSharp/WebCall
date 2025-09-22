@@ -16,6 +16,7 @@ settings = get_settings()
 api_prefix = settings.API_PREFIX.rstrip('/')  # ожидаемо /api/v1
 router = APIRouter(prefix=f"{api_prefix}/telegram", tags=["telegram"])
 log = logging.getLogger("telegram")
+_LAST_UPDATE: dict | None = None  # хранение последнего сырого апдейта для отладки
 
 
 class LinkCreateOut(BaseModel):
@@ -58,8 +59,11 @@ class WebhookIn(BaseModel):
 @router.post("/webhook")
 async def webhook(data: WebhookIn, session: AsyncSession = Depends(get_db_session)):
     # Логируем сырое обновление (уровень info для диагностики; можно сменить на debug при шуме)
+    global _LAST_UPDATE
     try:
-        log.info("TG webhook update: %s", data.model_dump())
+        raw = data.model_dump()
+        _LAST_UPDATE = raw
+        log.info("TG webhook update: %s", raw)
     except Exception:  # pragma: no cover - защитный
         pass
     if not data.message:
@@ -86,6 +90,31 @@ async def webhook(data: WebhookIn, session: AsyncSession = Depends(get_db_sessio
                 log.warning("Failed to send confirmation message to chat_id=%s", chat_id)
             return {"ok": True, "linked": True}
     return {"ok": True}
+
+
+@router.get("/last_update")
+async def last_update():  # pragma: no cover - диагностический
+    return {"ok": True, "last_update": _LAST_UPDATE}
+
+
+@router.post("/poll_debug")
+async def poll_debug():  # pragma: no cover - диагностический
+    """Одноразовый polling getUpdates (если webhook не работает).
+
+    ВНИМАНИЕ: если webhook установлен, getUpdates обычно возвращает пусто.
+    Использовать только для диагностики. offset не задаём.
+    """
+    import httpx
+    bot_token = settings.TELEGRAM_BOT_TOKEN
+    if not bot_token:
+        raise HTTPException(500, detail="TELEGRAM_BOT_TOKEN not set")
+    url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
+    try:
+        r = httpx.get(url, timeout=10)
+        data = r.json()
+    except Exception as e:  # pragma: no cover
+        raise HTTPException(502, detail=f"poll error: {e.__class__.__name__}") from e
+    return data
 
 
 @router.get("/selftest")
