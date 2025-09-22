@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ....infrastructure.services.telegram_link import (
     create_or_refresh_link, confirm_link, get_confirmed_chat_id
 )
+from sqlalchemy.exc import IntegrityError
 from ....infrastructure.db.session import get_db_session
 from ....infrastructure.config import get_settings
 from ..deps.auth import get_current_user
@@ -58,38 +59,64 @@ class WebhookIn(BaseModel):
 
 @router.post("/webhook")
 async def webhook(data: WebhookIn, session: AsyncSession = Depends(get_db_session)):
-    # Логируем сырое обновление (уровень info для диагностики; можно сменить на debug при шуме)
+    """Обработка входящего Telegram update.
+
+    Требования к надёжности:
+      * Никогда не даём 500 Telegram (иначе ретраи и рост pending_update_count).
+      * Логируем сырые данные; при ошибке фиксируем traceback.
+      * Устраняем конфликт уникального индекса (user_id, chat_id) как нормальный кейс пере-привязки.
+    """
     global _LAST_UPDATE
     try:
         raw = data.model_dump()
         _LAST_UPDATE = raw
         log.info("TG webhook update: %s", raw)
-    except Exception:  # pragma: no cover - защитный
-        pass
-    if not data.message:
+    except Exception:  # pragma: no cover
+        log.exception("Failed to log incoming update")
+    try:
+        if not data.message:
+            return {"ok": True}
+        msg = data.message
+        text = (msg.get("text") or "").strip()
+        chat = msg.get("chat") or {}
+        chat_id = str(chat.get("id")) if chat.get("id") is not None else None
+        # Парсим токен из /start
+        token_candidate = None
+        if text.startswith("/start "):
+            token_candidate = text.split(maxsplit=1)[1]
+        elif text.startswith("/start") and len(text) > 6:
+            token_candidate = text[6:].strip()
+        # Примитивный guard длины токена (ожидаем 10..80 символов)
+        if token_candidate and not (10 <= len(token_candidate) <= 80):
+            log.warning("Token candidate length out of expected range len=%s", len(token_candidate))
+            token_candidate = None
+        if token_candidate and chat_id:
+            log.info("Attempt confirm token=%s chat_id=%s", token_candidate, chat_id)
+            ok = await confirm_link(session, token_candidate, chat_id)
+            if ok:
+                try:
+                    await session.commit()
+                except IntegrityError as ie:
+                    # Возможный дубликат уникального индекса (user_id, chat_id) при повторной привязке
+                    await session.rollback()
+                    log.info("IntegrityError on commit (likely duplicate chat). Treat as success: %s", ie.__class__.__name__)
+                    return {"ok": True, "linked": True, "dup": True}
+                # Отправляем подтверждающее сообщение (не критично при ошибке)
+                from ....infrastructure.services.telegram import send_message  # локальный импорт
+                try:
+                    await send_message("Привязка Telegram успешна. Теперь вы будете получать AI summary.", chat_ids=[chat_id])
+                except Exception as e:  # pragma: no cover
+                    log.warning("Failed to send confirmation message chat_id=%s err=%s", chat_id, e.__class__.__name__)
+                return {"ok": True, "linked": True}
         return {"ok": True}
-    msg = data.message
-    text = (msg.get("text") or "").strip()
-    chat = msg.get("chat") or {}
-    chat_id = str(chat.get("id")) if chat.get("id") is not None else None
-    # Принимаем также вариант без пробела ("/start<token>") для надёжности
-    token_candidate = None
-    if text.startswith("/start "):
-        token_candidate = text.split(maxsplit=1)[1]
-    elif text.startswith("/start") and len(text) > 6:
-        token_candidate = text[6:].strip()
-    if token_candidate and chat_id:
-        ok = await confirm_link(session, token_candidate, chat_id)
-        if ok:
-            await session.commit()
-            # Пытаемся отправить подтверждающее сообщение пользователю
-            from ....infrastructure.services.telegram import send_message  # локальный импорт чтобы избежать циклов
-            try:
-                await send_message("Привязка Telegram успешна. Теперь вы будете получать AI summary.", chat_ids=[chat_id])
-            except Exception:  # pragma: no cover
-                log.warning("Failed to send confirmation message to chat_id=%s", chat_id)
-            return {"ok": True, "linked": True}
-    return {"ok": True}
+    except Exception as e:  # pragma: no cover
+        # Логируем подробно и возвращаем 200 чтобы Telegram не ретраил до бесконечности
+        log.exception("Unhandled error in webhook: %s", e)
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        return {"ok": True, "error": "internal", "logged": True}
 
 
 @router.get("/last_update")
