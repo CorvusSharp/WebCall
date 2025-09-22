@@ -449,30 +449,47 @@ function bindPeerMedia(peerId){
   const assignTracks = (stream)=>{
     try {
       let vids = stream.getVideoTracks();
-      // Фильтруем завершённые/неактивные треки
-      const live = vids.filter(v => v.readyState === 'live');
-      if (live.length !== vids.length){
-        log(`[diag] peer ${peerId.slice(0,6)} filtered dead tracks old=${vids.length} live=${live.length}`);
-      }
-      vids = live;
-      log(`[diag] peer ${peerId.slice(0,6)} assignTracks vids=${vids.length} ids=[${vids.map(v=>v.id+':'+(v.label||'')).join(',')}]`);
-
-      if (!vids.length){
-        if (mainVideo){ mainVideo.srcObject=null; mainVideo.load?.(); }
-        if (pipWrap){ pipWrap.style.display='none'; if (pipVideo){ pipVideo.srcObject=null; pipVideo.load?.(); } }
-        return;
-      }
-
-      // Подписка на onended для автоматического пересчёта (один раз на трек)
+      // Подвязываем события mute/unmute/ended для динамической переразметки
       vids.forEach(t=>{
         if (!t._wcAssignBound){
           t._wcAssignBound = true;
-            t.addEventListener('ended', ()=>{
-              log(`[diag] track ended ${t.id}, reassign peer ${peerId.slice(0,6)}`);
-              setTimeout(()=> assignTracks(stream), 30);
-            }, { once:false });
+          const reassign = (tag)=>{ log(`[diag] track ${tag} ${t.id} muted=${t.muted} ready=${t.readyState} peer=${peerId.slice(0,6)}`); setTimeout(()=> assignTracks(stream), 30); };
+          t.addEventListener('ended', ()=> reassign('ended'));
+          t.addEventListener('mute', ()=> reassign('mute'));
+          t.addEventListener('unmute', ()=> reassign('unmute'));
         }
       });
+      // Фильтруем завершённые и замьюченные (mute без кадров) треки
+      const filtered = vids.filter(v => v.readyState === 'live' && !v.muted);
+      if (filtered.length !== vids.length){
+        log(`[diag] peer ${peerId.slice(0,6)} live(unmuted) tracks ${filtered.length}/${vids.length}`);
+      }
+      vids = filtered;
+      log(`[diag] peer ${peerId.slice(0,6)} assignTracks vids=${vids.length} ids=[${vids.map(v=>v.id+':'+(v.label||'')).join(',')}]`);
+
+      if (!vids.length){
+        // Нет активных видеотреков: сбрасываем отображение (убираем последний кадр)
+        if (mainVideo){
+          try { mainVideo.pause(); } catch{}
+          try { mainVideo.srcObject=null; } catch{}
+          try { mainVideo.removeAttribute('src'); } catch{}
+          try { mainVideo.load?.(); } catch{}
+        }
+        if (pipVideo){
+          try { pipVideo.pause(); } catch{}
+          try { pipVideo.srcObject=null; } catch{}
+          try { pipVideo.removeAttribute('src'); } catch{}
+          try { pipVideo.load?.(); } catch{}
+        }
+        if (pipWrap) pipWrap.style.display='none';
+        tile.classList.add('no-remote-video');
+        return;
+      } else {
+        tile.classList.remove('no-remote-video');
+      }
+
+      // Подписка на onended для автоматического пересчёта (один раз на трек)
+      // (listeners уже навешаны выше вместе с mute/unmute)
 
       if (vids.length === 1){
         const ms = new MediaStream([vids[0]]);

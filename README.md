@@ -78,6 +78,31 @@ pytest -q
 ## Переменные окружения (ключевые)
 `APP_ENV`, `PORT`, `JWT_SECRET`, `REGISTRATION_SECRET`, `DATABASE_URL`, `REDIS_URL`, `STUN_SERVERS`, `TURN_URLS`, `TURN_USERNAME`, `TURN_PASSWORD`, `CORS_ORIGINS`.
 
+### Дополнительно (AI summary / Telegram)
+| Переменная | Назначение | По умолчанию |
+|------------|------------|--------------|
+| `AI_SUMMARY_ENABLED` | Включает генерацию выжимки чата комнаты при завершении | `False` |
+| `AI_MODEL_PROVIDER` | Идентификатор провайдера/модели (зарезервировано) | `None` |
+| `AI_SUMMARY_MAX_MESSAGES` | Лимит сообщений, удерживаемых для суммаризации | `200` |
+| `TELEGRAM_BOT_TOKEN` | Токен бота для отправки выжимок | `None` |
+| `TELEGRAM_CHAT_ID` | Целевой чат / канал / пользователь | `None` |
+| `OPENAI_API_KEY` | Ключ OpenAI для генерации выжимки | `None` |
+| `AI_MODEL_FALLBACK` | Запасная модель если основная недоступна | `None` |
+
+Механика: сообщения типа `chat` в WebSocket `/ws/rooms/{room_id}` буферизуются в in-memory коллекторе. При закрытии соединения выполняется попытка суммаризации:
+
+1. Если `AI_SUMMARY_ENABLED=true` и указан `OPENAI_API_KEY`, а `AI_MODEL_PROVIDER` имеет вид `openai:<model>`, используется OpenAI Chat Completion.
+2. Иначе применяется эвристический локальный анализ (подсчёт авторов + последние реплики).
+3. Если заданы Telegram токен и chat id — результат отправляется через Bot API.
+
+Пример настройки для OpenAI:
+```
+AI_SUMMARY_ENABLED=true
+AI_MODEL_PROVIDER=openai:gpt-4o-mini
+OPENAI_API_KEY=sk-...  # НЕ коммитить в репозиторий
+AI_MODEL_FALLBACK=gpt-4o-mini
+```
+
 ## Миграции / конфликт номеров
 Дублирующий префикс `0003_` в Alembic — безопасно (уникальны `revision id`), задокументировано. Возможен squash в будущем.
 

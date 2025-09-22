@@ -1,54 +1,61 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ru">
-<head>
-  <meta charset="UTF-8" />
-  <title>Профиль</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="stylesheet" href="/static/styles.css" />
-  <style>
-    .profile-container { max-width: 640px; margin: 2rem auto; padding: 1rem 1.25rem; background: var(--panel-bg,#111); border:1px solid var(--border-color,#333); border-radius:8px; }
-    .profile-container h1 { margin-top:0; font-size:1.4rem; }
-  form + form { margin-top:2rem; }
-    .field { display:flex; flex-direction:column; gap:4px; margin-bottom:0.9rem; }
-    label { font-weight:600; }
-    input[type=text], input[type=email], input[type=password] { padding:0.55rem 0.7rem; border:1px solid var(--border-color,#444); background:var(--input-bg,#181818); color:var(--fg,#eee); border-radius:6px; }
-    input:focus { outline:2px solid var(--accent,#1fa060); outline-offset:0; }
-    button.primary { background:var(--accent,#1fa060); color:#fff; border:none; padding:0.6rem 1.1rem; border-radius:6px; cursor:pointer; font-weight:600; }
-    button.primary:disabled { opacity:0.6; cursor:not-allowed; }
-    .inline-msg { font-size:0.85rem; margin-top:4px; }
-    .error { color:#ff5252; }
-    .success { color:#4caf50; }
-    .actions-row { display:flex; gap:0.75rem; align-items:center; }
-    .back-link { color:var(--accent,#1fa060); text-decoration:none; font-size:0.9rem; }
-  </style>
-</head>
-<body>
-  <div class="profile-container">
-    <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;">
-      <h1>Профиль</h1>
-      <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap;">
-        <a class="back-link" href="/">← На главную</a>
-        <a class="back-link" href="/static/password.html" title="Смена пароля">Пароль →</a>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Профиль • WebCall 2.0</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <style>
+      /* Локальная минимальная адаптация (если нужно) */
+      .profile-grid{ display:grid; gap:24px; max-width:720px; margin:0 auto; }
+      .inline-msg{ font-size:13px; }
+      .form-section h2{ margin:0 0 12px; font-size:18px; }
+      .actions-row{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+      .small-link{ font-size:13px; text-decoration:none; color:var(--primary); }
+      .muted-note{ font-size:12px; color:var(--muted); margin-top:4px; }
+    </style>
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="container header-inner">
+        <div class="brand">
+          <span class="logo" aria-hidden>●</span>
+          <span class="title">WebCall 2.0</span>
+        </div>
+        <nav class="actions">
+          <div id="currentUserBadge" class="user-badge" style="display:none;">
+            <span class="user-badge__icon">👤</span>
+            <span class="user-badge__name" id="currentUsername"></span>
+          </div>
+          <button class="btn ghost theme-dot" id="btnToggleTheme" title="Тема" data-mode="auto">●</button>
+          <a class="btn ghost" href="/">Главная</a>
+          <a class="btn ghost" href="/static/password.html" title="Смена пароля">Пароль</a>
+          <button class="btn ghost" id="btnLogout" title="Выход">Выйти</button>
+        </nav>
       </div>
-    </div>
-
-    <form id="formProfile" novalidate>
-      <h2>Общие данные</h2>
-      <div class="field">
-        <label for="email">Email</label>
-        <input id="email" name="email" type="email" autocomplete="email" />
+    </header>
+    <main class="container app-main" style="padding-top:20px;">
+      <div class="profile-grid">
+        <div class="card form-section">
+          <h2>Профиль</h2>
+          <form id="formProfile" novalidate class="form-grid" style="grid-template-columns:1fr;">
+            <label class="row" style="flex-direction:column; align-items:stretch;">
+              <span>Email</span>
+              <input id="email" name="email" type="email" autocomplete="email" />
+            </label>
+            <label class="row" style="flex-direction:column; align-items:stretch;">
+              <span>Имя пользователя</span>
+              <input id="username" name="username" type="text" autocomplete="username" minlength="3" maxlength="50" />
+            </label>
+            <div class="actions-row" style="margin-top:4px;">
+              <button class="btn primary" type="submit" id="btnSaveProfile">Сохранить</button>
+              <span class="inline-msg" id="profileMsg"></span>
+            </div>
+          </form>
+          <div class="muted-note">После изменения имени может потребоваться обновить страницу для обновления бейджа пользователя.</div>
+        </div>
       </div>
-      <div class="field">
-        <label for="username">Имя пользователя</label>
-        <input id="username" name="username" type="text" autocomplete="username" minlength="3" maxlength="50" />
-      </div>
-      <div class="actions-row">
-        <button class="primary" type="submit" id="btnSaveProfile">Сохранить</button>
-        <span class="inline-msg" id="profileMsg"></span>
-      </div>
-    </form>
-
-  </div>
-  <script type="module" src="/static/js/profile.js"></script>
-</body>
+    </main>
+    <script type="module" src="/static/js/profile.js"></script>
+  </body>
 </html>

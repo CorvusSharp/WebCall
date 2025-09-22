@@ -10,6 +10,9 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from ...infrastructure.config import get_settings
+from ...infrastructure.services.summary import get_summary_collector
+from ...infrastructure.services.ai_provider import get_ai_provider
+from ...infrastructure.services.telegram import send_message as tg_send_message
 
 from ...core.domain.models import Signal
 from ...core.ports.services import SignalBus, TokenProvider
@@ -103,6 +106,11 @@ async def ws_room(
         chat_task = asyncio.create_task(chat_listener())
     # register connection in room for chat broadcast
     _room_clients[room_uuid].add(websocket)
+
+    collector = get_summary_collector()
+    ai_provider = None
+    with contextlib.suppress(Exception):  # AI провайдер не критичен
+        ai_provider = get_ai_provider()
 
     try:
         while True:
@@ -224,6 +232,10 @@ async def ws_room(
                 author_id = data.get("fromUserId")
                 author_name: str | None = _display_names.get(UUID(author_id)) if author_id else None
 
+                # Сбор для последующей выжимки
+                with contextlib.suppress(Exception):
+                    await collector.add_message(str(room_uuid), author_id, author_name, content or "")
+
                 if isinstance(bus, RedisSignalBus):
                     # Publish to Redis channel so all processes deliver the message
                     await bus.redis.publish(chat_channel, json.dumps({
@@ -293,3 +305,16 @@ async def ws_room(
                                 await participants.update(active)
                     except Exception:
                         pass
+
+        # Попытка финализации summary (делаем после DB cleanup)
+        with contextlib.suppress(Exception):
+            summary = await collector.summarize(str(room_uuid), ai_provider)
+            if summary:
+                settings = get_settings()
+                if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID:
+                    # Формируем текст для Telegram
+                    text = (
+                        f"Room {summary.room_id} завершена. Сообщений: {summary.message_count}.\n"
+                        f"--- Summary ---\n{summary.summary_text}"
+                    )
+                    await tg_send_message(text)

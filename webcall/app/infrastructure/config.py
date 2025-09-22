@@ -54,6 +54,15 @@ class Settings(BaseSettings):
     # Backend приглашений звонков: memory | redis
     CALL_INVITES_BACKEND: str = "memory"
 
+    # AI Summaries / Telegram
+    AI_SUMMARY_ENABLED: bool = False  # включение функционала AI выжимок
+    AI_MODEL_PROVIDER: str | None = None  # имя провайдера/модели (например 'openai:gpt-4o-mini'), пока не используется напрямую
+    AI_SUMMARY_MAX_MESSAGES: int = 200  # лимит сообщений для одного резюме (хвост обрезается)
+    TELEGRAM_BOT_TOKEN: str | None = None  # токен бота для отправки итоговых выжимок
+    TELEGRAM_CHAT_ID: str | None = None  # целевой chat/channel id для получения выжимок
+    OPENAI_API_KEY: str | None = None  # ключ OpenAI (НЕ хранить в репо)
+    AI_MODEL_FALLBACK: str | None = None  # запасная модель если основная недоступна
+
 
 @lru_cache()
 def get_settings() -> Settings:
