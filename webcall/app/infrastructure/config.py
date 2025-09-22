@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     # TURN доп переменные
     TURN_PUBLIC_IP: str | None = None
     TURN_REALM: str | None = None
+    TURN_CLI_PASSWORD: str | None = None  # чтобы не валилось на extra (используется только для запуска coturn)
 
     # Доп: пароль Postgres (может понадобиться для генерации URL или вспомогательных задач)
     POSTGRES_PASSWORD: str | None = None
