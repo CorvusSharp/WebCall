@@ -86,7 +86,7 @@ pytest -q
 | `AI_SUMMARY_MAX_MESSAGES` | Лимит сообщений, удерживаемых для суммаризации | `200` |
 | `AI_SUMMARY_MIN_CHARS` | Минимальное суммарное количество символов содержимого (без обвязки) для вызова внешнего AI; если меньше — формируется короткий fallback без полноценной AI выжимки | `60` |
 | `TELEGRAM_BOT_TOKEN` | Токен бота для отправки выжимок | `None` |
-| `TELEGRAM_CHAT_ID` | Целевой чат / канал / пользователь | `None` |
+| `TELEGRAM_CHAT_ID` | (DEPRECATED) Глобальный чат / канал / пользователь. Используется только как fallback если у инициатора нет персональной привязки | `None` |
 | `OPENAI_API_KEY` | Ключ OpenAI для генерации выжимки | `None` |
 | `AI_MODEL_FALLBACK` | Запасная модель если основная недоступна | `None` |
 
@@ -108,6 +108,42 @@ OPENAI_API_KEY=sk-...  # НЕ коммитить в репозиторий
 AI_MODEL_FALLBACK=gpt-4o-mini
 ```
 
-## Миграции / конфликт номеров
-Дублирующий префикс `0003_` в Alembic — безопасно (уникальны `revision id`), задокументировано. Возможен squash в будущем.
+## Персональная привязка Telegram
+
+Реализована таблица `telegram_links` для привязки пользователя к своему `chat_id`.
+
+Флоу:
+1. Клиент запрашивает `POST /api/v1/telegram/link` — сервер возвращает токен и deep-link вида `https://t.me/<BOT>?start=<token>`.
+2. Пользователь переходит по ссылке, бот получает `/start <token>` и отправляет webhook `POST /api/v1/telegram/webhook`.
+3. Сервер помечает ссылку `status=confirmed`, сохраняет `chat_id`.
+4. Клиент периодически опрашивает `GET /api/v1/telegram/status` пока `confirmed`.
+5. При ручном триггере AI summary сервер отправляет отчёт ТОЛЬКО инициатору (его `chat_id`). Если привязки нет — пытается отправить всем подтверждённым (глобальный broadcast) или, в качестве устаревшего fallback, в `TELEGRAM_CHAT_ID`.
+
+## Миграции / устранение multiple heads
+
+Если при запуске контейнера возникает ошибка Alembic `Multiple head revisions are present`, причины:
+- В БД остались ссылки на ревизии, которых больше нет в каталоге `alembic/versions`.
+- Либо ранее существовал merge-point.
+
+Решение (без потери данных):
+1. Определить фактическое состояние таблиц (сравнить со схемой последней миграции).
+2. Войти в контейнер: `docker compose exec api bash` (или `sh`).
+3. Получить текущие ревизии: `alembic history --verbose | tail -n 40` и `alembic current -v` (если падает из-за multiple heads — перейти к ручному штампу).
+4. Открыть `psql` и посмотреть содержимое `alembic_version`: `SELECT * FROM alembic_version;` (может быть несколько строк при split head scenario).
+5. Сделать резервную копию (опционально): `pg_dump -U webcall -d webcall > /tmp/backup.sql`.
+6. Проставить единый штамп на последнюю существующую ревизию из кода (например `0006_telegram_links`):
+	- Удалить лишние строки: `DELETE FROM alembic_version;`
+	- Вставить одну: `INSERT INTO alembic_version (version_num) VALUES ('0006_telegram_links');`
+7. Запустить `alembic upgrade head` — он теперь ничего не применит (schema already up-to-date) и не будет жаловаться.
+
+Если схема в БД не соответствует миграциям (рассинхронизация), используйте:
+1. `alembic downgrade base` (если безопасно потерять данные) → затем `alembic upgrade head`.
+2. Либо вручную примените недостающие изменения и затем `alembic stamp <revision>`.
+
+Checklist после фикса:
+- `alembic current` показывает одну ревизию.
+- `alembic heads` == `alembic current`.
+- Приложение стартует без ошибки.
+
+Примечание: глобальный noop stub миграции удалён, цепочка линейная 0001 → 0006.
 
