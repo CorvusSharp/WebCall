@@ -22,6 +22,10 @@ class SummaryOrchestrator:
     3. Добавление сообщений в общий лог продолжается (для будущих сценариев), но построение персонального summary
        опирается только на сообщения внутри конкретной сессии, что предотвращает утечку данных между пользователями.
     4. Завершение одной сессии (stop) не влияет на продолжающиеся сессии других пользователей.
+     5. Preload: при старте окна можно подмешать хвост последних сообщений до start_ts (ограниченный по возрасту),
+         чтобы не терять контекст сразу перед нажатием кнопки старта.
+     6. Pending voice wait: при запросе summary, если окно пустое и возможно идёт финализация ASR, выполняется короткое
+         ожидание появления транскрипта (poll voice collector) чтобы уменьшить число "пустых" ответов.
     """
     def __init__(self) -> None:
         self._log = MessageLog()
@@ -96,6 +100,26 @@ class SummaryOrchestrator:
         self._room_sessions.setdefault(room_id, []).append(sess)
         # Не удаляем транскрипт из коллектора при рестарте: если запись ещё финализируется, она прикрепится лениво.
         logger.debug("summary_v2: started new user window room=%s user=%s start_ts=%s", room_id, user_id, sess.start_ts)
+        # --- Preload чат хвоста для контекста ---
+        try:
+            # Берём хвост последних N сообщений (включая технические пока) до старта
+            TAIL_LIMIT = 40
+            MAX_AGE_MS = 15_000  # не старше 15 секунд для контекста
+            tail_all = self._log.tail(room_id, TAIL_LIMIT)
+            preload: List[ChatMessage] = []
+            for m in tail_all:
+                if m.ts >= sess.start_ts:
+                    continue  # уже попадёт как обычное сообщение
+                if (sess.start_ts - m.ts) > MAX_AGE_MS:
+                    continue
+                preload.append(m)
+            if preload:
+                # упорядочиваем по ts
+                preload.sort(key=lambda x: x.ts)
+                sess.add_preload_chat(preload)
+                logger.info("summary_v2: preload chat window room=%s user=%s count=%s age_ms=%s..%s", room_id, user_id, len(preload), sess.start_ts - preload[0].ts, sess.start_ts - preload[-1].ts)
+        except Exception:
+            pass
         # Попытка немедленного reuse прошлой транскрипции (если новая сессия запрошена мгновенно после предыдущей)
         key = (room_id, user_id)
         with contextlib.suppress(Exception):
@@ -216,6 +240,35 @@ class SummaryOrchestrator:
             with contextlib.suppress(Exception):
                 system_prompt = await get_user_system_prompt(db_session, user_id)
         result = await sess.build_summary(ai_provider=ai_provider, system_prompt=system_prompt)
+        # Pending ожидание голоса: если окно пустое, нет voice сегментов и нет сообщений — подождём немного появление транскрипта
+        if result.message_count == 0 and not getattr(result, 'used_voice', False):
+            try:
+                voice_segments_now = getattr(sess, '_voice_segments', [])  # type: ignore[attr-defined]
+                msgs_now = getattr(sess, '_messages', [])
+                if not voice_segments_now and not msgs_now:
+                    wait_total = 0
+                    MAX_WAIT_MS = 2500
+                    STEP_MS = 350
+                    while wait_total < MAX_WAIT_MS:
+                        import asyncio
+                        await asyncio.sleep(STEP_MS / 1000)
+                        wait_total += STEP_MS
+                        # Проверяем появился ли транскрипт
+                        with contextlib.suppress(Exception):
+                            vc = get_voice_collector()
+                            vt_wait = await vc.get_transcript(f"{room_id}:{user_id}")
+                            if vt_wait and getattr(vt_wait, 'text', None):
+                                txtw = vt_wait.text.strip()
+                                loww = txtw.lower()
+                                if txtw and not (loww.startswith('(no audio') or loww.startswith('(asr failed') or loww.startswith('(asr exception') or loww.startswith('(asr disabled')):
+                                    sess.add_voice_transcript(txtw)
+                                    logger.info("summary_v2: pending wait attached voice room=%s user=%s len=%s waited_ms=%s", room_id, user_id, len(txtw), wait_total)
+                                    result = await sess.build_summary(ai_provider=ai_provider, system_prompt=system_prompt)
+                                    break
+                    else:
+                        logger.debug("summary_v2: pending wait timeout room=%s user=%s waited_ms=%s", room_id, user_id, wait_total)
+            except Exception:
+                pass
         # Если пусто, но теперь (во время генерации) появился voice транскрипт — пробуем ещё раз один раз.
         if result.message_count == 0 and not getattr(result, 'used_voice', False):
             try:

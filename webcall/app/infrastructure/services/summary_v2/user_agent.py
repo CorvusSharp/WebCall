@@ -39,6 +39,8 @@ class UserAgentSession:
     _messages: List[ChatMessage] = field(default_factory=list)  # только пользовательское окно
     # Список голосовых сегментов (в порядке поступления). Поддерживает несколько записей.
     _voice_segments: List[str] = field(default_factory=list)
+    # Прелоад сообщений (исторический хвост до старта, если решено подхватить контекст) — не учитывается для фильтрации по start_ts
+    _pre_messages: List[ChatMessage] = field(default_factory=list)
     _chat_strategy: ChatStrategy = field(default_factory=ChatStrategy, init=False, repr=False)
     _combined_strategy: CombinedVoiceChatStrategy = field(default_factory=CombinedVoiceChatStrategy, init=False, repr=False)
 
@@ -85,6 +87,24 @@ class UserAgentSession:
                 return
         self._voice_segments.append(txt)
 
+    # --- Preload support ---
+    def add_preload_chat(self, msgs: List[ChatMessage]) -> None:
+        """Добавить исторический хвост (до start_ts) для контекста.
+
+        Принципы:
+        - Используется только для build_summary (объединяется поверх основной выборки).
+        - Не модифицирует start_ts.
+        - Игнорирует пустые / технические сообщения (фильтрация на вызывающей стороне предпочтительна, но дублируем защиту).
+        - Не добавляет дубликаты по (ts, content, author_id).
+        """
+        if not msgs:
+            return
+        seen = {(m.ts, m.content, m.author_id) for m in self._pre_messages}
+        for m in msgs:
+            if (m.ts, m.content, m.author_id) in seen:
+                continue
+            self._pre_messages.append(m)
+
     def merged_voice_text(self) -> Optional[str]:
         if not self._voice_segments:
             return None
@@ -98,7 +118,9 @@ class UserAgentSession:
 
     async def build_summary(self, *, ai_provider, system_prompt: str | None) -> SummaryResult:
         # Отфильтруем по end_ts если окно завершено (теоретически могли добавить позже)
-        msgs = [m for m in self._messages if (self.end_ts is None or m.ts <= self.end_ts)]
+        msgs_window = [m for m in self._messages if (self.end_ts is None or m.ts <= self.end_ts)]
+        # Объединяем: preload (как контекст) + текущее окно. Прелоад ставим раньше.
+        msgs = list(self._pre_messages) + msgs_window
         voice_text = self.merged_voice_text()
         # Если чат пуст, но есть валидный voice
         if not msgs:

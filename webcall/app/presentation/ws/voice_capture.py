@@ -69,8 +69,9 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                     break
             elif 'bytes' in msg and msg['bytes'] is not None:
                 if not started:
-                    # ignore data until start
-                    continue
+                    # Автоматический имплицитный старт если клиент не отправил control frame
+                    started = True
+                    logger.debug("VOICE_CAPTURE implicit start room=%s (binary before explicit start)", room_id)
                 chunk = msg['bytes']
                 total_bytes += len(chunk)
                 if total_bytes > settings.VOICE_MAX_TOTAL_MB * 1024 * 1024:
@@ -78,7 +79,7 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                     break
                 await coll.add_chunk(canonical_key, chunk)
     except WebSocketDisconnect:
-        pass
+        logger.debug("VOICE_CAPTURE disconnect room=%s started=%s bytes=%s", room_id, started, total_bytes)
     finally:
         # Финализируем: транскрипция и сохранение. Если нет чанков — пропускаем.
         with contextlib.suppress(Exception):
