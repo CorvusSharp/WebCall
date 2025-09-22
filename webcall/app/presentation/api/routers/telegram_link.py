@@ -8,9 +8,10 @@ from ....infrastructure.services.telegram_link import (
     create_or_refresh_link, confirm_link, get_confirmed_chat_id
 )
 from ....infrastructure.db.session import get_db_session
-from ....infrastructure.config import settings
+from ....infrastructure.config import get_settings
 from ..deps.auth import get_current_user
 
+settings = get_settings()
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 
 
