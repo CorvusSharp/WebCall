@@ -104,6 +104,12 @@ class SummaryCollector:
                 tail_src = "\n\nИсточники:\n" + "\n".join(m.content for m in msgs)
                 if 'источники:' not in norm:
                     summary_text = summary_text.rstrip() + tail_src
+            else:
+                # Расширенная эвристика: если всего сообщений <=8 или сам summary слишком короткий (< 500 символов), но нет блока Источники — добавим последние 5.
+                if ('источники:' not in norm) and (len(msgs) <= 8 or len(summary_text) < 500):
+                    tail_msgs = msgs[-5:]
+                    sources_block = "\n\nИсточники (последние):\n" + "\n".join(m.content for m in tail_msgs)
+                    summary_text = summary_text.rstrip() + sources_block
         except Exception:
             pass
 
