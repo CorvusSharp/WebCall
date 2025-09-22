@@ -14,6 +14,9 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 import time, re
 from .models import ChatMessage, SummaryResult, TECHNICAL_PATTERNS
+import logging
+
+logger = logging.getLogger(__name__)
 from .strategies import ChatStrategy, CombinedVoiceChatStrategy
 
 
@@ -78,6 +81,7 @@ class UserAgentSession:
                     sentences = [voice_text.strip()]
                 now_ms = int(time.time()*1000)
                 voice_msgs = [ChatMessage(room_id=self.room_id, author_id=None, author_name='voice', content=s, ts=now_ms) for s in sentences]
+                logger.info("summary_v2: voice-only summary room=%s user=%s parts=%s", self.room_id, self.user_id, len(voice_msgs))
                 return await self._combined_strategy.build(voice_msgs, ai_provider=ai_provider, system_prompt=system_prompt)
             return SummaryResult.empty(self.room_id)
         # Если все чат сообщения технические, но есть нормальный voice — используем его
@@ -90,6 +94,7 @@ class UserAgentSession:
                 sentences = [voice_text.strip()]
             now_ms = int(time.time()*1000)
             voice_msgs = [ChatMessage(room_id=self.room_id, author_id=None, author_name='voice', content=s, ts=now_ms) for s in sentences]
+            logger.info("summary_v2: voice-only (chat technical) summary room=%s user=%s parts=%s", self.room_id, self.user_id, len(voice_msgs))
             return await self._combined_strategy.build(voice_msgs, ai_provider=ai_provider, system_prompt=system_prompt)
         # Комбинированный путь если voice информативный
         merged = msgs
@@ -104,4 +109,5 @@ class UserAgentSession:
             voice_msgs = [ChatMessage(room_id=self.room_id, author_id=None, author_name='voice', content=s, ts=now_ms) for s in sentences]
             merged = msgs + voice_msgs
             strategy = self._combined_strategy
+            logger.info("summary_v2: combined voice+chat summary room=%s user=%s chat_msgs=%s voice_parts=%s", self.room_id, self.user_id, len(msgs), len(voice_msgs))
         return await strategy.build(merged, ai_provider=ai_provider, system_prompt=system_prompt)

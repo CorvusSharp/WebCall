@@ -7,6 +7,10 @@ from .strategies import ChatStrategy, CombinedVoiceChatStrategy
 from .user_agent import UserAgentSession
 from ...config import get_settings
 from ..ai_provider import get_user_system_prompt
+from ..voice_transcript import get_voice_collector
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class SummaryOrchestrator:
@@ -62,6 +66,7 @@ class SummaryOrchestrator:
             self._sessions[key] = sess
             self._room_sessions.setdefault(room_id, []).append(sess)
         sess.add_voice_transcript(transcript)
+        logger.info("summary_v2: add_voice_transcript room=%s user=%s chars=%s", room_id, user_id, len(transcript))
 
     def start_user_window(self, room_id: str, user_id: str) -> None:
         """Старт (или перезапуск) персонального окна пользователя."""
@@ -78,6 +83,18 @@ class SummaryOrchestrator:
         self._sessions[key] = sess
         self._room_sessions.setdefault(room_id, []).append(sess)
         # Заполняем стартовыми сообщениями после старта? Нет — нужны только будущие сообщения согласно требованию независимости.
+        # Попробуем сразу подтянуть уже готовую персональную voice транскрипцию (если пользователь успел говорить до старта агента)
+        try:
+            vc = get_voice_collector()
+            # ключ формата room:user (см. voice_capture)
+            voice_key = f"{room_id}:{user_id}"
+            with contextlib.suppress(Exception):
+                vt = await vc.get_transcript(voice_key)  # type: ignore
+                if vt and getattr(vt, 'text', None) and len(vt.text.strip()) > 0:
+                    sess.add_voice_transcript(vt.text.strip())
+                    logger.info("summary_v2: preload voice transcript for room=%s user=%s len=%s", room_id, user_id, len(vt.text))
+        except Exception:
+            pass
 
     def end_user_window(self, room_id: str, user_id: str) -> None:
         key = (room_id, user_id)
@@ -96,6 +113,18 @@ class SummaryOrchestrator:
         sess = self._sessions.get(key)
         if not sess:
             return SummaryResult.empty(room_id)
+        # Если в сессии нет voice, попробуем подтянуть (лениво) готовую транскрипцию, чтобы не было окна, когда агент стартовал чуть позже окончания речи
+        if sess._voice_text is None:  # type: ignore[attr-defined]
+            try:
+                vc = get_voice_collector()
+                voice_key = f"{room_id}:{user_id}"
+                with contextlib.suppress(Exception):
+                    vt = await vc.get_transcript(voice_key)
+                    if vt and getattr(vt, 'text', None) and len(vt.text.strip()) > 0:
+                        sess.add_voice_transcript(vt.text.strip())
+                        logger.info("summary_v2: lazy attach voice transcript room=%s user=%s len=%s", room_id, user_id, len(vt.text))
+            except Exception:
+                pass
         # Получаем персональный system prompt
         system_prompt: str | None = None
         if db_session is not None:
