@@ -14,6 +14,9 @@ from ...infrastructure.services.summary import get_summary_collector
 from ...infrastructure.services.voice_transcript import get_voice_collector
 from ...infrastructure.services.ai_provider import get_ai_provider
 from ...infrastructure.services.telegram import send_message as tg_send_message
+from sqlalchemy.ext.asyncio import AsyncSession
+from ...infrastructure.db.session import get_db_session
+from ...infrastructure.services.telegram_link import get_confirmed_chat_id
 
 from ...core.domain.models import Signal
 from ...core.ports.services import SignalBus, TokenProvider
@@ -33,7 +36,8 @@ _room_summary_finalized: set[UUID] = set()
 
 
 async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, reason: str, *,
-                                     ai_provider, collector, voice_coll) -> None:  # type: ignore[no-untyped-def]
+                                     ai_provider, collector, voice_coll, session: AsyncSession | None = None,
+                                     initiator_user_id: UUID | None = None) -> None:  # type: ignore[no-untyped-def]
     """Собирает summary (voice > chat) и отправляет в Telegram. Используется только по ручному триггеру.
 
     reason: строка причины (manual, debug, etc.)
@@ -80,13 +84,19 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
         print(f"[summary] Voice transcript missing or empty for room {original_room_id}; fallback to chat. reason={reason}")
         summary = await collector.summarize(str(room_uuid), ai_provider)
     if summary:
-        if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID:
+        if settings.TELEGRAM_BOT_TOKEN:
             try:
                 text = (
                     f"Room {summary.room_id} завершена (trigger={reason}). Источник: {'voice' if (v and v.text and not v.text.startswith('(no audio')) else 'chat'}. Сообщений: {summary.message_count}.\n"
                     f"--- Summary ---\n{summary.summary_text}"
                 )
-                await tg_send_message(text)
+                # Получаем персональные chat_id: если указан инициатор — только ему, иначе всем подтверждённым.
+                chat_ids: list[str] | None = None
+                if initiator_user_id and session is not None:
+                    single = await get_confirmed_chat_id(session, initiator_user_id)
+                    if single:
+                        chat_ids = [single]
+                await tg_send_message(text, chat_ids=chat_ids, session=session)
                 print(f"[summary] Telegram sent for room {original_room_id} trigger={reason}")
             except Exception as e:
                 print(f"[summary] Telegram send failed: {e}")
@@ -104,6 +114,7 @@ async def ws_room(
     users: UserRepository = Depends(get_user_repo),
     participants: ParticipantRepository = Depends(get_participant_repo),
     rooms: RoomRepository = Depends(get_room_repo),
+        session: AsyncSession = Depends(get_db_session),
 ):  # type: ignore[override]
     settings = get_settings()
     token = websocket.query_params.get("token")
@@ -337,7 +348,13 @@ async def ws_room(
                     before_voice = None
                     with contextlib.suppress(Exception):
                         before_voice = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(room_id)
-                    await _generate_and_send_summary(room_uuid, room_id, "manual", ai_provider=ai_provider, collector=collector, voice_coll=voice_coll)
+                        # user id инициатора попытки (если есть токен и нашли пользователя)
+                        initiator_user_id = None
+                        with contextlib.suppress(Exception):
+                            if token:
+                                payload = tokens.decode_token(token)
+                                initiator_user_id = UUID(payload.get("sub")) if payload.get("sub") else None
+                        await _generate_and_send_summary(room_uuid, room_id, "manual", ai_provider=ai_provider, collector=collector, voice_coll=voice_coll, session=session, initiator_user_id=initiator_user_id)
                     after_voice = None
                     with contextlib.suppress(Exception):
                         after_voice = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(room_id)
@@ -397,9 +414,17 @@ async def ws_room(
                     except Exception:
                         pass
 
-        # Авто-summary отключено: теперь генерация только по сообщению type=agent_summary (manual trigger)
-        # (сохраняем блок для удобства будущего расширения)
+        # Fallback: если все участники вышли и остался неотправленный транскрипт — попробуем авто summary (auto-orphan)
         try:
-            pass
+            remaining = len(_room_members.get(room_uuid, set()))
+            if remaining == 0 and room_uuid not in _room_summary_finalized:
+                # Проверяем есть ли транскрипт
+                try:
+                    vcheck = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(room_id)
+                except Exception:
+                    vcheck = None  # type: ignore
+                if vcheck:
+                    print(f"[summary] Orphan auto trigger room={room_id}")
+                    await _generate_and_send_summary(room_uuid, room_id, 'auto-orphan', ai_provider=ai_provider, collector=collector, voice_coll=voice_coll)
         except Exception:
             pass

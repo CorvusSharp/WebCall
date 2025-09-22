@@ -97,3 +97,25 @@ class DirectReadStates(Base):
     owner_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey('users.id'), primary_key=True)
     other_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey('users.id'), primary_key=True)
     last_read_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+
+
+class TelegramLinks(Base):
+    """Привязка пользователя к Telegram chat_id через одноразовый token.
+
+    Статусы:
+      pending  – создан токен, ждём подтверждения через /start <token>
+      confirmed – chat_id зафиксирован, можно слать summary
+      expired  – токен истёк без подтверждения
+    """
+    __tablename__ = 'telegram_links'
+    user_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey('users.id'), primary_key=True)
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'chat_id', name='uq_user_chat_once'),
+    )

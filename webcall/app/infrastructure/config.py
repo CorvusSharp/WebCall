@@ -60,7 +60,8 @@ class Settings(BaseSettings):
     AI_SUMMARY_MAX_MESSAGES: int = 200  # лимит сообщений для одного резюме (хвост обрезается)
     AI_SUMMARY_MIN_CHARS: int = 60  # минимальный объём текста (символов) чтобы считать summary содержательным
     TELEGRAM_BOT_TOKEN: str | None = None  # токен бота для отправки итоговых выжимок
-    TELEGRAM_CHAT_ID: str | None = None  # целевой chat/channel id для получения выжимок
+    TELEGRAM_CHAT_ID: str | None = None  # (устаревшее) глобальный chat id; если установлен используется как fallback
+    TELEGRAM_BOT_NAME: str | None = None  # username бота без @ для генерации deep-link
     OPENAI_API_KEY: str | None = None  # ключ OpenAI (НЕ хранить в репо)
     AI_MODEL_FALLBACK: str | None = None  # запасная модель если основная недоступна
     # Voice capture / ASR

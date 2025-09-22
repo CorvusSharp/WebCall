@@ -661,6 +661,37 @@ function sortPeerTiles(){
 export function leaveRoom(){
   cancelSoloLeave('manual-leave');
   appState.isManuallyDisconnected = true;
+  // Если активен AI Agent и мы не сделали manual summary — инициируем его перед уходом
+  if (appState._aiAgent && appState.ws && appState.ws.readyState === WebSocket.OPEN){
+    try {
+      log('Leave: обнаружен активный AI Agent — выполняем финализацию перед выходом');
+      // Остановить voice mixer и послать stop voice_capture
+      try { if (appState.voiceMixer) appState.voiceMixer.stop(); } catch {}
+      try { if (appState._voiceWs && appState._voiceWs.readyState === WebSocket.OPEN){ appState._voiceWs.send(JSON.stringify({ type:'stop', ts: Date.now() })); } } catch {}
+      // Закрыть агентский WS присутствия
+      try { appState._aiAgent.ws.close(1000,'leave'); } catch {}
+      appState._aiAgent = null;
+      // Отправить agent_summary и подождать ack (или 2.5с)
+      let resolved = false;
+      const waiter = new Promise(res=>{
+        const to = setTimeout(()=>{ if (!resolved){ log('Leave: timeout ожидания agent_summary ack'); res(); } }, 2500);
+        const handler = (ev)=>{
+          try {
+            const m = JSON.parse(ev.data);
+            if (m.type === 'agent_summary_ack'){ resolved = true; clearTimeout(to); log(`Leave: получен ack summary status=${m.status}`); appState.ws.removeEventListener('message', handler); res(); }
+          } catch {}
+        };
+        try { appState.ws.addEventListener('message', handler); } catch {}
+      });
+      // Небольшая задержка чтобы успел финализироваться транскрипт (если ещё идёт закрытие voice ws)
+      setTimeout(()=>{
+        try { appState.ws.send(JSON.stringify({ type:'agent_summary', ts: Date.now() })); log('Leave: отправлен agent_summary перед закрытием'); } catch {}
+      }, 400);
+      // Ждём завершения (не блокируем UI слишком долго — уже await)
+      // eslint-disable-next-line no-unused-expressions
+      waiter.then(()=>{ /* noop */ });
+    } catch(e){ log('Leave: ошибка при финализации агента '+e); }
+  }
   try {
     // Если это личный звонок (activeCall принят и roomId начинается с call-), шлём завершающий сигнал через friends WS
     const c = getActiveCall();
@@ -917,6 +948,11 @@ function setupUI(){
   // === AI Agent toggle ===
   els.btnAiAgent?.addEventListener('click', async () => {
     if (!appState.currentRoomId){ log('AI Agent: сначала подключитесь к комнате'); return; }
+    // Проверяем привязку Telegram (однократно перед первой активацией агента)
+    try {
+      const ok = await ensureTelegramLinked();
+      if (!ok){ log('AI Agent: запуск отменён — нет подтверждения Telegram'); return; }
+    } catch(e){ log('AI Agent: ошибка проверки Telegram '+e); }
     // 1-й клик: активирует агента и поток голосовых чанков. 2-й клик: останавливает и шлёт manual summary.
     if (!appState._aiAgent){
       // Подключаем
@@ -1254,6 +1290,130 @@ function setupUI(){
       apply(prefs);
     }
   } catch {}
+}
+
+// ===== Telegram linking (AI summary delivery) =====
+async function fetchJson(url, opts){
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error('HTTP '+r.status);
+  return r.json();
+}
+
+async function getTelegramStatus(){
+  try {
+    const token = localStorage.getItem('wc_token');
+    if (!token) return { status: 'absent' };
+    return await fetchJson('/api/v1/telegram/status', { headers:{ 'Authorization':'Bearer '+token } });
+  } catch { return { status: 'absent' }; }
+}
+
+async function createTelegramLink(){
+  const token = localStorage.getItem('wc_token'); if (!token) throw new Error('no token');
+  const data = await fetchJson('/api/v1/telegram/link', { method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+token } });
+  return data; // { token, deeplink, expires_at }
+}
+
+async function pollTelegramStatus(timeoutMs=60000, intervalMs=2000){
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs){
+    const st = await getTelegramStatus();
+    if (st.status === 'confirmed') return st;
+    await new Promise(r=> setTimeout(r, intervalMs));
+  }
+  return { status:'timeout' };
+}
+
+async function ensureTelegramLinked(){
+  // Кешируем успешную проверку в appState, чтобы не дергать каждый клик
+  if (appState.telegramLinkChecked && appState.telegramLinked) return true;
+  const st = await getTelegramStatus();
+  if (st.status === 'confirmed'){ appState.telegramLinked=true; appState.telegramLinkChecked=true; return true; }
+
+  // Показываем модал (простой overlay) с инструкцией
+  let overlay = document.getElementById('tgLinkOverlay');
+  if (!overlay){
+    overlay = document.createElement('div');
+    overlay.id='tgLinkOverlay';
+    overlay.style.position='fixed'; overlay.style.inset='0'; overlay.style.background='rgba(0,0,0,.55)'; overlay.style.zIndex='5000'; overlay.style.display='flex'; overlay.style.alignItems='center'; overlay.style.justifyContent='center';
+    overlay.innerHTML = '<div id="tgLinkModal" style="background:#1e2227;padding:22px 26px;border-radius:14px;max-width:480px;width:100%;box-shadow:0 10px 34px rgba(0,0,0,.45);font:14px/1.4 system-ui,sans-serif;color:#fff;">'
+      +'<div style="font-size:18px;font-weight:600;margin-bottom:10px;">Подключение Telegram</div>'
+      +'<div id="tgLinkBody">'
+      +'Чтобы получать итоговую выжимку в Telegram — свяжите аккаунт. Нажмите кнопку ниже и в открывшемся боте отправьте команду /start.<br><br>'
+      +'<b>Шаги:</b><ol style="padding-left:18px;margin:6px 0 10px 0;">'
+      +'<li>Открыть бота</li>'
+      +'<li>Нажать Start и отправить /start (токен подставится автоматически)</li>'
+      +'<li>Вернуться сюда — статус обновится</li>'
+      +'</ol>'
+      +'</div>'
+      +'<div id="tgLinkActions" style="display:flex;gap:10px;align-items:center;margin-top:8px;">'
+      +'<button id="btnTgOpen" class="btn btn-primary">Открыть Telegram</button>'
+      +'<button id="btnTgRecheck" class="btn btn-secondary" disabled>Ожидание...</button>'
+      +'<button id="btnTgCancel" class="btn btn-secondary">Отмена</button>'
+      +'</div>'
+      +'<div id="tgLinkStatus" style="margin-top:10px;font-size:12px;color:#aaa;">Статус: not linked</div>'
+      +'</div>';
+    document.body.appendChild(overlay);
+  } else {
+    overlay.style.display='flex';
+  }
+
+  const btnOpen = overlay.querySelector('#btnTgOpen');
+  const btnRecheck = overlay.querySelector('#btnTgRecheck');
+  const btnCancel = overlay.querySelector('#btnTgCancel');
+  const statusEl = overlay.querySelector('#tgLinkStatus');
+  const bodyEl = overlay.querySelector('#tgLinkBody');
+
+  let deeplinkData = null;
+  async function prepareLink(){
+    try {
+      btnOpen.disabled = true; btnOpen.textContent='Генерация...';
+      deeplinkData = await createTelegramLink();
+      btnOpen.disabled = false; btnOpen.textContent='Открыть Telegram';
+      statusEl.textContent = 'Статус: ожидание подтверждения';
+    } catch(e){
+      statusEl.textContent = 'Ошибка создания ссылки: '+e;
+      btnOpen.disabled=false; btnOpen.textContent='Повторить';
+    }
+  }
+  await prepareLink();
+
+  function closeOverlay(){ overlay.style.display='none'; }
+
+  btnCancel.onclick = ()=>{ closeOverlay(); };
+  btnOpen.onclick = ()=>{
+    if (!deeplinkData){ prepareLink(); return; }
+    try { window.open(deeplinkData.deeplink, '_blank'); } catch {}
+    // Запускаем polling
+    btnRecheck.disabled = false; btnRecheck.textContent='Проверить';
+    statusEl.textContent = 'Статус: ждём подтверждения...';
+  };
+  btnRecheck.onclick = async ()=>{
+    btnRecheck.disabled = true; btnRecheck.textContent='Проверка...';
+    const st2 = await getTelegramStatus();
+    if (st2.status === 'confirmed'){
+      statusEl.textContent = '✅ Привязано! Можно запускать AI Agent.';
+      appState.telegramLinked = true; appState.telegramLinkChecked = true;
+      setTimeout(()=>{ closeOverlay(); }, 800);
+    } else {
+      statusEl.textContent = 'Пока не подтверждено. Попробуйте ещё раз через пару секунд.';
+      btnRecheck.disabled = false; btnRecheck.textContent='Проверить';
+    }
+  };
+
+  // Автоматический polling (до 60с) после открытия modala — не блокирует UI
+  (async ()=>{
+    try {
+      const res = await pollTelegramStatus(60000, 3000);
+      if (res.status === 'confirmed'){
+        statusEl.textContent = '✅ Привязано!';
+        appState.telegramLinked = true; appState.telegramLinkChecked = true;
+        setTimeout(()=>{ closeOverlay(); }, 800);
+      }
+    } catch {}
+  })();
+
+  // Возвращаем false (ещё не привязан)
+  return false;
 }
 
 // ===== Public init =====
