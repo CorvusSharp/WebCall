@@ -22,10 +22,8 @@ class SummaryOrchestrator:
     3. Добавление сообщений в общий лог продолжается (для будущих сценариев), но построение персонального summary
        опирается только на сообщения внутри конкретной сессии, что предотвращает утечку данных между пользователями.
     4. Завершение одной сессии (stop) не влияет на продолжающиеся сессии других пользователей.
-     5. Preload: при старте окна можно подмешать хвост последних сообщений до start_ts (ограниченный по возрасту),
-         чтобы не терять контекст сразу перед нажатием кнопки старта.
-     6. Pending voice wait: при запросе summary, если окно пустое и возможно идёт финализация ASR, выполняется короткое
-         ожидание появления транскрипта (poll voice collector) чтобы уменьшить число "пустых" ответов.
+    5. Pending voice wait: при запросе summary, если окно пустое и возможно идёт финализация ASR, выполняется короткое
+       ожидание появления транскрипта (poll voice collector) чтобы уменьшить число "пустых" ответов.
     """
     def __init__(self) -> None:
         self._log = MessageLog()
@@ -33,8 +31,6 @@ class SummaryOrchestrator:
         self._sessions: Dict[Tuple[str, str], UserAgentSession] = {}
         # Быстрый индекс по комнате для доставки новых сообщений в активные сессии
         self._room_sessions: Dict[str, List[UserAgentSession]] = {}
-        # Последняя нетехническая voice транскрипция на пользователя (room_id,user_id)->(text, ts_attach)
-        self._last_voice: Dict[Tuple[str,str], Tuple[str,int]] = {}
         # Стратегии (для fallback путей — вероятно не нужны, но оставим)
         self._chat_strategy = ChatStrategy()
         self._combined_strategy = CombinedVoiceChatStrategy()
@@ -81,8 +77,6 @@ class SummaryOrchestrator:
             technical = True
         sess.add_voice_transcript(transcript)
         logger.info("summary_v2: add_voice_transcript room=%s user=%s chars=%s technical=%s head=%r", room_id, user_id, len(transcript), technical, transcript[:60])
-        if not technical:
-            self._last_voice[key] = (transcript, int(time.time()*1000))
 
     async def start_user_window(self, room_id: str, user_id: str) -> None:
         """Старт (или перезапуск) персонального окна пользователя."""
@@ -100,36 +94,6 @@ class SummaryOrchestrator:
         self._room_sessions.setdefault(room_id, []).append(sess)
         # Не удаляем транскрипт из коллектора при рестарте: если запись ещё финализируется, она прикрепится лениво.
         logger.debug("summary_v2: started new user window room=%s user=%s start_ts=%s", room_id, user_id, sess.start_ts)
-        # --- Preload чат хвоста для контекста ---
-        try:
-            # Берём хвост последних N сообщений (включая технические пока) до старта
-            TAIL_LIMIT = 40
-            MAX_AGE_MS = 15_000  # не старше 15 секунд для контекста
-            tail_all = self._log.tail(room_id, TAIL_LIMIT)
-            preload: List[ChatMessage] = []
-            for m in tail_all:
-                if m.ts >= sess.start_ts:
-                    continue  # уже попадёт как обычное сообщение
-                if (sess.start_ts - m.ts) > MAX_AGE_MS:
-                    continue
-                preload.append(m)
-            if preload:
-                # упорядочиваем по ts
-                preload.sort(key=lambda x: x.ts)
-                sess.add_preload_chat(preload)
-                logger.info("summary_v2: preload chat window room=%s user=%s count=%s age_ms=%s..%s", room_id, user_id, len(preload), sess.start_ts - preload[0].ts, sess.start_ts - preload[-1].ts)
-        except Exception:
-            pass
-        # Попытка немедленного reuse прошлой транскрипции (если новая сессия запрошена мгновенно после предыдущей)
-        key = (room_id, user_id)
-        with contextlib.suppress(Exception):
-            reuse_tuple = self._last_voice.get(key)
-            if reuse_tuple:
-                text_prev, ts_prev = reuse_tuple
-                # Reuse окно 7 секунд
-                if (sess.start_ts - ts_prev) <= 7000:
-                    sess.add_voice_transcript(text_prev)
-                    logger.info("summary_v2: reused previous voice transcript room=%s user=%s age_ms=%s", room_id, user_id, sess.start_ts - ts_prev)
 
     def end_user_window(self, room_id: str, user_id: str) -> None:
         key = (room_id, user_id)
@@ -226,8 +190,8 @@ class SummaryOrchestrator:
                     if vt and getattr(vt, 'text', None):
                         txt = vt.text.strip()
                         low = txt.lower()
-                        # Отбрасываем только явные плейсхолдеры/ошибки, время не фильтруем.
-                        if txt and not (low.startswith('(no audio chunks') or low.startswith('(asr failed') or low.startswith('(asr exception') or low.startswith('(asr disabled')):
+                        # Фильтрация: текст нетехнический и сгенерирован не раньше старта (разрешаем небольшой дрейф -100мс)
+                        if txt and not (low.startswith('(no audio chunks') or low.startswith('(asr failed') or low.startswith('(asr exception') or low.startswith('(asr disabled')) and vt.generated_at >= (sess.start_ts - 100):
                             sess.add_voice_transcript(txt)
                             logger.info("summary_v2: lazy attach voice transcript room=%s user=%s len=%s gen_at=%s start_ts=%s", room_id, user_id, len(txt), vt.generated_at, sess.start_ts)
                         else:
@@ -278,7 +242,7 @@ class SummaryOrchestrator:
                     if vt_retry and getattr(vt_retry, 'text', None):
                         txt2 = vt_retry.text.strip()
                         low2 = txt2.lower()
-                        if txt2 and not (low2.startswith('(no audio') or low2.startswith('(asr failed') or low2.startswith('(asr exception') or low2.startswith('(asr disabled')):
+                        if txt2 and not (low2.startswith('(no audio') or low2.startswith('(asr failed') or low2.startswith('(asr exception') or low2.startswith('(asr disabled')) and vt_retry.generated_at >= (sess.start_ts - 100):
                             sess.add_voice_transcript(txt2)
                             logger.info("summary_v2: second-chance attach voice transcript room=%s user=%s len=%s", room_id, user_id, len(txt2))
                             result = await sess.build_summary(ai_provider=ai_provider, system_prompt=system_prompt)
