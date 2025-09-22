@@ -60,11 +60,15 @@ class SummaryOrchestrator:
             return
         key = (room_id, user_id)
         sess = self._sessions.get(key)
-        if not sess:
-            # ленивое создание (редкий случай): пользователь мог вызвать транскрипт раньше явного старта агента
+        if not sess or (sess and sess.end_ts is not None):
+            # Нет активной сессии или предыдущая завершена — создаём новую для новой записи
+            if sess and sess.end_ts is not None:
+                with contextlib.suppress(ValueError):
+                    self._room_sessions.get(room_id, []).remove(sess)
             sess = UserAgentSession(room_id=room_id, user_id=user_id)
             self._sessions[key] = sess
             self._room_sessions.setdefault(room_id, []).append(sess)
+            logger.debug("summary_v2: auto-created session on voice transcript room=%s user=%s", room_id, user_id)
         sess.add_voice_transcript(transcript)
         logger.info("summary_v2: add_voice_transcript room=%s user=%s chars=%s", room_id, user_id, len(transcript))
 
@@ -123,11 +127,52 @@ class SummaryOrchestrator:
                 return SummaryResult.empty(room_id)
         # Диагностика текущего состояния сессии ДО ленивого voice attach
         try:
+            voice_segments = getattr(sess, '_voice_segments', [])  # type: ignore[attr-defined]
             logger.debug(
-                "summary_v2: pre-build state room=%s user=%s msgs=%s has_voice=%s", room_id, user_id, len(getattr(sess, '_messages', [])), bool(getattr(sess, '_voice_text', None))
+                "summary_v2: pre-build state room=%s user=%s msgs=%s voice_segments=%s ended=%s", room_id, user_id, len(getattr(sess, '_messages', [])), len(voice_segments), getattr(sess, 'end_ts', None)
             )
         except Exception:
             pass
+
+        # Авто-восстановление: если сессия завершена, но после end_ts появились новые чат сообщения или свежая voice транскрипция — создаём новую сессию.
+        if sess.end_ts is not None:
+            try:
+                # Проверим новые чат сообщения после end_ts
+                new_chat = False
+                tail = self._log.slice_since(room_id, sess.end_ts + 1)
+                if tail:
+                    new_chat = True
+                # Проверим новую voice (generated_at > end_ts)
+                fresh_voice = False
+                with contextlib.suppress(Exception):
+                    vc = get_voice_collector()
+                    vt2 = await vc.get_transcript(f"{room_id}:{user_id}")
+                    if vt2 and vt2.generated_at > sess.end_ts:
+                        txt2 = (vt2.text or '').strip()
+                        if txt2 and not txt2.lower().startswith('(no audio'):
+                            fresh_voice = True
+                if new_chat or fresh_voice:
+                    # Создаём новую сессию с началом = макс(end_ts+1, first_new_ts)
+                    with contextlib.suppress(ValueError):
+                        self._room_sessions.get(room_id, []).remove(sess)
+                    new_sess = UserAgentSession(room_id=room_id, user_id=user_id)
+                    # Если есть новое чат сообщение — подгоним start_ts чтобы исключить старые
+                    if tail:
+                        first_ts = tail[0].ts
+                        new_sess.start_ts = min(first_ts, int(time.time()*1000))
+                    self._sessions[key] = new_sess
+                    self._room_sessions.setdefault(room_id, []).append(new_sess)
+                    sess = new_sess
+                    # Доставим новые чат сообщения в новую сессию
+                    for m in tail:
+                        sess.add_chat(m)
+                    if fresh_voice:
+                        with contextlib.suppress(Exception):
+                            if vt2 and vt2.text:
+                                sess.add_voice_transcript(vt2.text.strip())
+                    logger.info("summary_v2: auto-resumed session room=%s user=%s new_chat=%s fresh_voice=%s", room_id, user_id, new_chat, fresh_voice)
+            except Exception:
+                pass
         # Если в сессии нет voice, попробуем подтянуть (лениво) готовую транскрипцию, чтобы не было окна, когда агент стартовал чуть позже окончания речи
         # Ленивая подгрузка: если пока нет ни одного voice сегмента, попробуем взять существующий транскрипт.
         if not getattr(sess, '_voice_segments', None):  # type: ignore[attr-defined]
