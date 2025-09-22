@@ -125,6 +125,11 @@ class SummaryCollector:
         async with self._lock:
             return len(self._messages.get(room_id, []))
 
+    async def get_messages_snapshot(self, room_id: str) -> List[ChatMessage]:
+        """Возвращает копию текущих сообщений комнаты без очистки."""
+        async with self._lock:
+            return list(self._messages.get(room_id, []))
+
 
 def _fallback_summary(messages: List[str], error: str | None = None) -> str:
     if not messages:
@@ -151,3 +156,45 @@ def get_summary_collector() -> SummaryCollector:
 class AISummaryProvider:  # интерфейс для адаптера AI
     async def generate_summary(self, plain_messages: list[str]) -> str:  # pragma: no cover - интерфейс
         raise NotImplementedError
+
+
+async def summarize_messages(messages: List[ChatMessage], ai_provider: 'AISummaryProvider | None', *, system_prompt: str | None = None) -> SummaryResult:
+    """Формирует SummaryResult из предоставленного списка сообщений (без модификации коллектора).
+
+    Использует те же правила что и SummaryCollector.summarize, но не очищает исходный state
+    (предназначено для персональных snapshot-сводок).
+    """
+    settings = get_settings()
+    plain_messages = [f"[{m.ts}] {(m.author_name or m.author_id or 'anon')}: {m.content}" for m in messages]
+    if not messages:
+        return SummaryResult(room_id="unknown", message_count=0, generated_at=int(time.time()*1000), summary_text="Нет сообщений для суммаризации.")
+    total_chars = sum(len(m.content) for m in messages)
+    min_chars = getattr(settings, 'AI_SUMMARY_MIN_CHARS', 0) or 0
+    if settings.AI_SUMMARY_ENABLED and ai_provider is not None:
+        if min_chars > 0 and total_chars < min_chars:
+            summary_text = (
+                f"Сессия слишком короткая ({total_chars} < {min_chars}); содержательное резюме не сформировано.\n"
+                + _fallback_summary(plain_messages)
+            )
+        else:
+            try:
+                try:
+                    summary_text = await ai_provider.generate_summary(plain_messages, system_prompt)  # type: ignore[attr-defined]
+                except TypeError:
+                    summary_text = await ai_provider.generate_summary(plain_messages)  # type: ignore[attr-defined]
+            except Exception as e:
+                summary_text = _fallback_summary(plain_messages, error=str(e))
+    else:
+        summary_text = _fallback_summary(plain_messages)
+
+    # Re-use постобработку (упрощённо): добавим источники если мало сообщений или коротко
+    try:
+        norm = summary_text.strip().lower()
+        if ('источники:' not in norm) and (len(messages) <= 8 or len(summary_text) < 500):
+            tail_msgs = messages[-5:]
+            sources_block = "\n\nИсточники (последние):\n" + "\n".join(m.content for m in tail_msgs)
+            summary_text = summary_text.rstrip() + sources_block
+    except Exception:
+        pass
+
+    return SummaryResult(room_id=messages[0].room_id, message_count=len(messages), generated_at=int(time.time()*1000), summary_text=summary_text)

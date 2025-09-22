@@ -44,6 +44,9 @@ _room_summary_served: dict[UUID, set[UUID]] = defaultdict(set)
 _agent_owner: dict[UUID, UUID] = {}
 # Локи генерации per комната
 _room_summary_locks: dict[UUID, asyncio.Lock] = defaultdict(asyncio.Lock)
+# Персональные manual summary кэши: (room,user) -> SummaryResult и обслуженные отправки
+_user_manual_summary_cache: dict[tuple[UUID, UUID], SummaryResult] = {}
+_user_manual_summary_served: set[tuple[UUID, UUID]] = set()
 
 
 async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, reason: str, *,
@@ -57,32 +60,64 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
     # 1) отправить несколько chat сообщений;
     # 2) имитировать наличие voice транскрипта в voice_coll;
     # 3) отправить agent_summary и проверить одноразовую отправку.
-    # Лок per-комната чтобы не делать параллельные генерации
+    # Персональный режим: если инициатор указан — генерируем snapshot-based summary индивидуально
+    if initiator_user_id:
+        key = (room_uuid, initiator_user_id)
+        cached_user = _user_manual_summary_cache.get(key)
+        if cached_user and (key in _user_manual_summary_served):
+            print(f"[summary] User-personal summary already served room={original_room_id} user={initiator_user_id}")
+            return
+        # Snapshot сообщений (не очищаем collector)
+        from ...infrastructure.services.summary import summarize_messages  # локальный импорт чтобы избежать циклов
+        msgs_snapshot = await collector.get_messages_snapshot(str(room_uuid))
+        # Если есть voice транскрипт предпочтём его как отдельный flow (как раньше) — добавим его предложения временно
+        v_snap = None
+        with contextlib.suppress(Exception):
+            v_snap = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(original_room_id)
+        if v_snap and v_snap.text and not v_snap.text.startswith('(no audio'):
+            # Простая инъекция дополнительного ChatMessage (без автора)
+            from ...infrastructure.services.summary import ChatMessage
+            import time as _t
+            msgs_snapshot = list(msgs_snapshot)
+            msgs_snapshot.append(ChatMessage(room_id=str(room_uuid), author_id=None, author_name='voice', content=v_snap.text.strip(), ts=int(_t.time()*1000)))
+        # Кастомный prompt
+        custom_prompt: str | None = None
+        if session is not None:
+            with contextlib.suppress(Exception):
+                custom_prompt = await get_user_system_prompt(session, initiator_user_id)
+        user_summary = await summarize_messages(msgs_snapshot, ai_provider, system_prompt=custom_prompt)
+        _user_manual_summary_cache[key] = user_summary
+        # Отправка только инициатору
+        if settings.TELEGRAM_BOT_TOKEN and session is not None:
+            with contextlib.suppress(Exception):
+                chat_id = await get_confirmed_chat_id(session, initiator_user_id)
+                if chat_id:
+                    text = (
+                        f"Room {user_summary.room_id} персональное summary (trigger={reason}). Сообщений: {user_summary.message_count}.\n--- Summary ---\n{user_summary.summary_text}"
+                    )
+                    await tg_send_message(text, chat_ids=[chat_id], session=session)
+                    _user_manual_summary_served.add(key)
+                    print(f"[summary] Personal summary sent user={initiator_user_id} room={original_room_id}")
+            return
+
+    # Групповой режим (без initiator): старый кэш + лок
     lock = _room_summary_locks[room_uuid]
     async with lock:
-        # Если уже есть готовый summary в кэше — просто доставим тем, кому не доставляли (если есть инициатор)
         cached = _room_summary_cache.get(room_uuid)
         if cached is not None:
-            # Определяем целевых пользователей: инициатор или все владельцы агентов
             targets: set[UUID] = set()
-            if initiator_user_id:
-                targets.add(initiator_user_id)
-            else:
-                # все владельцы агентов комнаты
-                for aid in _room_agents.get(room_uuid, set()):
-                    owner = _agent_owner.get(aid)
-                    if owner:
-                        targets.add(owner)
+            for aid in _room_agents.get(room_uuid, set()):
+                owner = _agent_owner.get(aid)
+                if owner:
+                    targets.add(owner)
             if not targets:
-                print(f"[summary] Cached summary exists room={original_room_id} but no targets identified")
+                print(f"[summary] Cached summary exists room={original_room_id} but no group targets")
                 return
             served = _room_summary_served[room_uuid]
             pending = [u for u in targets if u not in served]
             if not pending:
-                print(f"[summary] Cached summary already served to all targets room={original_room_id}")
+                print(f"[summary] Cached summary already served to all group targets room={original_room_id}")
                 return
-            # Отправляем тем, кто ещё не получил
-            settings = get_settings()
             if settings.TELEGRAM_BOT_TOKEN:
                 for uid in pending:
                     try:
