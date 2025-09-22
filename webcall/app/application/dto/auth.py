@@ -32,7 +32,8 @@ class UpdateProfileInput(BaseModel):
 
 
 class ChangePasswordInput(BaseModel):
-    old_password: str = Field(min_length=6, max_length=128)
+    # Старый пароль может быть короче (исторические учётки могли иметь 5 символов)
+    old_password: str = Field(min_length=3, max_length=128)
     new_password: str = Field(min_length=6, max_length=128)
 
     @model_validator(mode='after')

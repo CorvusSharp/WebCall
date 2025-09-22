@@ -47,6 +47,12 @@
  *  @property {Array<Function>} pendingAutoplayTasks
  *  @property {ActiveCallState|null} activeCall
  *  @property {Map<string, any>} pendingIncomingInvites
+ *  @property {number|null} callAutoLeaveTimer
+ *  @property {string|null} callAutoLeaveRoom
+ *  @property {string|null} currentRoomId
+ *  @property {number|null} _multiPresenceSince
+ *  @property {number} _prevPresenceCount
+ *  @property {string|null} _lastPresenceRoom
  */
 
 /** @type {AppState} */
@@ -89,6 +95,12 @@ export const appState = {
   // Call state
   activeCall: null, // { roomId, withUserId, direction, status }
   pendingIncomingInvites: new Map(),
+  callAutoLeaveTimer: null,
+  callAutoLeaveRoom: null,
+  currentRoomId: null,
+  _multiPresenceSince: null,
+  _prevPresenceCount: 0,
+  _lastPresenceRoom: null,
 };
 
 export function resetTransient(){

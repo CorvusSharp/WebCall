@@ -23,16 +23,17 @@ describe('Call Signaling Fixes', () => {
   beforeEach(async () => {
     // Динамический импорт после установки мокав
     callsSignaling = await import('../modules/calls_signaling.js');
-    
+
     // Инициализируем модуль
     callsSignaling.initCallSignaling({
       getAccountId: () => 'user123',
       connectRoom: () => {},
       unlockAudio: () => {},
     });
-    
+
     // Ждем установки зависимостей
     await new Promise(resolve => setTimeout(resolve, 10));
+    callsSignaling.forceResetCall();
   });
 
   it('should handle call_invite for outgoing caller correctly', async () => {
@@ -50,11 +51,12 @@ describe('Call Signaling Fixes', () => {
     expect(result).toBe(true);
 
     // Симулируем получение call_invite от сервера для звонящего
+    const { roomId } = callsSignaling.getCallState();
     const callInviteMsg = {
       type: 'call_invite',
       fromUserId: 'user123',
       toUserId: 'friend456',
-      roomId: 'call-12345678-testfr',
+      roomId,
       fromUsername: 'Me',
       toUsername: 'TestFriend'
     };
@@ -63,8 +65,8 @@ describe('Call Signaling Fixes', () => {
 
     // Проверяем что состояние правильно обновилось
     const currentState = callsSignaling.getCallState();
-    expect(currentState.phase).toBe('outgoing_invite');
-    expect(currentState.roomId).toBe('call-12345678-testfr');
+    expect(currentState.phase).toBe('outgoing_ringing');
+    expect(currentState.roomId).toBe(roomId);
     expect(currentState.otherUserId).toBe('friend456');
 
     global.fetch = originalFetch;
@@ -85,36 +87,46 @@ describe('Call Signaling Fixes', () => {
 
     // Проверяем что состояние правильно обновилось для входящего звонка
     const currentState = callsSignaling.getCallState();
-    expect(currentState.phase).toBe('incoming_invite');
+    expect(currentState.phase).toBe('incoming_ringing');
     expect(currentState.roomId).toBe('call-87654321-caller');
     expect(currentState.otherUserId).toBe('caller789');
     expect(currentState.otherUsername).toBe('Caller');
   });
 
   it('should handle call_accept correctly', async () => {
-    // Сначала установим состояние исходящего звонка
+    const friend = { user_id: 'friend456', username: 'Friend' };
+    const originalFetch = global.fetch;
+    global.fetch = () => Promise.resolve({
+      ok: true,
+      json: () => mockNotifyCall(friend.user_id, 'call-test-room')
+    });
+
+    callsSignaling.startOutgoingCall(friend);
+
+    const { roomId: outgoingRoom } = callsSignaling.getCallState();
+
     callsSignaling.handleWsMessage({
       type: 'call_invite',
       fromUserId: 'user123',
       toUserId: 'friend456',
-      roomId: 'call-test-room',
+      roomId: outgoingRoom,
       fromUsername: 'Me',
       toUsername: 'Friend'
     });
 
-    // Теперь симулируем принятие звонка
     const callAcceptMsg = {
       type: 'call_accept',
       fromUserId: 'friend456',
       toUserId: 'user123',
-      roomId: 'call-test-room'
+      roomId: outgoingRoom
     };
 
     callsSignaling.handleWsMessage(callAcceptMsg);
 
-    // Проверяем что звонок перешел в активное состояние
     const currentState = callsSignaling.getCallState();
     expect(currentState.phase).toBe('active');
-    expect(currentState.roomId).toBe('call-test-room');
+    expect(currentState.roomId).toBe(outgoingRoom);
+
+    global.fetch = originalFetch;
   });
 });

@@ -127,9 +127,35 @@ function emit(){
  * @param {Partial<EngineState>} patch
  */
 function transition(phase, patch){
+  patch = patch || {};
   const prev = state;
-  state = { ...state, ...patch, phase, sinceTs: Date.now() };
-  log('transition', prev.phase, '->', phase, { room: state.roomId, peer: state.otherUserId, reason: state.reason||patch?.reason });
+  const shouldResetContext = phase === 'idle';
+  if (shouldResetContext){
+    patch = {
+      ...patch,
+      roomId: patch.roomId,
+      otherUserId: patch.otherUserId,
+      otherUsername: patch.otherUsername,
+      incoming: patch.incoming,
+    };
+  }
+  state = {
+    ...state,
+    ...(shouldResetContext ? { roomId: undefined, otherUserId: undefined, otherUsername: undefined, incoming: undefined, meta: undefined } : {}),
+    ...patch,
+    phase,
+    sinceTs: Date.now(),
+  };
+  if (phase !== 'ended'){
+    if (!('reason' in patch)) state.reason = undefined;
+    state.finalReason = undefined;
+  } else {
+    if (!state.reason && patch.reason === undefined) state.reason = 'end';
+    state.finalReason = state.reason;
+  }
+  if (phase === 'idle'){ state.reason = undefined; state.finalReason = undefined; }
+  if (!['incoming_ringing','outgoing_ringing'].includes(phase)){ state.meta = patch.meta; if (!('meta' in patch)) state.meta = undefined; }
+  log('transition', prev.phase, '->', phase, { room: state.roomId, peer: state.otherUserId, reason: state.reason });
   // Аудио сигналы
   try {
     if (phase==='incoming_ringing'){ resumeAudio(); startIncomingRing(); }
@@ -170,6 +196,11 @@ export function initCallSignaling(options){
 /** @param {{user_id:string, username?:string}} friend */
 export function startOutgoingCall(friend){
   if (!friend || !friend.user_id){ warn('invalid friend'); return false; }
+  if (state.phase === 'ended'){
+    warn('auto-clearing ended state before new call');
+    clearTimers();
+    transition('idle', { roomId: undefined, otherUserId: undefined, otherUsername: undefined, incoming: undefined });
+  }
   // Автовосстановление: если состояние не idle, но оно "устарело" или зависло – делаем мягкий сброс
   if (state.phase !== 'idle'){
     const age = Date.now() - state.sinceTs;
@@ -177,8 +208,7 @@ export function startOutgoingCall(friend){
     if (recoverable){
       warn('recovering stale call state', state.phase, age);
       clearTimers();
-      state = { phase:'idle', sinceTs: Date.now() };
-      emit();
+      transition('idle', { roomId: undefined, otherUserId: undefined, otherUsername: undefined, incoming: undefined });
     }
   }
   if (state.phase !== 'idle'){
@@ -195,9 +225,8 @@ export function startOutgoingCall(friend){
 
   const roomId = buildRoomId(friend);
   try { log('startOutgoingCall', { accountId: deps.getAccountId && deps.getAccountId(), target: friend.user_id, roomId }); } catch {}
-  transition('dialing', { roomId, otherUserId: friend.user_id, otherUsername: friend.username });
+  transition('dialing', { roomId, otherUserId: friend.user_id, otherUsername: friend.username, incoming: false });
   try { deps.unlockAudio(); } catch{}
-  scheduleDialTimeout();
 
   notifyCall(friend.user_id, roomId).then(()=>{
     log('notifyCall OK');
@@ -207,9 +236,7 @@ export function startOutgoingCall(friend){
       _optimisticTimer=null;
       if (state.phase==='dialing'){
         log('optimistic transition -> outgoing_ringing (echo not yet received)');
-        transition('outgoing_ringing', { meta:{ optimistic:true, confirmed:false } });
-        // продлеваем общий ring timeout если нужно
-        scheduleRingTimeout();
+        transition('outgoing_ringing', { incoming: false, meta:{ optimistic:true, confirmed:false } });
       }
     }, OPTIMISTIC_RING_DELAY_MS);
   }).catch(err=>{
@@ -246,13 +273,13 @@ export function acceptIncoming(){
 export function hangup(){
   if (state.phase==='active'){
     // Отправка call_end в app_init или другом месте (там уже реализовано). Здесь просто локально завершаем
-    transition('ended', { reason:'end' });
+    transition('ended', { reason:'hangup' });
   } else if (['connecting','incoming_ringing'].includes(state.phase)){
     attemptDecline('declined');
   } else if (['dialing','outgoing_ringing'].includes(state.phase)){
     attemptCancel('cancel');
   } else if (state.phase==='ended'){
-    transition('idle', {});
+    transition('idle', { roomId: undefined, otherUserId: undefined, otherUsername: undefined, incoming: undefined });
   }
 }
 
@@ -343,7 +370,7 @@ function onInvite(m, acc){
   if (isMine){
     // Echo подтверждение: если мы в dialing -> переходим в outgoing_ringing
     if (state.phase==='dialing' && state.roomId === m.roomId){
-      transition('outgoing_ringing', { otherUsername: m.toUsername || state.otherUsername, meta:{ optimistic:false, confirmed:true, createdAt } });
+      transition('outgoing_ringing', { otherUsername: m.toUsername || state.otherUsername, incoming:false, meta:{ optimistic:false, confirmed:true, createdAt } });
     } else if (state.phase==='outgoing_ringing' && state.roomId === m.roomId){
       // Обновляем meta если это был оптимистический режим
       if (state.meta && state.meta.optimistic && !state.meta.confirmed){
@@ -440,12 +467,22 @@ function onCancel(m, acc){
 }
 function onEnd(m, acc){
   if (state.roomId !== m.roomId){ log('ignore call_end (room mismatch)', { have: state.roomId, got: m.roomId }); return; }
-  if (state.phase === 'active') transition('ended', { reason: m.reason||'end' });
+  if (state.phase === 'idle'){ return; }
+  if (state.phase === 'ended'){
+    if (m.reason && !state.reason) state.reason = m.reason;
+    return;
+  }
+  const derivedReason = m.reason || (state.incoming ? 'disconnect' : 'end');
+  transition('ended', { reason: derivedReason });
 }
 
 // ============ Legacy совместимость (минимум) ============
 // Сохраняем базовые хуки, чтобы старый код не ломался (если он обращается к предыдущим экспортам)
-export function resetCallSystem(){ clearTimers(); state = { phase:'idle', sinceTs: Date.now() }; clearCallUI(); emit(); }
+export function resetCallSystem(){
+  clearTimers();
+  transition('idle', { roomId: undefined, otherUserId: undefined, otherUsername: undefined, incoming: undefined });
+  clearCallUI();
+}
 
 // Псевдонимы старых имён
 export const startOutgoingCallOld = startOutgoingCall;
@@ -457,8 +494,7 @@ export const acceptIncomingOld = acceptIncoming;
 export function forceResetCall(){
   try { warn('forceResetCall invoked'); } catch{}
   clearTimers();
-  state = { phase:'idle', sinceTs: Date.now() };
-  emit();
+  transition('idle', { roomId: undefined, otherUserId: undefined, otherUsername: undefined, incoming: undefined });
 }
 
 // Для консольной диагностики

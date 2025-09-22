@@ -12,7 +12,14 @@ import { initDirectChatModule, handleIncomingDirect, handleDirectCleared, bindSe
 // Legacy calls.js оставляем временно для обратной совместимости (звук, часть тестов)
 import { startSpecialRingtone, stopSpecialRingtone, resetActiveCall, getActiveCall, initCallModule } from '../calls.js';
 // Новый signaling слой
-import { initCallSignaling, handleWsMessage as handleCallSignal, startOutgoingCall as startOutgoingCallNew } from '../calls_signaling.js';
+import {
+  initCallSignaling,
+  handleWsMessage as handleCallSignal,
+  startOutgoingCall as startOutgoingCallNew,
+  resetCallSystem as resetCallEngine,
+  forceResetCall as forceResetCallEngine,
+  hangup as hangupCall,
+} from '../calls_signaling.js';
 import { checkAndRequestPermissionsInitial, updatePermBanner } from '../permissions.js';
 import { initPush } from '../push_subscribe.js';
 import { bus } from './event_bus.js';
@@ -21,6 +28,16 @@ import { startStatsLoop, stopStatsLoop, formatBitrate } from '../stats.js';
 // ===== Helpers =====
 function log(msg){ appendLog(els.logs, msg); }
 function stat(line){ appendLog(els.stats, line); }
+
+function cancelSoloLeave(reason){
+  if (!appState.callAutoLeaveTimer) return;
+  try {
+    log(`auto-leave cancelled${reason ? ` (${reason})` : ''}`);
+  } catch {}
+  clearTimeout(appState.callAutoLeaveTimer);
+  appState.callAutoLeaveTimer = null;
+  appState.callAutoLeaveRoom = null;
+}
 
 function getStableConnId(){
   try {
@@ -121,12 +138,31 @@ async function refreshDevices(){
 
 // ===== WS Room connect =====
 export async function connectRoom(){
-  if (appState.ws) return;
+  cancelSoloLeave('connect-room');
+  if (appState.ws){
+    const rs = appState.ws.readyState;
+    if (rs === WebSocket.OPEN || rs === WebSocket.CONNECTING){
+      log('WS уже подключается или открыт');
+      return;
+    }
+    try { appState.ws.close(); } catch {}
+    appState.ws = null;
+  }
   appState.isManuallyDisconnected = false;
   if (!ensureToken()) { log('Нет токена'); return; }
-  const roomId = els.roomId.value.trim(); if (!roomId){ log('Нужен ID комнаты'); return; }
+  const roomInput = els.roomId;
+  const roomId = roomInput && 'value' in roomInput ? roomInput.value.trim() : '';
+  if (!roomId){ log('Нужен ID комнаты'); return; }
   log(`Подключение к комнате ${roomId}...`); setConnectingState(true);
-  appState.ws = buildWs(roomId, appState.token); appState.userId = getStableConnId();
+  appState.userId = getStableConnId();
+  try {
+    appState.currentRoomId = roomId;
+    appState._lastPresenceRoom = roomId;
+    appState._prevPresenceCount = 0;
+    appState._multiPresenceSince = null;
+    appState.callAutoLeaveRoom = null;
+  } catch {}
+  appState.ws = buildWs(roomId, appState.token);
   log(`Мой connId: ${appState.userId}`); log(`Адрес WS: ${appState.ws.__debug_url}`);
 
   appState.rtc = new WebRTCManager({
@@ -160,6 +196,7 @@ export async function connectRoom(){
   const sendPingSafe = signal.sendPing ?? (ws => { try { if (ws && ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:'ping'})); } catch {} });
 
   appState.ws.onopen = async () => {
+    cancelSoloLeave('ws-open');
     appState.isReconnecting = false; log('WS открыт'); setConnectedState(true);
     if (appState.reconnectTimeout) clearTimeout(appState.reconnectTimeout);
     if (appState.pingTimer) clearInterval(appState.pingTimer);
@@ -223,50 +260,83 @@ export async function connectRoom(){
       try { updatePeerLayout(); } catch {}
       // Авто-выход из личной комнаты звонка если остались одни
       try {
-        const roomId = els.roomId?.value || '';
-        if (/^call-/.test(roomId)) {
-          // Сохраняем предыдущее количество пользователей в appState
-          if (typeof appState._prevPresenceCount !== 'number') appState._prevPresenceCount = msg.users.length;
-          const prev = appState._prevPresenceCount;
-          const nowCount = msg.users.length;
-          appState._prevPresenceCount = nowCount;
-          // Фиксируем момент стабилизации когда в комнате >=2
-          if (nowCount >= 2){ appState._multiPresenceSince = appState._multiPresenceSince || Date.now(); }
-          if (nowCount < 2){ /* сбрасывать не будем сразу, пусть хранится для анализа */ }
-          // Условия авто-выхода:
-          // 1) Раньше было >=2 пользователей
-          // 2) Сейчас остались мы одни (<=1)
-          // 3) Текущая фаза звонка активная/завершившаяся (исключаем стадии ожидания соединения peer-ов)
-          // 4) Ещё не запущен grace таймер
-          // 5) Прошло минимум 1.2s с момента когда в комнате впервые стало >=2 (стабилизация)
-          const stabilized = appState._multiPresenceSince && (Date.now() - appState._multiPresenceSince > 1200);
-          if (prev >= 2 && nowCount <= 1 && stabilized) {
+        const roomField = els.roomId;
+        const roomId = roomField && 'value' in roomField ? roomField.value || '' : '';
+        const isCallRoom = /^call-/.test(roomId);
+        if (isCallRoom){
+          const nowCount = Array.isArray(msg.users) ? msg.users.length : 0;
+          const trackedRoom = appState._lastPresenceRoom;
+          const sameRoom = trackedRoom === roomId;
+          const prev = sameRoom && typeof appState._prevPresenceCount === 'number' ? appState._prevPresenceCount : nowCount;
+          let multiSince = sameRoom ? appState._multiPresenceSince : (nowCount >= 2 ? Date.now() : null);
+
+          if (!sameRoom){
+            appState._lastPresenceRoom = roomId;
+            appState._prevPresenceCount = nowCount;
+            appState._multiPresenceSince = multiSince;
+          }
+
+          if (nowCount >= 2){
+            if (!multiSince) multiSince = Date.now();
+            cancelSoloLeave('peers-present');
+          }
+
+          const stabilized = !!multiSince && (Date.now() - multiSince > 1200);
+          if (sameRoom && prev >= 2 && nowCount <= 1 && stabilized){
             const phase = (window.getCallState && window.getCallState().phase) || 'idle';
             if (['active','ended','connecting'].includes(phase)){
-              if (!appState._callSoloGrace){
+              if (!appState.callAutoLeaveTimer){
                 log(`call-room solitary detected (prev=${prev} -> now=${nowCount}), scheduling auto leave`);
-                appState._callSoloGrace = setTimeout(()=>{
+                const timerRoom = roomId;
+                appState.callAutoLeaveRoom = timerRoom;
+                appState.callAutoLeaveTimer = setTimeout(()=>{
+                  if (appState.callAutoLeaveRoom && appState.callAutoLeaveRoom !== timerRoom){
+                    cancelSoloLeave('room-updated');
+                    return;
+                  }
                   try {
-                    // Перепроверка: если за grace время снова кто-то пришёл — отменяем
-                    const latestCount = appState._prevPresenceCount;
-                    if (latestCount && latestCount > 1){
+                    const latestCount = typeof appState._prevPresenceCount === 'number' ? appState._prevPresenceCount : 0;
+                    if (latestCount > 1){
                       log('solo grace aborted: peer rejoined');
-                      appState._callSoloGrace = null;
+                      cancelSoloLeave('peer-rejoined');
                       return;
                     }
-                    try { window.getCallState && window.getCallState().phase==='active' && window.hangup?.(); } catch {}
-                    // Полная очистка состояния звонка, чтобы не оставалось "занято" при повторных попытках
-                    try { window.resetCallSystem && window.resetCallSystem(); } catch {}
-                    try { if (els.roomId && /^call-/.test(els.roomId.value)) els.roomId.value=''; } catch {}
-                    try { appState.currentRoomId = null; } catch {}
-                    try { appState._prevPresenceCount = 0; } catch {}
+                    const currentRoom = roomField && 'value' in roomField ? roomField.value : '';
+                    if (!currentRoom || currentRoom !== timerRoom){
+                      cancelSoloLeave('room-changed');
+                      return;
+                    }
+                    try {
+                      if (window.getCallState && window.getCallState().phase === 'active'){
+                        hangupCall();
+                      }
+                    } catch {}
+                    try { resetCallEngine(); } catch {}
+                    try { if (roomField && /^call-/.test(roomField.value)) roomField.value=''; } catch {}
+                    appState.currentRoomId = null;
+                    appState._prevPresenceCount = 0;
+                    appState._multiPresenceSince = null;
                     leaveRoom();
                   } catch {}
-                  appState._callSoloGrace = null;
-                }, 800); // grace 0.8s
+                  cancelSoloLeave('completed');
+                }, 800);
               }
             }
           }
+
+          if (nowCount <= 1){
+            // сбросим отметку стабилизации, чтобы новый звонок не наследовал старые значения
+            if (!sameRoom) multiSince = null;
+          }
+
+          appState._prevPresenceCount = nowCount;
+          appState._multiPresenceSince = nowCount >= 2 ? (multiSince || Date.now()) : multiSince;
+          appState._lastPresenceRoom = roomId;
+        } else {
+          cancelSoloLeave('non-call-room');
+          appState._prevPresenceCount = Array.isArray(msg.users) ? msg.users.length : 0;
+          appState._multiPresenceSince = null;
+          appState._lastPresenceRoom = roomId || null;
         }
       } catch {}
     } else if (msg.type === 'user_joined'){ log(`Присоединился: ${msg.userId}`); }
@@ -288,12 +358,16 @@ export async function connectRoom(){
     if (appState.rtc) { appState.rtc.close(); appState.rtc = null; }
     try { stopStatsLoop(); } catch {}
     appState.ws = null; if (appState.peerCleanupIntervalId) { clearInterval(appState.peerCleanupIntervalId); appState.peerCleanupIntervalId=null; }
+    cancelSoloLeave('ws-close');
     try {
       // Если закрылась эфемерная комната звонка — форсируем полный сброс сигналинга
       const rid = els.roomId?.value || '';
-      if (/^call-/.test(rid) && window.forceResetCall){ window.forceResetCall(); }
+      if (/^call-/.test(rid) && forceResetCallEngine){ forceResetCallEngine(); }
       if (/^call-/.test(rid)){ try { els.roomId.value=''; } catch {} }
       appState.currentRoomId = null;
+      appState._prevPresenceCount = 0;
+      appState._multiPresenceSince = null;
+      appState._lastPresenceRoom = null;
     } catch {}
     if (!appState.isManuallyDisconnected && !appState.isReconnecting){ appState.isReconnecting = true; log('Попытка переподключения через 3с...'); appState.reconnectTimeout = setTimeout(connectRoom, 3000); }
   };
@@ -552,6 +626,7 @@ function sortPeerTiles(){
 }
 
 export function leaveRoom(){
+  cancelSoloLeave('manual-leave');
   appState.isManuallyDisconnected = true;
   try {
     // Если это личный звонок (activeCall принят и roomId начинается с call-), шлём завершающий сигнал через friends WS
@@ -564,11 +639,14 @@ export function leaveRoom(){
   // Принудительный сброс внутреннего signaling состояния для call-* комнат
   try {
     if (els.roomId && /^call-/.test(els.roomId.value)){
-      if (window.forceResetCall) window.forceResetCall();
+      forceResetCallEngine?.();
     }
   } catch {}
-  try { appState.ws?.send(JSON.stringify({ type:'leave', fromUserId: appState.userId })); } catch {}
-  if (appState.ws) appState.ws.close(); if (appState.rtc) { appState.rtc.close(); appState.rtc=null; }
+  const ws = appState.ws;
+  try { ws?.send(JSON.stringify({ type:'leave', fromUserId: appState.userId })); } catch {}
+  if (ws) ws.close();
+  appState.ws = null;
+  if (appState.rtc) { appState.rtc.close(); appState.rtc=null; }
   try { // Безопасно гасим локальное видео/шаринг (если остались треки)
     if (appState.rtc?.stopVideo) appState.rtc.stopVideo();
   } catch {}
@@ -576,6 +654,12 @@ export function leaveRoom(){
   try { els.peersGrid.querySelectorAll('.tile').forEach(t=> safeReleaseMedia(t)); } catch {}
   els.peersGrid.innerHTML=''; log('Отключено'); if (appState.peerCleanupIntervalId){ clearInterval(appState.peerCleanupIntervalId); appState.peerCleanupIntervalId=null; }
   if (getActiveCall()) resetActiveCall('leave');
+  try {
+    appState._prevPresenceCount = 0;
+    appState._multiPresenceSince = null;
+    appState._lastPresenceRoom = null;
+    appState.callAutoLeaveRoom = null;
+  } catch {}
   try { loadVisitedRooms(); } catch {}
 }
 
@@ -1105,11 +1189,14 @@ export async function appInit(){
   try { updateUserBadge(); } catch {}
   
   // Делаем showToast и startFriendsWs доступными глобально для удобства использования из других модулей
-  try { 
-    window.showToast = showToast; 
+  try {
+    window.showToast = showToast;
     window.startFriendsWs = startFriendsWs;
     window.appState = appState; // Для диагностики
-    
+    window.resetCallSystem = resetCallEngine;
+    window.forceResetCall = forceResetCallEngine;
+    window.hangup = hangupCall;
+
     // Добавляем функцию диагностики WebSocket (для отладки)
     window.debugWebSocket = () => {
       const ws = window.appState?.friendsWs;
