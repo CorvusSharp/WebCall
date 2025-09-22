@@ -82,16 +82,8 @@ class SummaryOrchestrator:
         sess = UserAgentSession(room_id=room_id, user_id=user_id)
         self._sessions[key] = sess
         self._room_sessions.setdefault(room_id, []).append(sess)
-        # Сбросим старую транскрипцию (если осталась от прошлого разговора) чтобы не приклеить её к новому окну
-        try:
-            vc = get_voice_collector()
-            with contextlib.suppress(Exception):
-                popped = await vc.pop_transcript(f"{room_id}:{user_id}")  # type: ignore
-                if popped:
-                    logger.info("summary_v2: cleared old voice transcript on restart room=%s user=%s", room_id, user_id)
-        except Exception:
-            pass
-        # Прелоад убран — будет лениво в build_personal_summary если появится новая валидная транскрипция.
+        # Не удаляем транскрипт из коллектора при рестарте: если запись ещё финализируется, она прикрепится лениво.
+        logger.debug("summary_v2: started new user window room=%s user=%s start_ts=%s", room_id, user_id, sess.start_ts)
 
     def end_user_window(self, room_id: str, user_id: str) -> None:
         key = (room_id, user_id)
@@ -137,7 +129,8 @@ class SummaryOrchestrator:
         except Exception:
             pass
         # Если в сессии нет voice, попробуем подтянуть (лениво) готовую транскрипцию, чтобы не было окна, когда агент стартовал чуть позже окончания речи
-        if sess._voice_text is None:  # type: ignore[attr-defined]
+        # Ленивая подгрузка: если пока нет ни одного voice сегмента, попробуем взять существующий транскрипт.
+        if not getattr(sess, '_voice_segments', None):  # type: ignore[attr-defined]
             try:
                 vc = get_voice_collector()
                 voice_key = f"{room_id}:{user_id}"
@@ -146,15 +139,17 @@ class SummaryOrchestrator:
                     if vt and getattr(vt, 'text', None):
                         txt = vt.text.strip()
                         low = txt.lower()
-                        # Отбрасываем плейсхолдеры и слишком старые транскрипты (до старта сессии)
-                        if txt and not low.startswith('(no audio chunks') and not low.startswith('(asr failed') and not low.startswith('(asr exception') and not low.startswith('(asr disabled') and vt.generated_at >= sess.start_ts:
-                            sess.add_voice_transcript(txt)
-                            logger.info("summary_v2: lazy attach voice transcript room=%s user=%s len=%s gen_at=%s start_ts=%s", room_id, user_id, len(txt), vt.generated_at, sess.start_ts)
+                        # Отбрасываем плейсхолдеры. Разрешаем generated_at < start_ts если разница < 20 секунд (возможные гонки по времени между стартом WS и финализацией).
+                        if txt and not low.startswith('(no audio chunks') and not low.startswith('(asr failed') and not low.startswith('(asr exception') and not low.startswith('(asr disabled'):
+                            if vt.generated_at >= sess.start_ts or (sess.start_ts - vt.generated_at) <= 20_000:
+                                sess.add_voice_transcript(txt)
+                                logger.info("summary_v2: lazy attach voice transcript room=%s user=%s len=%s gen_at=%s start_ts=%s", room_id, user_id, len(txt), vt.generated_at, sess.start_ts)
                         else:
                             if low.startswith('(no audio chunks'):
                                 logger.debug("summary_v2: skip placeholder voice transcript room=%s user=%s", room_id, user_id)
                             elif vt.generated_at < sess.start_ts:
-                                logger.debug("summary_v2: skip old voice transcript room=%s user=%s gen_at=%s start_ts=%s", room_id, user_id, vt.generated_at, sess.start_ts)
+                                delta = sess.start_ts - vt.generated_at
+                                logger.debug("summary_v2: skip old voice transcript room=%s user=%s gen_at=%s start_ts=%s delta_ms=%s", room_id, user_id, vt.generated_at, sess.start_ts, delta)
             except Exception:
                 pass
         # Получаем персональный system prompt
