@@ -13,6 +13,8 @@ class SummaryOrchestrator:
         self._log = MessageLog()
         # (room_id, user_id) -> start_ts
         self._user_windows: Dict[Tuple[str, str], int] = {}
+        # (room_id, user_id) -> end_ts (optional, если пользователь отключил агента)
+        self._user_window_end: Dict[Tuple[str, str], int] = {}
         # voice transcripts stored temporarily: room_id -> text
         self._voice_buffer: Dict[str, str] = {}
         self._chat_strategy = ChatStrategy()
@@ -43,10 +45,21 @@ class SummaryOrchestrator:
     def start_user_window(self, room_id: str, user_id: str) -> None:
         self._user_windows[(room_id, user_id)] = int(time.time()*1000)
 
-    async def build_personal_summary(self, *, room_id: str, user_id: str, ai_provider, db_session) -> SummaryResult:
+    def end_user_window(self, room_id: str, user_id: str) -> None:
+        # Фиксируем момент отключения агента чтобы не включать более поздние сообщения
+        self._user_window_end[(room_id, user_id)] = int(time.time()*1000)
+
+    async def build_personal_summary(self, *, room_id: str, user_id: str, ai_provider, db_session, cutoff_ms: int | None = None) -> SummaryResult:
         settings = get_settings()
         start_ts = self._user_windows.get((room_id, user_id))
         msgs = self._log.slice_since(room_id, start_ts)
+        # Применяем end_ts (если агент уже завершился) и cutoff (момент запроса)
+        end_ts = self._user_window_end.get((room_id, user_id))
+        if cutoff_ms is None:
+            cutoff_ms = int(time.time()*1000)
+        effective_end = min(end_ts, cutoff_ms) if end_ts is not None else cutoff_ms
+        if effective_end is not None:
+            msgs = [m for m in msgs if m.ts <= effective_end]
         voice_text = self._voice_buffer.get(room_id)
         # Voice-only путь: если нет чат сообщений, но есть валидный voice
         if not msgs:

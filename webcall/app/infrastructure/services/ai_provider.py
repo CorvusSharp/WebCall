@@ -19,14 +19,12 @@ from ..db.models import Users
 
 
 class HeuristicAIProvider(AISummaryProvider):
-    async def generate_summary(self, plain_messages: List[str]) -> str:  # type: ignore[override]
+    async def generate_summary(self, plain_messages: List[str], system_prompt: str | None = None) -> str:  # type: ignore[override]
         if not plain_messages:
             return "Нет данных для анализа."
-        # Автор = часть строки после ']: ' до ':' следующего? Упростим: ищем шаблон '] name:'
         authors = []
         for line in plain_messages:
             try:
-                # [ts] name: content
                 after = line.split('] ', 1)[1]
                 name = after.split(':', 1)[0].strip()
                 authors.append(name)
@@ -34,9 +32,16 @@ class HeuristicAIProvider(AISummaryProvider):
                 continue
         top_authors = ", ".join([f"{a}({c})" for a, c in Counter(authors).most_common(5)]) if authors else "—"
         last_lines = "\n".join(plain_messages[-5:])
+        prompt_note = ""
+        if system_prompt:
+            # Вставляем первые 90 символов промпта как индикатор персонализации (hash для приватности?)
+            import hashlib
+            h = hashlib.sha256(system_prompt.encode('utf-8')).hexdigest()[:10]
+            snippet = system_prompt.strip().replace('\n', ' ')[:90]
+            prompt_note = f"(prompt-hash={h} :: {snippet})\n"
         return (
             "AI эвристическая выжимка:\n"
-            f"Всего сообщений: {len(plain_messages)}\n"
+            f"{prompt_note}Всего сообщений: {len(plain_messages)}\n"
             f"Активные участники: {top_authors}\n"
             "Последние реплики:\n" + last_lines
         )

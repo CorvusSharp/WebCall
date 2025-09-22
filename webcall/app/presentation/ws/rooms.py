@@ -82,7 +82,8 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                 if v_cur and getattr(v_cur, 'text', None) and len(v_cur.text.strip()) > 10 and not v_cur.text.startswith('(no audio'):
                     orchestrator.add_voice_transcript(str(room_uuid), v_cur.text.strip())
             # Первая попытка построить персональное summary
-            personal = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session)
+            cutoff_ms = int(__import__('time').time()*1000)
+            personal = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session, cutoff_ms=cutoff_ms)
             # Polling если пусто (возможна гонка: транскрипт ещё в пути)
             if personal.message_count == 0:
                 max_wait_ms = 2500
@@ -91,7 +92,7 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                 while waited < max_wait_ms:
                     await asyncio.sleep(step_ms / 1000)
                     waited += step_ms
-                    personal2 = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session)
+                    personal2 = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session, cutoff_ms=cutoff_ms)
                     if personal2.message_count > 0:
                         personal = personal2
                         print(f"[summary] Personal summary filled after wait={waited}ms room={original_room_id} user={initiator_user_id}")
@@ -672,6 +673,14 @@ async def ws_room(
                     _room_agents[room_uuid].remove(uid)
                     if not _room_agents[room_uuid]:
                         _room_agents.pop(room_uuid, None)
+                    # Завершаем окно пользователя (если известен владелец)
+                    try:
+                        owner = _agent_owner.get(uid)
+                        if owner:
+                            orch = get_summary_orchestrator()
+                            orch.end_user_window(str(room_uuid), str(owner))
+                    except Exception:
+                        pass
                 # owner mapping
                 if uid in _agent_owner:
                     _agent_owner.pop(uid, None)
