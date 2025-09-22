@@ -112,6 +112,10 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                 start_ts = _room_agent_start.get(start_key)
                 if start_ts:
                     filtered = [m for m in log_tail if getattr(m, 'ts', 0) >= start_ts]
+                    # Если отфильтрованный набор слишком мал (<=1), расширяем до всего лога чтобы пользователь не видел пустоту
+                    if len(filtered) <= 1:
+                        filtered = log_tail
+                        print(f"[summary] Personal log fallback to full history (filtered <=1) room={original_room_id} full_count={len(filtered)}")
                     if filtered:
                         msgs_snapshot = filtered
                         print(f"[summary] Personal summary uses message_log filtered count={len(filtered)} start_ts={start_ts} room={original_room_id}")
@@ -228,51 +232,70 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
         with contextlib.suppress(Exception):
             custom_prompt = await get_user_system_prompt(session, initiator_user_id)
 
+    from ...infrastructure.services.summary import summarize_messages as _sm
     if v and v.text and not v.text.startswith('(no audio'):
         print(f"[summary] Using voice transcript for room {original_room_id} chars={len(v.text)} reason={reason}")
-        import re
-        temp = SummaryCollector()
-        text = v.text or ''
+        import re, time as _t
+        # Разбиваем транскрипт на предложения, формируем временный список ChatMessage без очистки collector
         sentences: list[str] = []
-        if text.strip():
-            norm = re.sub(r"\s+", " ", text.strip())
+        text_v = v.text or ''
+        if text_v.strip():
+            norm = re.sub(r"\s+", " ", text_v.strip())
             parts = re.split(r'(?<=[.!?])\s+', norm)
             sentences = [p.strip() for p in parts if p.strip()]
-        if not sentences and text.strip():
-            sentences = [text.strip()]
-        for sent in sentences:
-            await temp.add_message(str(room_uuid), None, 'voice', sent)
-        summary = await temp.summarize(str(room_uuid), ai_provider, system_prompt=custom_prompt)
+        if not sentences and text_v.strip():
+            sentences = [text_v.strip()]
+        voice_msgs = []
+        try:
+            from ...infrastructure.services.summary import ChatMessage as _CM
+            now_ms = int(_t.time()*1000)
+            for s in sentences:
+                voice_msgs.append(_CM(room_id=str(room_uuid), author_id=None, author_name='voice', content=s, ts=now_ms))
+        except Exception:
+            pass
+        # Берём snapshot текущего collector и добавляем voice предложения (не destructive)
+        base_snap = []
+        with contextlib.suppress(Exception):
+            base_snap = await collector.get_messages_snapshot(str(room_uuid))  # type: ignore[attr-defined]
+        merged = list(base_snap) + voice_msgs
+        if merged:
+            summary = await _sm(merged, ai_provider, system_prompt=custom_prompt)
     else:
-        # Голос отсутствует/пустой — используем чат
         print(f"[summary] Voice transcript missing or empty for room {original_room_id}; fallback to chat. reason={reason}")
-    # Диагностика: сколько сообщений накоплено до summarize
+        # Чат snapshot без очистки
+        try:
+            snap_chat = await collector.get_messages_snapshot(str(room_uuid))  # type: ignore[attr-defined]
+            if snap_chat:
+                summary = await _sm(snap_chat, ai_provider, system_prompt=custom_prompt)
+        except Exception as e:
+            print(f"[summary] Chat snapshot summarize failed room={original_room_id} err={e}")
+    # Диагностика: текущее число сообщений (collector пока не очищен)
     pre_count = None
     with contextlib.suppress(Exception):
         pre_count = await collector.message_count(str(room_uuid))  # type: ignore[attr-defined]
-    # Снимем pre-snapshot (неочищенный) чтобы можно было сохранить его в архив
-    _pre_chat_snapshot = []
-    with contextlib.suppress(Exception):
-        from ...infrastructure.services.summary import ChatMessage as _CM
-        _pre_chat_snapshot = await collector.get_messages_snapshot(str(room_uuid))  # type: ignore[attr-defined]
-    chat_summary = await collector.summarize(str(room_uuid), ai_provider, system_prompt=custom_prompt)
-    # Если ранее получили voice summary выше и оно не пустое — используем его.
-    # Если voice не дал summary (None) но есть chat_summary — используем chat.
-    # Если оба None, но есть транскрипт (значит не удалось распарсить предложения?) — форсируем добавление транскрипта в collector и повторяем.
+    # Если пока summary нет, попробуем второй шанс: объединить voice (если есть) + чат snapshot
     if summary is None:
-        summary = chat_summary
-    if summary is None and v and v.text and not v.text.startswith('(no audio'):
-        # Форс: добавим весь текст одним сообщением и повторим summarize
         try:
-            await collector.add_message(str(room_uuid), None, 'voice', v.text.strip())
-            summary = await collector.summarize(str(room_uuid), ai_provider, system_prompt=custom_prompt)
-            print(f"[summary] Forced voice fallback collected room={original_room_id} len={len(v.text.strip())}")
+            base_snap2 = await collector.get_messages_snapshot(str(room_uuid))  # type: ignore[attr-defined]
+            merged2 = base_snap2
+            if v and v.text and not v.text.startswith('(no audio'):
+                # Добавим неразбитый текст если вдруг разбиение не сработало
+                from ...infrastructure.services.summary import ChatMessage as _CM
+                import time as _t
+                merged2 = list(base_snap2)
+                merged2.append(_CM(room_id=str(room_uuid), author_id=None, author_name='voice', content=v.text.strip(), ts=int(_t.time()*1000)))
+            if merged2:
+                summary = await _sm(merged2, ai_provider, system_prompt=custom_prompt)
+                print(f"[summary] Second-chance merge snapshot used room={original_room_id} count={len(merged2)}")
         except Exception as e:
-            print(f"[summary] Force-add transcript failed room={original_room_id} err={e}")
+            print(f"[summary] Second-chance summarize failed room={original_room_id} err={e}")
     if summary:
-        # Сохраняем архив (только если ещё не сохранён и есть что сохранять)
-        if _pre_chat_snapshot and room_uuid not in _room_messages_archive:
-            _room_messages_archive[room_uuid] = list(_pre_chat_snapshot)
+        # Сохраняем архив если его ещё нет (берём актуальный snapshot)
+        if room_uuid not in _room_messages_archive:
+            with contextlib.suppress(Exception):
+                snap_archive = await collector.get_messages_snapshot(str(room_uuid))  # type: ignore[attr-defined]
+                if snap_archive:
+                    _room_messages_archive[room_uuid] = list(snap_archive)
         # Кладём в кэш
         _room_summary_cache[room_uuid] = summary
         # Формируем набор целевых пользователей: инициатор или владельцы всех агентов
