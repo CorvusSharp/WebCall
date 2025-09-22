@@ -43,7 +43,10 @@ async def confirm_link(session: AsyncSession, token: str, chat_id: str) -> bool:
         return False
     if link.status != 'pending':
         return False
-    expires_at = link.expires_at  # naive UTC
+    expires_at = link.expires_at  # возможно naive UTC; если вдруг приходит aware — нормализуем
+    if expires_at is not None and expires_at.tzinfo is not None:
+        # Считаем что значение в UTC и отбрасываем tzinfo (модель хранит timezone=False)
+        expires_at = expires_at.astimezone(timezone.utc).replace(tzinfo=None)
     if expires_at and expires_at < now:
         # истёк
         link.status = 'expired'
