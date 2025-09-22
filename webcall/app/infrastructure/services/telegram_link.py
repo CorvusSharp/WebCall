@@ -15,8 +15,8 @@ TOKEN_TTL_MINUTES = 10
 async def create_or_refresh_link(session: AsyncSession, user_id) -> TelegramLinks:
     """Создаёт новый pending token (инвалидируя предыдущие pending токены пользователя)."""
     # истекают старые pending
-    # Используем timezone-aware UTC значения последовательно, чтобы избежать ошибок сравнения
-    now = datetime.now(timezone.utc)
+    # Модель использует DateTime(timezone=False): сохраняем naive UTC (без tzinfo)
+    now = datetime.utcnow()
     token = secrets.token_urlsafe(24)[:64]
     expires_at = now + timedelta(minutes=TOKEN_TTL_MINUTES)
     # Можно просто вставить новую запись (первичный ключ составной user_id+token)
@@ -34,8 +34,8 @@ async def create_or_refresh_link(session: AsyncSession, user_id) -> TelegramLink
 
 
 async def confirm_link(session: AsyncSession, token: str, chat_id: str) -> bool:
-    # Приводим текущее время к timezone-aware UTC (с tzinfo=UTC)
-    now = datetime.now(timezone.utc)
+    # Текущее naive UTC для сопоставления с хранимыми naive датами
+    now = datetime.utcnow()
     q = select(TelegramLinks).where(TelegramLinks.token == token)
     res = await session.execute(q)
     link: Optional[TelegramLinks] = res.scalars().first()
@@ -43,18 +43,13 @@ async def confirm_link(session: AsyncSession, token: str, chat_id: str) -> bool:
         return False
     if link.status != 'pending':
         return False
-    # link.expires_at может быть сохранён как naive (если создан до фикса). Приведём к UTC-aware.
-    expires_at = link.expires_at
-    if expires_at is not None and expires_at.tzinfo is None:
-        # трактуем naive как UTC
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    expires_at = link.expires_at  # naive UTC
     if expires_at and expires_at < now:
         # истёк
         link.status = 'expired'
         return False
     link.chat_id = chat_id
     link.status = 'confirmed'
-    # Для согласованности confirmed_at тоже timezone-aware UTC
     link.confirmed_at = now
     return True
 
