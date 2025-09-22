@@ -82,7 +82,16 @@ class SummaryOrchestrator:
         sess = UserAgentSession(room_id=room_id, user_id=user_id)
         self._sessions[key] = sess
         self._room_sessions.setdefault(room_id, []).append(sess)
-        # Авто-прелоад voice транскрипта превращаем в ленивый (будет в build_personal_summary) чтобы не делать async вызов тут.
+        # Сбросим старую транскрипцию (если осталась от прошлого разговора) чтобы не приклеить её к новому окну
+        try:
+            vc = get_voice_collector()
+            with contextlib.suppress(Exception):
+                popped = await vc.pop_transcript(f"{room_id}:{user_id}")  # type: ignore
+                if popped:
+                    logger.info("summary_v2: cleared old voice transcript on restart room=%s user=%s", room_id, user_id)
+        except Exception:
+            pass
+        # Прелоад убран — будет лениво в build_personal_summary если появится новая валидная транскрипция.
 
     def end_user_window(self, room_id: str, user_id: str) -> None:
         key = (room_id, user_id)
@@ -100,23 +109,24 @@ class SummaryOrchestrator:
         key = (room_id, user_id)
         sess = self._sessions.get(key)
         if not sess:
-            # Попытка аварийного восстановления: могли не вызвать start_user_window из‑за гонки, но voice уже есть.
-            recovered = False
+            # Попытка аварийного восстановления: только если voice свежий (после предполагаемого старта — у нас его нет, поэтому принимаем любой, но фильтруем плейсхолдеры)
             try:
                 vc = get_voice_collector()
                 voice_key = f"{room_id}:{user_id}"
                 with contextlib.suppress(Exception):
                     vt = await vc.get_transcript(voice_key)
-                    if vt and getattr(vt, 'text', None) and len(vt.text.strip()) > 0:
-                        sess = UserAgentSession(room_id=room_id, user_id=user_id)
-                        sess.add_voice_transcript(vt.text.strip())
-                        self._sessions[key] = sess
-                        self._room_sessions.setdefault(room_id, []).append(sess)
-                        recovered = True
-                        logger.warning("summary_v2: recovered session from voice transcript room=%s user=%s len=%s", room_id, user_id, len(vt.text))
+                    if vt and getattr(vt, 'text', None):
+                        txt = vt.text.strip()
+                        low = txt.lower()
+                        if txt and not low.startswith('(no audio chunks') and not low.startswith('(asr failed') and not low.startswith('(asr exception') and not low.startswith('(asr disabled'):
+                            sess = UserAgentSession(room_id=room_id, user_id=user_id)
+                            sess.add_voice_transcript(txt)
+                            self._sessions[key] = sess
+                            self._room_sessions.setdefault(room_id, []).append(sess)
+                            logger.warning("summary_v2: recovered session from voice transcript room=%s user=%s len=%s", room_id, user_id, len(txt))
             except Exception:
                 pass
-            if not recovered or not sess:
+            if not sess:
                 logger.info("summary_v2: build_personal_summary empty (no session) room=%s user=%s", room_id, user_id)
                 return SummaryResult.empty(room_id)
         # Если в сессии нет voice, попробуем подтянуть (лениво) готовую транскрипцию, чтобы не было окна, когда агент стартовал чуть позже окончания речи
@@ -126,9 +136,18 @@ class SummaryOrchestrator:
                 voice_key = f"{room_id}:{user_id}"
                 with contextlib.suppress(Exception):
                     vt = await vc.get_transcript(voice_key)
-                    if vt and getattr(vt, 'text', None) and len(vt.text.strip()) > 0:
-                        sess.add_voice_transcript(vt.text.strip())
-                        logger.info("summary_v2: lazy attach voice transcript room=%s user=%s len=%s", room_id, user_id, len(vt.text))
+                    if vt and getattr(vt, 'text', None):
+                        txt = vt.text.strip()
+                        low = txt.lower()
+                        # Отбрасываем плейсхолдеры и слишком старые транскрипты (до старта сессии)
+                        if txt and not low.startswith('(no audio chunks') and not low.startswith('(asr failed') and not low.startswith('(asr exception') and not low.startswith('(asr disabled') and vt.generated_at >= sess.start_ts:
+                            sess.add_voice_transcript(txt)
+                            logger.info("summary_v2: lazy attach voice transcript room=%s user=%s len=%s gen_at=%s start_ts=%s", room_id, user_id, len(txt), vt.generated_at, sess.start_ts)
+                        else:
+                            if low.startswith('(no audio chunks'):
+                                logger.debug("summary_v2: skip placeholder voice transcript room=%s user=%s", room_id, user_id)
+                            elif vt.generated_at < sess.start_ts:
+                                logger.debug("summary_v2: skip old voice transcript room=%s user=%s gen_at=%s start_ts=%s", room_id, user_id, vt.generated_at, sess.start_ts)
             except Exception:
                 pass
         # Получаем персональный system prompt
