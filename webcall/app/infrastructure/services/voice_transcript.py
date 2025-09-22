@@ -27,33 +27,34 @@ class VoiceTranscript:
 
 class VoiceTranscriptCollector:
     def __init__(self) -> None:
+        # Ключ: (room_id,user_id) если user_id известен; иначе room_id как fallback (legacy). Пользовательский скоп обязателен для корректной персональной сегрегации.
         self._chunks: Dict[str, list[VoiceChunk]] = {}
         self._transcripts: Dict[str, VoiceTranscript] = {}
         self._lock = Lock()
 
-    async def add_chunk(self, room_id: str, data: bytes) -> None:
+    async def add_chunk(self, room_key: str, data: bytes) -> None:
         async with self._lock:
-            self._chunks.setdefault(room_id, []).append(VoiceChunk(ts=int(time.time()*1000), data=data))
+            self._chunks.setdefault(room_key, []).append(VoiceChunk(ts=int(time.time()*1000), data=data))
 
-    async def get_and_clear_chunks(self, room_id: str) -> list[VoiceChunk]:
+    async def get_and_clear_chunks(self, room_key: str) -> list[VoiceChunk]:
         async with self._lock:
-            chunks = self._chunks.pop(room_id, [])
+            chunks = self._chunks.pop(room_key, [])
             return chunks
 
-    async def store_transcript(self, room_id: str, text: str) -> VoiceTranscript:
-        vt = VoiceTranscript(room_id=room_id, text=text, generated_at=int(time.time()*1000))
+    async def store_transcript(self, room_key: str, text: str) -> VoiceTranscript:
+        vt = VoiceTranscript(room_id=room_key, text=text, generated_at=int(time.time()*1000))
         async with self._lock:
-            self._transcripts[room_id] = vt
+            self._transcripts[room_key] = vt
         return vt
 
-    async def pop_transcript(self, room_id: str) -> VoiceTranscript | None:
+    async def pop_transcript(self, room_key: str) -> VoiceTranscript | None:
         async with self._lock:
-            return self._transcripts.pop(room_id, None)
+            return self._transcripts.pop(room_key, None)
 
-    async def get_transcript(self, room_id: str) -> VoiceTranscript | None:
+    async def get_transcript(self, room_key: str) -> VoiceTranscript | None:
         """Вернёт транскрипт без удаления (для повторной проверки готовности)."""
         async with self._lock:
-            return self._transcripts.get(room_id)
+            return self._transcripts.get(room_key)
 
 
 _voice_collector_singleton: VoiceTranscriptCollector | None = None

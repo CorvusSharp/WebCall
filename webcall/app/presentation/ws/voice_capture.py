@@ -22,11 +22,13 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
         await ws.close(code=4403, reason='Voice capture disabled')
         return
     token = ws.query_params.get('token')
+    user_id: str | None = None
     allow_unauth = settings.APP_ENV in {'dev','test'}
     await ws.accept()
     if token:
         try:
-            tokens.decode_token(token)
+            payload = tokens.decode_token(token)
+            user_id = payload.get('sub') if isinstance(payload, dict) else None
         except Exception:
             if not allow_unauth:
                 await ws.close(code=4401, reason='Unauthorized')
@@ -42,7 +44,12 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
         canonical_uuid = UUID(room_id)
     except Exception:
         canonical_uuid = uuid5(NAMESPACE_URL, f"webcall:{room_id}")
-    canonical_key = str(canonical_uuid)
+    base_room_key = str(canonical_uuid)
+    # Персональный ключ для хранения чанков: room + ':' + user (если присутствует)
+    if user_id:
+        canonical_key = f"{base_room_key}:{user_id}"
+    else:
+        canonical_key = base_room_key
     started = False
     total_bytes = 0
     try:
@@ -87,8 +94,8 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                 # Передаём транскрипт в orchestrator (summary_v2)
                 try:
                     orch = get_summary_orchestrator()
-                    if text and len(text.strip()) > 0:
-                        orch.add_voice_transcript(canonical_key, text.strip())
+                    if text and len(text.strip()) > 0 and user_id:
+                        orch.add_voice_transcript(base_room_key, text.strip(), user_id=user_id)
                 except Exception:
                     pass
             else:

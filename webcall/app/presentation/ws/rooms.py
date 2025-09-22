@@ -78,9 +78,16 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
             orchestrator = get_summary_orchestrator()
             # Оппортунистически зарегистрируем последний voice транскрипт (не разрушая для групповой логики)
             with contextlib.suppress(Exception):
-                v_cur = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(original_room_id)
-                if v_cur and getattr(v_cur, 'text', None) and len(v_cur.text.strip()) > 10 and not v_cur.text.startswith('(no audio'):
-                    orchestrator.add_voice_transcript(str(room_uuid), v_cur.text.strip())
+                # Пытаемся взять персональный транскрипт (room:user)
+                v_cur = None
+                if initiator_user_id:
+                    with contextlib.suppress(Exception):
+                        v_cur = await voice_coll.get_transcript(f"{room_uuid}:{initiator_user_id}")
+                if not v_cur:  # fallback legacy (общий)
+                    with contextlib.suppress(Exception):
+                        v_cur = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(original_room_id)
+                if v_cur and getattr(v_cur, 'text', None) and len(v_cur.text.strip()) > 10 and not v_cur.text.startswith('(no audio') and initiator_user_id:
+                    orchestrator.add_voice_transcript(str(room_uuid), v_cur.text.strip(), user_id=str(initiator_user_id))
             # Первая попытка построить персональное summary
             cutoff_ms = int(__import__('time').time()*1000)
             personal = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session, cutoff_ms=cutoff_ms)

@@ -15,32 +15,33 @@ class SummaryOrchestrator:
         self._user_windows: Dict[Tuple[str, str], int] = {}
         # (room_id, user_id) -> end_ts (optional, если пользователь отключил агента)
         self._user_window_end: Dict[Tuple[str, str], int] = {}
-        # voice transcripts stored temporarily: room_id -> text
-        self._voice_buffer: Dict[str, str] = {}
+        # voice transcripts stored temporarily: (room_id,user_id) -> text
+        self._voice_buffer: Dict[Tuple[str, str], str] = {}
         self._chat_strategy = ChatStrategy()
         self._combined_strategy = CombinedVoiceChatStrategy()
 
     def add_chat(self, room_id: str, author_id: str | None, author_name: str | None, content: str) -> None:
         self._log.add(room_id, author_id, author_name, content)
 
-    def add_voice_transcript(self, room_id: str, transcript: str) -> None:
-        if not transcript:
+    def add_voice_transcript(self, room_id: str, transcript: str, user_id: str | None = None) -> None:
+        """Добавляет транскрипт для конкретного пользователя (agent owner).
+
+        Если user_id не передан – игнорируем (персональные сводки строятся строго по пользователю).
+        Технические тексты не затирают уже сохранённый нормальный.
+        """
+        if not transcript or not user_id:
             return
         txt = transcript.strip()
         if not txt:
             return
+        key = (room_id, user_id)
         low = txt.lower()
         is_tech = any(p in low for p in TECHNICAL_PATTERNS)
-        # Если уже хранится нормальный (не технический) текст — не затираем его техническим
         if is_tech:
-            current = self._voice_buffer.get(room_id)
-            if current:
-                cur_low = current.lower()
-                # если текущий не технический — игнорируем новый технический
-                if not any(p in cur_low for p in TECHNICAL_PATTERNS):
-                    return
-        # Иначе сохраняем (обычный перезаписывает технический)
-        self._voice_buffer[room_id] = txt
+            current = self._voice_buffer.get(key)
+            if current and not any(p in current.lower() for p in TECHNICAL_PATTERNS):
+                return
+        self._voice_buffer[key] = txt
 
     def start_user_window(self, room_id: str, user_id: str) -> None:
         self._user_windows[(room_id, user_id)] = int(time.time()*1000)
@@ -60,7 +61,7 @@ class SummaryOrchestrator:
         effective_end = min(end_ts, cutoff_ms) if end_ts is not None else cutoff_ms
         if effective_end is not None:
             msgs = [m for m in msgs if m.ts <= effective_end]
-        voice_text = self._voice_buffer.get(room_id)
+        voice_text = self._voice_buffer.get((room_id, user_id))
         # Voice-only путь: если нет чат сообщений, но есть валидный voice
         if not msgs:
             if voice_text and len(voice_text.strip()) > 10:
