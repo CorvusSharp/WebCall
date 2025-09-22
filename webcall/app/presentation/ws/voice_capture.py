@@ -84,6 +84,11 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
             if chunks:
                 logger.info("VOICE_CAPTURE finalize room=%s chunks=%s bytes=%s", room_id, len(chunks), sum(len(c.data) for c in chunks))
                 text = await transcribe_chunks(canonical_key, chunks)
+                try:
+                    preview = (text or '')[:120].replace('\n',' ')
+                    logger.info("VOICE_CAPTURE transcript room=%s preview=%r", room_id, preview)
+                except Exception:
+                    pass
             else:
                 text = "(no audio chunks)"
             await coll.store_transcript(canonical_key, text)

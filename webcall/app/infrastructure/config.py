@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     AI_SUMMARY_ENABLED: bool = False  # включение функционала AI выжимок
     AI_MODEL_PROVIDER: str | None = None  # имя провайдера/модели (например 'openai:gpt-4o-mini'), пока не используется напрямую
     AI_SUMMARY_MAX_MESSAGES: int = 200  # лимит сообщений для одного резюме (хвост обрезается)
+    AI_SUMMARY_MIN_CHARS: int = 60  # минимальный объём текста (символов) чтобы считать summary содержательным
     TELEGRAM_BOT_TOKEN: str | None = None  # токен бота для отправки итоговых выжимок
     TELEGRAM_CHAT_ID: str | None = None  # целевой chat/channel id для получения выжимок
     OPENAI_API_KEY: str | None = None  # ключ OpenAI (НЕ хранить в репо)
