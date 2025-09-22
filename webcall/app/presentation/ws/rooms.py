@@ -94,7 +94,7 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
     # Если оба None, но есть транскрипт (значит не удалось распарсить предложения?) — форсируем добавление транскрипта в collector и повторяем.
     if summary is None:
         summary = chat_summary
-    if summary is None and v and v.text and not v.text.startswith('(no audio')):
+    if summary is None and v and v.text and not v.text.startswith('(no audio'):
         # Форс: добавим весь текст одним сообщением и повторим summarize
         try:
             await collector.add_message(str(room_uuid), None, 'voice', v.text.strip())
