@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ....infrastructure.services.telegram_link import (
-    create_or_refresh_link, confirm_link, get_confirmed_chat_id
+    create_or_refresh_link, confirm_link, get_confirmed_chat_id, revoke_user_links
 )
 from sqlalchemy.exc import IntegrityError
 from ....infrastructure.db.session import get_db_session
@@ -49,7 +49,22 @@ async def status(session: AsyncSession = Depends(get_db_session), current_user=D
     chat_id = await get_confirmed_chat_id(session, current_user.id)
     if chat_id:
         return LinkStatusOut(status="confirmed", chat_id=chat_id)
+    # Если нет confirmed — проверим есть ли вообще какие-либо revoked чтобы различать полностью отсутствующее.
+    # (Опционально можно вернуть 'absent'). Пока просто absent.
     return LinkStatusOut(status="absent", chat_id=None)
+
+
+class LinkRevokeOut(BaseModel):
+    revoked: int
+    status: str
+
+
+@router.delete("/link", response_model=LinkRevokeOut)
+async def revoke_link(session: AsyncSession = Depends(get_db_session), current_user=Depends(get_current_user)):
+    updated = await revoke_user_links(session, current_user.id)
+    await session.commit()
+    # После revoke confirmed chat_id недоступен
+    return LinkRevokeOut(revoked=updated, status="absent")
 
 
 class WebhookIn(BaseModel):

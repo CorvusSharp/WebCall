@@ -13,6 +13,9 @@ import httpx
 import asyncio
 from .summary import AISummaryProvider
 from ..config import get_settings
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from ..db.models import Users
 
 
 class HeuristicAIProvider(AISummaryProvider):
@@ -51,12 +54,12 @@ class OpenAIAIProvider(AISummaryProvider):
         self.model = model
         self.fallback = fallback
 
-    async def generate_summary(self, plain_messages: List[str]) -> str:  # type: ignore[override]
+    async def generate_summary(self, plain_messages: List[str], system_prompt: str | None = None) -> str:  # type: ignore[override]
         if not plain_messages:
             return "Нет данных для анализа."
         prompt_messages = plain_messages[-500:]  # safety bound
         joined = "\n".join(prompt_messages)
-        system = (
+        system = system_prompt or (
             "Ты ассистент, делающий краткую структурированную выжимку группового чата:"
             " 1) Основные темы 2) Принятые решения 3) Открытые вопросы."
             " Пиши лаконично на русском, без лишних вступлений."
@@ -117,3 +120,10 @@ def get_ai_provider() -> AISummaryProvider:
     else:
         _provider_singleton = HeuristicAIProvider()
     return _provider_singleton
+
+
+async def get_user_system_prompt(session: AsyncSession, user_id) -> str | None:
+    """Возвращает сохранённый кастомный prompt пользователя или None."""
+    q = select(Users.ai_system_prompt).where(Users.id == user_id)
+    res = await session.execute(q)
+    return res.scalar_one_or_none()

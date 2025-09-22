@@ -56,7 +56,7 @@ class SummaryCollector:
                 if overflow > 0:
                     del bucket[0:overflow]
 
-    async def summarize(self, room_id: str, ai_provider: 'AISummaryProvider | None') -> SummaryResult | None:  # type: ignore[name-defined]
+    async def summarize(self, room_id: str, ai_provider: 'AISummaryProvider | None', *, system_prompt: str | None = None) -> SummaryResult | None:  # type: ignore[name-defined]
         settings = get_settings()
         async with self._lock:
             bucket = self._messages.get(room_id, [])
@@ -84,7 +84,10 @@ class SummaryCollector:
                 )
             else:
                 try:
-                    summary_text = await ai_provider.generate_summary(plain_messages)  # type: ignore[attr-defined]
+                    try:
+                        summary_text = await ai_provider.generate_summary(plain_messages, system_prompt)  # type: ignore[attr-defined]
+                    except TypeError:  # старый интерфейс
+                        summary_text = await ai_provider.generate_summary(plain_messages)  # type: ignore[attr-defined]
                 except Exception as e:  # pragma: no cover - fallback
                     summary_text = _fallback_summary(plain_messages, error=str(e))
         else:

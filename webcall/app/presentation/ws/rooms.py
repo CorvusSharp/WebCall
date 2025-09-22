@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from ...infrastructure.config import get_settings
 from ...infrastructure.services.summary import get_summary_collector
 from ...infrastructure.services.voice_transcript import get_voice_collector
-from ...infrastructure.services.ai_provider import get_ai_provider
+from ...infrastructure.services.ai_provider import get_ai_provider, get_user_system_prompt
 from ...infrastructure.services.telegram import send_message as tg_send_message
 from sqlalchemy.ext.asyncio import AsyncSession
 from ...infrastructure.db.session import get_db_session
@@ -64,6 +64,12 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
             v = await voice_coll.pop_transcript(str(room_uuid)) or await voice_coll.pop_transcript(original_room_id)
     from ...infrastructure.services.summary import SummaryCollector
     summary = None
+    # Получаем кастомный system prompt (только если пользователь инициатор известен)
+    custom_prompt: str | None = None
+    if initiator_user_id and session is not None:
+        with contextlib.suppress(Exception):
+            custom_prompt = await get_user_system_prompt(session, initiator_user_id)
+
     if v and v.text and not v.text.startswith('(no audio'):
         print(f"[summary] Using voice transcript for room {original_room_id} chars={len(v.text)} reason={reason}")
         import re
@@ -78,11 +84,11 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
             sentences = [text.strip()]
         for sent in sentences:
             await temp.add_message(str(room_uuid), None, 'voice', sent)
-        summary = await temp.summarize(str(room_uuid), ai_provider)
+        summary = await temp.summarize(str(room_uuid), ai_provider, system_prompt=custom_prompt)
     else:
         # Голос отсутствует/пустой — используем чат
         print(f"[summary] Voice transcript missing or empty for room {original_room_id}; fallback to chat. reason={reason}")
-        summary = await collector.summarize(str(room_uuid), ai_provider)
+    summary = await collector.summarize(str(room_uuid), ai_provider, system_prompt=custom_prompt)
     if summary:
         if settings.TELEGRAM_BOT_TOKEN:
             try:

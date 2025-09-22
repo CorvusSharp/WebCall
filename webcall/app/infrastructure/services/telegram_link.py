@@ -66,3 +66,19 @@ async def get_confirmed_chat_id(session: AsyncSession, user_id) -> Optional[str]
     )
     res = await session.execute(q)
     return res.scalar_one_or_none()
+
+
+async def revoke_user_links(session: AsyncSession, user_id) -> int:
+    """Помечает все confirmed ссылки пользователя как revoked.
+
+    Возвращает количество обновлённых строк. Pending / expired не трогаем.
+    """
+    now = datetime.utcnow()
+    stmt = (
+        update(TelegramLinks)
+        .where(TelegramLinks.user_id == user_id, TelegramLinks.status == 'confirmed')
+        .values(status='revoked')
+    )
+    res = await session.execute(stmt)
+    # Возврат количества обновлённых строк (rowcount может быть None у некоторых драйверов)
+    return res.rowcount or 0
