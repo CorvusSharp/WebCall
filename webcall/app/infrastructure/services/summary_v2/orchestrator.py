@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Dict, Tuple, List
-import time, contextlib
+import time, contextlib, asyncio
 from .message_log import MessageLog
 from .models import SummaryResult, ChatMessage, TECHNICAL_PATTERNS
 from .strategies import ChatStrategy, CombinedVoiceChatStrategy
@@ -9,6 +9,7 @@ from ...config import get_settings
 from ..ai_provider import get_user_system_prompt
 from ..voice_transcript import get_voice_collector
 import logging
+from prometheus_client import Counter, Histogram  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,17 @@ class SummaryOrchestrator:
         # Стратегии (для fallback путей — вероятно не нужны, но оставим)
         self._chat_strategy = ChatStrategy()
         self._combined_strategy = CombinedVoiceChatStrategy()
+        # Кэш последнего непустого результата per (room,user)
+        self._last_result: Dict[Tuple[str,str], SummaryResult] = {}
+        # Кэш последней voice транскрипции (текст, ts генерации)
+        self._last_voice: Dict[Tuple[str,str], tuple[str,int]] = {}
+
+        # Метрики
+        self._m_empty = Counter('summary_v2_empty_total', 'Пустые результаты персональных summary')
+        self._m_second_chance = Counter('summary_v2_second_chance_voice_attach_total', 'Повторные успешные voice attach')
+        self._m_auto_resumed = Counter('summary_v2_auto_resumed_total', 'Авто-восстановленные сессии')
+        self._m_reused_voice = Counter('summary_v2_reused_voice_total', 'Повторно использованная voice транскрипция')
+        self._m_build_latency = Histogram('summary_v2_build_latency_ms', 'Latency генерации персонального summary (ms)')
 
     def add_chat(self, room_id: str, author_id: str | None, author_name: str | None, content: str) -> None:
         """Регистрация нового чат сообщения.
@@ -70,6 +82,11 @@ class SummaryOrchestrator:
             self._room_sessions.setdefault(room_id, []).append(sess)
             logger.debug("summary_v2: auto-created session on voice transcript room=%s user=%s", room_id, user_id)
         sess.add_voice_transcript(transcript)
+        # Сохраним последнюю voice для потенциального reuse при быстром рестарте
+        try:
+            self._last_voice[key] = (transcript, int(time.time()*1000))
+        except Exception:
+            pass
         logger.info("summary_v2: add_voice_transcript room=%s user=%s chars=%s", room_id, user_id, len(transcript))
 
     async def start_user_window(self, room_id: str, user_id: str) -> None:
@@ -184,17 +201,12 @@ class SummaryOrchestrator:
                     if vt and getattr(vt, 'text', None):
                         txt = vt.text.strip()
                         low = txt.lower()
-                        # Отбрасываем плейсхолдеры. Разрешаем generated_at < start_ts если разница < 20 секунд (возможные гонки по времени между стартом WS и финализацией).
-                        if txt and not low.startswith('(no audio chunks') and not low.startswith('(asr failed') and not low.startswith('(asr exception') and not low.startswith('(asr disabled'):
-                            if vt.generated_at >= sess.start_ts or (sess.start_ts - vt.generated_at) <= 20_000:
-                                sess.add_voice_transcript(txt)
-                                logger.info("summary_v2: lazy attach voice transcript room=%s user=%s len=%s gen_at=%s start_ts=%s", room_id, user_id, len(txt), vt.generated_at, sess.start_ts)
+                        # Отбрасываем только явные плейсхолдеры/ошибки, время не фильтруем.
+                        if txt and not (low.startswith('(no audio chunks') or low.startswith('(asr failed') or low.startswith('(asr exception') or low.startswith('(asr disabled')):
+                            sess.add_voice_transcript(txt)
+                            logger.info("summary_v2: lazy attach voice transcript room=%s user=%s len=%s gen_at=%s start_ts=%s", room_id, user_id, len(txt), vt.generated_at, sess.start_ts)
                         else:
-                            if low.startswith('(no audio chunks'):
-                                logger.debug("summary_v2: skip placeholder voice transcript room=%s user=%s", room_id, user_id)
-                            elif vt.generated_at < sess.start_ts:
-                                delta = sess.start_ts - vt.generated_at
-                                logger.debug("summary_v2: skip old voice transcript room=%s user=%s gen_at=%s start_ts=%s delta_ms=%s", room_id, user_id, vt.generated_at, sess.start_ts, delta)
+                            logger.debug("summary_v2: skip voice transcript placeholder/technical room=%s user=%s raw=%r", room_id, user_id, txt[:80] if txt else txt)
             except Exception:
                 pass
         # Получаем персональный system prompt
@@ -202,7 +214,84 @@ class SummaryOrchestrator:
         if db_session is not None:
             with contextlib.suppress(Exception):
                 system_prompt = await get_user_system_prompt(db_session, user_id)
+        settings = get_settings()
+        import time as _t
+        t0 = _t.time()*1000
         result = await sess.build_summary(ai_provider=ai_provider, system_prompt=system_prompt)
+        # Если пусто, но теперь (во время генерации) появился voice транскрипт — пробуем ещё раз один раз.
+        if result.message_count == 0 and not getattr(result, 'used_voice', False):
+            try:
+                if not getattr(sess, '_voice_segments', None):  # всё ещё нет
+                    vc = get_voice_collector()
+                    vt_retry = await vc.get_transcript(f"{room_id}:{user_id}")
+                    if vt_retry and getattr(vt_retry, 'text', None):
+                        txt2 = vt_retry.text.strip()
+                        low2 = txt2.lower()
+                        if txt2 and not (low2.startswith('(no audio') or low2.startswith('(asr failed') or low2.startswith('(asr exception') or low2.startswith('(asr disabled')):
+                            sess.add_voice_transcript(txt2)
+                            logger.info("summary_v2: second-chance attach voice transcript room=%s user=%s len=%s", room_id, user_id, len(txt2))
+                            result = await sess.build_summary(ai_provider=ai_provider, system_prompt=system_prompt)
+                            if result.message_count > 0:
+                                self._m_second_chance.inc()
+            except Exception:
+                pass
+        # Grace polling (если всё ещё пусто): ждём появления voice или новых сообщений в пределах окна
+        if result.message_count == 0:
+            total_wait = 0
+            max_wait = getattr(settings, 'AI_SUMMARY_GRACE_POLL_MS', 0) or 0
+            step = getattr(settings, 'AI_SUMMARY_GRACE_STEP_MS', 500)
+            if max_wait > 0:
+                while total_wait < max_wait:
+                    await asyncio.sleep(step/1000)
+                    total_wait += step
+                    # Проверим новые voice/чат
+                    new_voice = False
+                    with contextlib.suppress(Exception):
+                        vc = get_voice_collector()
+                        vt_g = await vc.get_transcript(f"{room_id}:{user_id}")
+                        if vt_g and getattr(vt_g, 'text', None):
+                            txt_g = vt_g.text.strip()
+                            if txt_g and not txt_g.lower().startswith('(no audio'):
+                                sess.add_voice_transcript(txt_g)
+                                new_voice = True
+                    # новые чат-сообщения могли появиться в лог, доставим
+                    with contextlib.suppress(Exception):
+                        tail_new = self._log.slice_since(room_id, sess.start_ts)
+                        if tail_new:
+                            for m in tail_new:
+                                sess.add_chat(m)
+                    if new_voice or getattr(sess, '_messages', []):
+                        result_poll = await sess.build_summary(ai_provider=ai_provider, system_prompt=system_prompt)
+                        if result_poll.message_count > 0:
+                            logger.info("summary_v2: grace polling filled result room=%s user=%s wait_ms=%s", room_id, user_id, total_wait)
+                            result = result_poll
+                            break
+        # Reuse last voice (если всё ещё пусто и разрешено)
+        if result.message_count == 0:
+            reuse_ms = getattr(settings, 'AI_SUMMARY_REUSE_VOICE_MS', 0) or 0
+            if reuse_ms > 0:
+                key = (room_id, user_id)
+                last_v = self._last_voice.get(key)
+                if last_v:
+                    txt, ts_v = last_v
+                    now_ms = int(time.time()*1000)
+                    if now_ms - ts_v <= reuse_ms:
+                        sess.add_voice_transcript(txt)
+                        result_reuse = await sess.build_summary(ai_provider=ai_provider, system_prompt=system_prompt)
+                        if result_reuse.message_count > 0:
+                            logger.info("summary_v2: reused previous voice room=%s user=%s age_ms=%s", room_id, user_id, now_ms - ts_v)
+                            self._m_reused_voice.inc()
+                            result = result_reuse
+        # Update metrics and cache
+        try:
+            dt = (_t.time()*1000) - t0
+            self._m_build_latency.observe(dt)
+        except Exception:
+            pass
+        if result.message_count == 0:
+            self._m_empty.inc()
+        else:
+            self._last_result[(room_id, user_id)] = result
         try:
             logger.debug(
                 "summary_v2: post-build result room=%s user=%s msg_count=%s used_voice=%s", room_id, user_id, result.message_count, getattr(result, 'used_voice', False)
