@@ -28,8 +28,63 @@ _room_clients: dict[UUID, set[WebSocket]] = defaultdict(set)
 _ws_conn: dict[WebSocket, UUID] = {}
 _room_members: dict[UUID, set[UUID]] = defaultdict(set)
 _display_names: dict[UUID, str] = {}
-# Однократная финализация summary по комнате (чтобы не дублировать Telegram)
+# Однократная финализация summary по комнате (manual trigger)
 _room_summary_finalized: set[UUID] = set()
+
+
+async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, reason: str, *,
+                                     ai_provider, collector, voice_coll) -> None:  # type: ignore[no-untyped-def]
+    """Собирает summary (voice > chat) и отправляет в Telegram. Используется только по ручному триггеру.
+
+    reason: строка причины (manual, debug, etc.)
+    """
+    # TODO: покрыть интеграционным тестом (websocket):
+    # 1) отправить несколько chat сообщений;
+    # 2) имитировать наличие voice транскрипта в voice_coll;
+    # 3) отправить agent_summary и проверить одноразовую отправку.
+    if room_uuid in _room_summary_finalized:
+        print(f"[summary] Already finalized room={original_room_id}")
+        return
+    settings = get_settings()
+    v = None
+    with contextlib.suppress(Exception):
+        # Пытаемся забрать транскрипт (voice_capture уже должен быть остановлен)
+        v = await voice_coll.pop_transcript(str(room_uuid)) or await voice_coll.pop_transcript(original_room_id)
+    from ...infrastructure.services.summary import SummaryCollector
+    summary = None
+    if v and v.text and not v.text.startswith('(no audio'):
+        print(f"[summary] Using voice transcript for room {original_room_id} chars={len(v.text)} reason={reason}")
+        import re
+        temp = SummaryCollector()
+        text = v.text or ''
+        sentences: list[str] = []
+        if text.strip():
+            norm = re.sub(r"\s+", " ", text.strip())
+            parts = re.split(r'(?<=[.!?])\s+', norm)
+            sentences = [p.strip() for p in parts if p.strip()]
+        if not sentences and text.strip():
+            sentences = [text.strip()]
+        for sent in sentences:
+            await temp.add_message(str(room_uuid), None, 'voice', sent)
+        summary = await temp.summarize(str(room_uuid), ai_provider)
+    else:
+        # Голос отсутствует/пустой — используем чат
+        print(f"[summary] Voice transcript missing or empty for room {original_room_id}; fallback to chat. reason={reason}")
+        summary = await collector.summarize(str(room_uuid), ai_provider)
+    if summary:
+        if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID:
+            try:
+                text = (
+                    f"Room {summary.room_id} завершена (trigger={reason}). Источник: {'voice' if (v and v.text and not v.text.startswith('(no audio')) else 'chat'}. Сообщений: {summary.message_count}.\n"
+                    f"--- Summary ---\n{summary.summary_text}"
+                )
+                await tg_send_message(text)
+                print(f"[summary] Telegram sent for room {original_room_id} trigger={reason}")
+            except Exception as e:
+                print(f"[summary] Telegram send failed: {e}")
+    else:
+        print(f"[summary] Nothing to summarize room={original_room_id} trigger={reason}")
+    _room_summary_finalized.add(room_uuid)
 
 
 @router.websocket("/ws/rooms/{room_id}")
@@ -267,6 +322,15 @@ async def ws_room(
                     for ws in dead:
                         with contextlib.suppress(KeyError):
                             _room_clients[room_uuid].remove(ws)
+            elif data.get("type") == "agent_summary":
+                # Ручной триггер от клиента (второй клик на кнопку AI Agent)
+                await websocket.send_json({"type": "agent_summary_ack", "status": "processing"})
+                try:
+                    await _generate_and_send_summary(room_uuid, room_id, "manual", ai_provider=ai_provider, collector=collector, voice_coll=voice_coll)
+                    await websocket.send_json({"type": "agent_summary_ack", "status": "done"})
+                except Exception as e:  # pragma: no cover
+                    await websocket.send_json({"type": "agent_summary_ack", "status": "error", "error": str(e)})
+                continue
             else:
                 await websocket.send_json({"type": "error", "message": "Unknown message"})
     except WebSocketDisconnect:
@@ -317,81 +381,9 @@ async def ws_room(
                     except Exception:
                         pass
 
-        # Авто-завершение приватных звонков (call-*): если остался <=1 участник — закрываем всех и генерируем summary один раз
+        # Авто-summary отключено: теперь генерация только по сообщению type=agent_summary (manual trigger)
+        # (сохраняем блок для удобства будущего расширения)
         try:
-            original_room_is_call = (room_id or "").startswith("call-")
-            remaining = len(_room_members.get(room_uuid, set()))
-            if original_room_is_call and remaining <= 1:
-                # Закрываем оставшиеся сокеты (если ещё открыты)
-                for ws in list(_room_clients.get(room_uuid, set())):
-                    with contextlib.suppress(Exception):
-                        await ws.close(code=4001, reason="Call ended")
-                # Генерируем summary если ещё не делали
-                if room_uuid not in _room_summary_finalized:
-                    with contextlib.suppress(Exception):
-                        v = await voice_coll.pop_transcript(str(room_uuid)) or await voice_coll.pop_transcript(room_id)
-                        if v:
-                            print(f"[summary] Using voice transcript for room {room_id}")
-                        if v:
-                            from ...infrastructure.services.summary import SummaryCollector
-                            import re
-                            temp = SummaryCollector()
-                            text = v.text or ''
-                            # Разбиваем транскрипт на предложения по .!? с пробелом/концом строки
-                            # fallback: если не найдено разделителей — используем оригинальный текст одной строкой
-                            sentences = []
-                            if text.strip():
-                                # Нормализуем пробелы
-                                norm = re.sub(r"\s+", " ", text.strip())
-                                # Разбиваем, сохраняя границы
-                                parts = re.split(r'(?<=[.!?])\s+', norm)
-                                sentences = [p.strip() for p in parts if p.strip()]
-                            if not sentences and text.strip():
-                                sentences = [text.strip()]
-                            total_chars = sum(len(s) for s in sentences)
-                            settings = get_settings()
-                            min_chars = getattr(settings, 'AI_SUMMARY_MIN_CHARS', 0) or 0
-                            if min_chars and total_chars < min_chars:
-                                print(f"[summary] Voice transcript too short {total_chars} < {min_chars} (room={room_id}); still sending fallback.")
-                            for sent in sentences:
-                                await temp.add_message(str(room_uuid), None, 'voice', sent)
-                            summary = await temp.summarize(str(room_uuid), ai_provider)
-                        else:
-                            summary = await collector.summarize(str(room_uuid), ai_provider)
-                        if summary:
-                            settings = get_settings()
-                            if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID:
-                                text = (
-                                    f"Room {summary.room_id} завершена. Источник: {'voice' if v else 'chat'}. Сообщений: {summary.message_count}.\n"
-                                    f"--- Summary ---\n{summary.summary_text}"
-                                )
-                                await tg_send_message(text)
-                                print(f"[summary] Telegram sent for room {room_id}")
-                        _room_summary_finalized.add(room_uuid)
-            else:
-                # Для обычных комнат: генерируем summary только когда последний пользователь ушёл (и ещё не финализировано)
-                if remaining == 0 and room_uuid not in _room_summary_finalized:
-                    with contextlib.suppress(Exception):
-                        v = await voice_coll.pop_transcript(str(room_uuid)) or await voice_coll.pop_transcript(room_id)
-                        if v:
-                            print(f"[summary] Using voice transcript for room {room_id}")
-                        if v:
-                            from ...infrastructure.services.summary import SummaryCollector
-                            temp = SummaryCollector()
-                            for line in (v.text.splitlines() if v.text else []):
-                                await temp.add_message(str(room_uuid), None, 'voice', line)
-                            summary = await temp.summarize(str(room_uuid), ai_provider)
-                        else:
-                            summary = await collector.summarize(str(room_uuid), ai_provider)
-                        if summary:
-                            settings = get_settings()
-                            if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID:
-                                text = (
-                                    f"Room {summary.room_id} завершена. Источник: {'voice' if v else 'chat'}. Сообщений: {summary.message_count}.\n"
-                                    f"--- Summary ---\n{summary.summary_text}"
-                                )
-                                await tg_send_message(text)
-                                print(f"[summary] Telegram sent for room {room_id}")
-                        _room_summary_finalized.add(room_uuid)
+            pass
         except Exception:
             pass

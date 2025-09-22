@@ -917,6 +917,7 @@ function setupUI(){
   // === AI Agent toggle ===
   els.btnAiAgent?.addEventListener('click', async () => {
     if (!appState.currentRoomId){ log('AI Agent: сначала подключитесь к комнате'); return; }
+    // 1-й клик: активирует агента и поток голосовых чанков. 2-й клик: останавливает и шлёт manual summary.
     if (!appState._aiAgent){
       // Подключаем
       try {
@@ -953,6 +954,8 @@ function setupUI(){
                 try {
                   if (appState._voiceWs && appState._voiceWs.readyState === WebSocket.OPEN){
                     appState._voiceWs.send(bytes);
+                    appState._voiceChunkCount = (appState._voiceChunkCount||0)+1;
+                    if ((appState._voiceChunkCount % 5) === 0){ log(`VoiceCapture: отправлено чанков=${appState._voiceChunkCount}`); }
                   }
                 } catch {}
               }
@@ -992,15 +995,29 @@ function setupUI(){
         ws.onerror = e => { log('AI Agent: ошибка WS'); };
       } catch (e){ log(`AI Agent: ошибка подключения: ${e}`); }
     } else {
-      // Отключаем
-      try { appState._aiAgent.ws.close(1000, 'manual'); } catch {}
+      // Второй клик → завершаем сбор и триггерим agent_summary
+      log('AI Agent: второй клик — завершаем и триггерим summary');
+      try { if (appState.voiceMixer){ appState.voiceMixer.stop(); } } catch {}
+      try { if (appState._voiceWs && appState._voiceWs.readyState === WebSocket.OPEN){ appState._voiceWs.send(JSON.stringify({ type:'stop', ts: Date.now() })); } } catch {}
+      // Закрываем WS агента присутствия
+      try { appState._aiAgent.ws.close(1000,'manual'); } catch {}
       appState._aiAgent = null;
+      // Ждём ~600мс чтобы сервер успел финализировать транскрипт
+      setTimeout(()=>{
+        try {
+          if (appState._voiceWs && appState._voiceWs.readyState === WebSocket.OPEN){
+            try { appState._voiceWs.close(1000,'manual'); } catch {}
+          }
+          if (appState.ws && appState.ws.readyState === WebSocket.OPEN){
+            log('AI Agent: отправляем type=agent_summary');
+            appState.ws.send(JSON.stringify({ type:'agent_summary', ts: Date.now() }));
+          } else {
+            log('AI Agent: основной WS не готов для agent_summary');
+          }
+        } catch(e){ log('AI Agent: ошибка manual summary '+e); }
+      }, 650);
       els.btnAiAgent?.classList.remove('btn-media-active');
-      if (els.btnAiAgent) els.btnAiAgent.textContent='AI Agent';
-      log('AI Agent: отключен пользователем');
-      // Остановка voice capture
-      try { if (appState._voiceWs && appState._voiceWs.readyState === WebSocket.OPEN){ appState._voiceWs.send(JSON.stringify({ type:'stop' })); appState._voiceWs.close(); } } catch {}
-      try { appState.voiceMixer?.stop(); } catch {}
+      if (els.btnAiAgent) els.btnAiAgent.textContent='AI Agent (summary sent)';
     }
   });
   els.btnToggleTheme?.addEventListener('click', ()=>{
