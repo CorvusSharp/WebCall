@@ -1193,7 +1193,7 @@ function setupUI(){
       gearBtn.style.marginLeft='6px';
       gearBtn.className='btn btn-sm btn-secondary';
       els.btnLogout.parentElement?.insertBefore(gearBtn, els.btnLogout);
-      const panel = document.createElement('div');
+      let panel = document.createElement('div');
       panel.id='uiSettingsPanel';
       panel.style.position='fixed';
       panel.style.top='50px';
@@ -1206,8 +1206,8 @@ function setupUI(){
       panel.style.display='none';
       panel.style.zIndex='2000';
       panel.style.minWidth='220px';
-  panel.innerHTML = '<div style="font-weight:600;margin-bottom:8px">Отображение</div>';
-  const container = document.createElement('div');
+    panel.innerHTML = '<div style="font-weight:600;margin-bottom:8px">Отображение</div>';
+    const container = document.createElement('div');
   container.style.display='flex';
   container.style.flexWrap='wrap';
   container.style.gap='6px';
@@ -1269,9 +1269,9 @@ function setupUI(){
         cb.addEventListener('change', ()=>{ const p=loadPrefs(); p[g.id] = cb.checked; savePrefs(p); apply(p); });
         wrap.appendChild(cb); wrap.appendChild(document.createTextNode(g.label)); container.appendChild(wrap);
       });
-  panel.appendChild(container);
-  // Кнопка перехода в профиль
-  const profBtn = document.createElement('button');
+    panel.appendChild(container);
+    // Кнопка перехода в профиль
+    const profBtn = document.createElement('button');
   profBtn.type='button';
   profBtn.textContent='Изменить данные';
   profBtn.style.marginTop='10px';
@@ -1282,8 +1282,8 @@ function setupUI(){
   profBtn.style.padding='8px 10px';
   profBtn.style.borderRadius='6px';
   profBtn.style.cursor='pointer';
-  profBtn.addEventListener('click', (e)=>{ e.stopPropagation(); location.href='/static/profile.html'; });
-  panel.appendChild(profBtn);
+      profBtn.addEventListener('click', (e)=>{ e.stopPropagation(); location.href='/static/profile.html'; });
+      panel.appendChild(profBtn);
       document.body.appendChild(panel);
       gearBtn.addEventListener('click', ()=>{ panel.style.display = panel.style.display==='none' ? 'block' : 'none'; });
       document.addEventListener('click', (e)=>{ if (!panel.contains(e.target) && e.target!==gearBtn){ if (panel.style.display==='block') panel.style.display='none'; } }, { capture:true });
