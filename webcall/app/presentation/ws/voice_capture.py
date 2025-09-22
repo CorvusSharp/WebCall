@@ -94,12 +94,19 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                 # Передаём транскрипт в orchestrator (summary_v2)
                 try:
                     orch = get_summary_orchestrator()
-                    if text and len(text.strip()) > 0 and user_id:
-                        orch.add_voice_transcript(base_room_key, text.strip(), user_id=user_id)
+                    cleaned = (text or '').strip()
+                    low = cleaned.lower()
+                    technical = (not cleaned) or low.startswith('(no audio') or low.startswith('(asr failed') or low.startswith('(asr exception') or low.startswith('(asr disabled')
+                    if user_id and cleaned:
+                        if technical:
+                            logger.debug("VOICE_CAPTURE skip technical transcript attach room=%s user=%s raw=%r", room_id, user_id, cleaned[:80])
+                        else:
+                            orch.add_voice_transcript(base_room_key, cleaned, user_id=user_id)
                 except Exception:
                     pass
             else:
                 text = "(no audio chunks)"
+                logger.info("VOICE_CAPTURE finalize empty room=%s reason=no_chunks", room_id)
             await coll.store_transcript(canonical_key, text)
         with contextlib.suppress(Exception):
             await ws.close(code=1000)

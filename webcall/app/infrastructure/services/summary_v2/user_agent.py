@@ -112,6 +112,9 @@ class UserAgentSession:
                 voice_msgs = [ChatMessage(room_id=self.room_id, author_id=None, author_name='voice', content=s, ts=now_ms) for s in sentences]
                 logger.info("summary_v2: voice-only summary room=%s user=%s parts=%s", self.room_id, self.user_id, len(voice_msgs))
                 return await self._combined_strategy.build(voice_msgs, ai_provider=ai_provider, system_prompt=system_prompt)
+            # Только технический или слишком короткий voice
+            if voice_text and _is_technical_text(voice_text):
+                return SummaryResult(room_id=self.room_id, message_count=0, generated_at=int(time.time()*1000), summary_text="Речь не распознана или пуста. Повторите попытку.", sources=[], used_voice=False)
             return SummaryResult.empty(self.room_id)
         # Если все чат сообщения технические, но есть нормальный voice — используем его
         non_tech = [m for m in msgs if not _is_technical_text(m.content)]

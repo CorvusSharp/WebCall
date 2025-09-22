@@ -71,11 +71,6 @@ class Settings(BaseSettings):
     VOICE_ASR_MODEL: str = "whisper-1"  # модель для распознавания (OpenAI)
     VOICE_MAX_TOTAL_MB: int = 30  # ограничение на суммарный объём аудиоданных
 
-    # Summary v2 расширенные настройки
-    AI_SUMMARY_GRACE_POLL_MS: int = 6000  # общее время ожидания появления данных при пустом результате
-    AI_SUMMARY_GRACE_STEP_MS: int = 500   # интервал повторного опроса
-    AI_SUMMARY_REUSE_VOICE_MS: int = 10000  # временное окно (ms), в течение которого можно переиспользовать прошлую voice транскрипцию после рестарта
-
 
 @lru_cache()
 def get_settings() -> Settings:
