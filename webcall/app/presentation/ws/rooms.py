@@ -47,6 +47,7 @@ _room_summary_locks: dict[UUID, asyncio.Lock] = defaultdict(asyncio.Lock)
 # Персональные manual summary кэши: (room,user) -> SummaryResult и обслуженные отправки
 _user_manual_summary_cache: dict[tuple[UUID, UUID], SummaryResult] = {}
 _user_manual_summary_served: set[tuple[UUID, UUID]] = set()
+_room_participant_users: dict[UUID, set[UUID]] = defaultdict(set)
 
 
 async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, reason: str, *,
@@ -60,6 +61,7 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
     # 1) отправить несколько chat сообщений;
     # 2) имитировать наличие voice транскрипта в voice_coll;
     # 3) отправить agent_summary и проверить одноразовую отправку.
+    settings = get_settings()
     # Персональный режим: если инициатор указан — генерируем snapshot-based summary индивидуально
     if initiator_user_id:
         key = (room_uuid, initiator_user_id)
@@ -111,8 +113,14 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                 if owner:
                     targets.add(owner)
             if not targets:
-                print(f"[summary] Cached summary exists room={original_room_id} but no group targets")
-                return
+                # fallback: все участники комнаты (user_ids)
+                participants = _room_participant_users.get(room_uuid, set())
+                if participants:
+                    targets.update(participants)
+                    print(f"[summary] Group targets fallback to participants count={len(participants)} room={original_room_id}")
+                else:
+                    print(f"[summary] Cached summary exists room={original_room_id} but no group targets/participants")
+                    return
             served = _room_summary_served[room_uuid]
             pending = [u for u in targets if u not in served]
             if not pending:
@@ -125,6 +133,7 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                         if session is not None:
                             chat_id = await get_confirmed_chat_id(session, uid)
                         if not chat_id:
+                            print(f"[summary] Skip send user={uid} room={original_room_id}: no chat_id")
                             continue
                         text = (
                             f"Room {cached.room_id} завершена (trigger={reason}, cached). Сообщений: {cached.message_count}.\n--- Summary ---\n{cached.summary_text}"
@@ -135,7 +144,7 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                     except Exception as e:
                         print(f"[summary] Cached summary send failed user={uid} room={original_room_id} err={e}")
             return
-    settings = get_settings()
+    # settings уже инициализирован выше
     v = None
     # Ожидаем до ~6с появления транскрипта (poll каждые 300мс)
     for attempt in range(20):
@@ -214,6 +223,7 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                     if session is not None:
                         chat_id = await get_confirmed_chat_id(session, uid)
                     if not chat_id:
+                        print(f"[summary] Skip send personal user={initiator_user_id} room={original_room_id}: no chat_id")
                         continue
                     text = (
                         f"Room {summary.room_id} завершена (trigger={reason}). Источник: {'voice' if (v and v.text and not v.text.startswith('(no audio')) else 'chat'}. Сообщений: {summary.message_count}.\n--- Summary ---\n{summary.summary_text}"
@@ -409,6 +419,8 @@ async def ws_room(
 
                 _ws_conn[websocket] = conn_id
                 _room_members[room_uuid].add(conn_id)
+                if account_uid:
+                    _room_participant_users[room_uuid].add(account_uid)
                 uname_base = (data.get("username") or real_name or ("AI AGENT" if is_agent else str(conn_id)[:8]))
                 if is_agent and real_name:
                     uname = f"AI-{real_name}"[:32]
@@ -548,6 +560,8 @@ async def ws_room(
             if uid not in _room_members.get(room_uuid, set()):
                 with contextlib.suppress(KeyError):
                     _display_names.pop(uid)
+            # cleanup участника (по владельцу агента мы mapping не знаем — оставляем если другие соединения есть)
+            # (упрощение: не удаляем из _room_participant_users до конца комнаты)
             # Если это агент — удаляем из структуры агентов
             with contextlib.suppress(Exception):
                 if uid in _room_agents.get(room_uuid, set()):
