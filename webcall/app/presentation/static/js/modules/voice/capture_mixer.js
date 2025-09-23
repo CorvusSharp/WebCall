@@ -13,7 +13,7 @@ export class VoiceCaptureMixer {
     this._rec = null;
     this._ctx = null;
     this._dest = null;
-    this._lastTracksKey = '';
+    this._lastTracksKey = null;
     this._rebuildInterval = null;
     this._sources = [];
     this._closing = false;
@@ -76,6 +76,9 @@ export class VoiceCaptureMixer {
     this._initialTimer = null;
     try { if (this._rebuildInterval) clearInterval(this._rebuildInterval); } catch {}
     this._rebuildInterval = null;
+    this._waitingForTrack = false;
+    this._lastTracksKey = null;
+    this._startTs = 0;
     try {
       if (this._rec && this._rec.state === 'recording'){
         // Принудительно запрашиваем финальный буфер до stop для более надёжного последнего чанка
@@ -87,16 +90,29 @@ export class VoiceCaptureMixer {
     // Отвязываем источники
     try { this._sources.forEach(src=>{ try { src.disconnect(); } catch {} }); } catch {}
     this._sources = [];
+    this._dest = null;
     // Закрываем аудио-контекст один раз
     if (this._ctx && !this._closing && this._ctx.state !== 'closed'){
       this._closing = true;
-      try { this._ctx.close().catch(()=>{}).finally(()=>{ this._ctx=null; this._dest=null; this._closing=false; }); } catch { this._closing=false; this._ctx=null; this._dest=null; }
+      try {
+        this._ctx.close().catch(()=>{}).finally(()=>{ this._ctx=null; this._dest=null; this._closing=false; });
+      } catch {
+        this._closing=false; this._ctx=null; this._dest=null;
+      }
     } else {
-      this._ctx = null; this._dest = null;
+      this._ctx = null; this._dest = null; this._closing = false;
     }
   }
 
   _ensureContext(){
+    if (this._ctx && this._ctx.state === 'closed'){
+      this._ctx = null;
+      this._dest = null;
+      this._closing = false;
+    }
+    if (this._ctx && !this._dest){
+      try { this._dest = this._ctx.createMediaStreamDestination(); } catch {}
+    }
     if (this._ctx) return;
     const Ctx = window.AudioContext || window.webkitAudioContext;
     this._ctx = new Ctx();
@@ -148,8 +164,16 @@ export class VoiceCaptureMixer {
       } catch {}
     }
     const key = tracks.map(t=>t.id).sort().join('|');
-    if (key === this._lastTracksKey) return; // нет изменений
-    this.onLog(`VoiceMixer: update graph tracks=${tracks.length}`);
+    let forced = false;
+    if (key === this._lastTracksKey){
+      if (tracks.length && this._sources.length === 0){
+        forced = true;
+        this.onLog('VoiceMixer: forcing rebuild for stale sources');
+      } else {
+        return; // нет изменений
+      }
+    }
+    this.onLog(`VoiceMixer: update graph tracks=${tracks.length}${forced ? ' (forced)' : ''}`);
     this._lastTracksKey = key;
     // Отключаем старые
     try { this._sources.forEach(src=>{ try { src.disconnect(); } catch {} }); } catch {}
