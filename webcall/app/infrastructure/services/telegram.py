@@ -10,6 +10,7 @@ from __future__ import annotations
 import httpx
 import asyncio
 import logging
+import contextlib
 from ..config import get_settings
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
