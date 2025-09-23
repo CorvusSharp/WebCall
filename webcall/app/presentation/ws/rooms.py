@@ -131,6 +131,11 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                 with contextlib.suppress(Exception):
                     await voice_coll.pop_transcript(f"{room_uuid}:{initiator_user_id}")
             # Подготовка и отправка в Telegram с расширенным логированием причин пропуска
+            try:
+                used_voice = getattr(personal, 'used_voice', False)
+                print(f"[summary] Personal summary pre-telegram room={original_room_id} user={initiator_user_id} msg_count={personal.message_count} used_voice={used_voice} summary_len={len(personal.summary_text or '') if hasattr(personal,'summary_text') else 'n/a'}")
+            except Exception:
+                pass
             if not settings.TELEGRAM_BOT_TOKEN:
                 print(f"[summary] Telegram skip: no TELEGRAM_BOT_TOKEN room={original_room_id} user={initiator_user_id}")
             elif session is None:

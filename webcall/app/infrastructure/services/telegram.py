@@ -9,22 +9,31 @@ from __future__ import annotations
 
 import httpx
 import asyncio
+import logging
 from ..config import get_settings
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from ..db.models import TelegramLinks
 
+logger = logging.getLogger(__name__)
+
 
 async def _post_message(token: str, chat_id: str, text: str) -> bool:
-    import httpx
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": text[:4000]}
     timeout = httpx.Timeout(10.0, connect=5.0)
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             r = await client.post(url, data=payload)
-            return r.status_code == 200
-    except Exception:
+            if r.status_code != 200:
+                body = None
+                with contextlib.suppress(Exception):  # type: ignore[name-defined]
+                    body = r.text[:300]
+                logger.warning("telegram: sendMessage failed status=%s chat_id=%s body=%r", r.status_code, chat_id, body)
+                return False
+            return True
+    except Exception as e:  # pragma: no cover
+        logger.error("telegram: exception sending chat_id=%s err=%s", chat_id, e)
         return False
 
 
@@ -39,6 +48,7 @@ async def send_message(text: str, chat_ids: list[str] | None = None, session: As
     """
     settings = get_settings()
     if not settings.TELEGRAM_BOT_TOKEN:
+        logger.debug("telegram: skip send (no token)")
         return False
     token = settings.TELEGRAM_BOT_TOKEN
 
@@ -52,11 +62,13 @@ async def send_message(text: str, chat_ids: list[str] | None = None, session: As
     if not targets and settings.TELEGRAM_CHAT_ID:
         targets = [settings.TELEGRAM_CHAT_ID]
     if not targets:
+        logger.debug("telegram: skip send (no targets)")
         return False
     success_any = False
     for cid in set(targets):
         ok = await _post_message(token, cid, text)
         success_any = success_any or ok
+        logger.info("telegram: dispatched chat_id=%s ok=%s text_len=%s", cid, ok, len(text))
     return success_any
 
 
