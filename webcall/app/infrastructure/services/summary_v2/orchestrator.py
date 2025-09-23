@@ -142,7 +142,7 @@ class SummaryOrchestrator:
             room_id, user_id, len(transcript), technical, has_meta, meta_capture_ts, transcript[:60]
         )
 
-    async def start_user_window(self, room_id: str, user_id: str) -> None:
+    async def start_user_window(self, room_id: str, user_id: str, user_name: str | None = None) -> None:
         """Старт (или перезапуск) персонального окна пользователя."""
         key = (room_id, user_id)
         # перезапуск должен сбросить старую сессию
@@ -164,7 +164,7 @@ class SummaryOrchestrator:
             old.stop()
             with contextlib.suppress(ValueError):
                 self._room_sessions.get(room_id, []).remove(old)
-        sess = UserAgentSession(room_id=room_id, user_id=user_id)
+        sess = UserAgentSession(room_id=room_id, user_id=user_id, user_name=user_name)
         # Восстановим voice если оно было и мы иначе бы его потеряли
         if preserved_voice:
             for vseg in preserved_voice:
@@ -451,6 +451,75 @@ class SummaryOrchestrator:
                         pass
             except Exception:
                 pass
+
+        # Дополнительный режим: агрегирование голосов всех участников (AI_SUMMARY_VOICE_SCOPE=room)
+        try:
+            settings = get_settings()
+            if getattr(settings, 'AI_SUMMARY_VOICE_SCOPE', 'self').lower() == 'room':
+                # Собираем голосовые сегменты всех текущих активных сессий данной комнаты
+                room_sess = [s for (r, _u) , s in self._sessions.items() if r == room_id]
+                voice_buckets: list[tuple[str|None, list[str]]] = []  # (user_name, segments)
+                for s in room_sess:
+                    segs = getattr(s, '_voice_segments', [])  # type: ignore[attr-defined]
+                    # фильтруем технические и совсем короткие
+                    clean = []
+                    for raw in segs:
+                        if not raw or len(raw.strip()) <= 3:
+                            continue
+                        low = raw.lower().strip()
+                        if low.startswith('(no audio') or low.startswith('(asr failed') or low.startswith('(asr exception') or low.startswith('(asr disabled'):
+                            continue
+                        # уберём meta если есть
+                        if raw.startswith('[meta ') and ']' in raw:
+                            body_pos = raw.find(']')
+                            if body_pos != -1:
+                                raw = raw[body_pos+1:].lstrip()
+                        clean.append(raw.strip())
+                    if clean:
+                        voice_buckets.append((getattr(s, 'user_name', None) or getattr(s, 'user_id', None), clean))
+                if voice_buckets and sum(len(v) for _n, v in voice_buckets) > 0:
+                    # Строим псевдо‑сообщения диалога: участник как author_name
+                    from .models import ChatMessage
+                    combined_voice_msgs: list[ChatMessage] = []
+                    now_ms = int(time.time()*1000)
+                    sentence_limit = 160  # защитный лимит
+                    import re
+                    total_sentences = 0
+                    for uname, segs in voice_buckets:
+                        merged_text = " ".join(segs)
+                        norm = re.sub(r"\s+", " ", merged_text.strip())
+                        parts = re.split(r'(?<=[.!?])\s+', norm)
+                        parts = [p.strip() for p in parts if p.strip()]
+                        for p in parts:
+                            combined_voice_msgs.append(ChatMessage(room_id=room_id, author_id=None, author_name=uname, content=p, ts=now_ms))
+                            total_sentences += 1
+                            if total_sentences >= sentence_limit:
+                                break
+                        if total_sentences >= sentence_limit:
+                            break
+                    # Если получили что-то осмысленное и исходный result не использовал voice (или мало сообщений), попробуем пересобрать
+                    if combined_voice_msgs:
+                        # Ограничим исходные чат сообщения (из текущей персональной сессии)
+                        base_msgs = getattr(sess, '_messages', [])
+                        tail_limit = 200
+                        if len(base_msgs) > tail_limit:
+                            base_msgs = base_msgs[-tail_limit:]
+                        merged_msgs = list(base_msgs) + combined_voice_msgs
+                        # Применим комбинированную стратегию напрямую
+                        try:
+                            ai_re_summary = await self._combined_strategy.build(merged_msgs, ai_provider=ai_provider, system_prompt=system_prompt)
+                            if ai_re_summary and ai_re_summary.message_count > 0:
+                                logger.debug("summary_v2: room-voice aggregation applied room=%s user=%s participants=%s voice_sentences=%s", room_id, user_id, len(voice_buckets), len(combined_voice_msgs))
+                                result = ai_re_summary
+                                result.used_voice = True  # пометим явно
+                            else:
+                                logger.debug("summary_v2: room-voice aggregation produced empty summary room=%s user=%s", room_id, user_id)
+                        except Exception as e_aggr:
+                            logger.warning("summary_v2: room-voice aggregation failed room=%s user=%s err=%s", room_id, user_id, e_aggr)
+                else:
+                    logger.debug("summary_v2: room-voice aggregation skipped (no voice buckets) room=%s user=%s", room_id, user_id)
+        except Exception:
+            pass
         return result
 
 # singleton accessor

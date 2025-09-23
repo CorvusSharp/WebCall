@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     AI_SUMMARY_MIN_CHARS: int = 60  # минимальный объём текста (символов) чтобы считать summary содержательным
     # Включает формирование разбивки summary по участникам (персональные вклады)
     AI_SUMMARY_PARTICIPANT_BREAKDOWN: bool = False
+    # Определяет какие голосовые транскрипты включать в персональное summary v2 (только для новой архитектуры):
+    # self  – (по умолчанию) только собственный голос владельца агента
+    # room  – агрегировать голос всех участников комнаты (каждый сегмент будет размечен именем участника)
+    AI_SUMMARY_VOICE_SCOPE: str = "room"
     TELEGRAM_BOT_TOKEN: str | None = None  # токен бота для отправки итоговых выжимок
     TELEGRAM_CHAT_ID: str | None = None  # (устаревшее) глобальный chat id; если установлен используется как fallback
     TELEGRAM_BOT_NAME: str | None = None  # username бота без @ для генерации deep-link

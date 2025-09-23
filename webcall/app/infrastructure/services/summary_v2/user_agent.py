@@ -34,6 +34,7 @@ def _is_technical_text(text: str) -> bool:
 class UserAgentSession:
     room_id: str
     user_id: str
+    user_name: str | None = None  # отображаемое имя пользователя (для агрегации голосов room-режима)
     start_ts: int = field(default_factory=lambda: int(time.time()*1000))
     end_ts: Optional[int] = None
     _messages: List[ChatMessage] = field(default_factory=list)  # только пользовательское окно
