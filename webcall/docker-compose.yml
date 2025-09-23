@@ -5,6 +5,10 @@ services:
       dockerfile: docker/api.Dockerfile
     env_file:
       - .env
+    environment:
+      # Включаем AI summary и разбивку по участникам (можно переопределить в .env)
+      AI_SUMMARY_ENABLED: "1"
+      AI_SUMMARY_PARTICIPANT_BREAKDOWN: "1"
     ports:
       - "8000:8000" # для локальной проверки, Nginx ходит на 127.0.0.1:8000
     depends_on:
