@@ -66,6 +66,32 @@ summary_voice_proxy_segments_total = Counter(
 )
 
 
+async def _collect_all_voice_transcripts(voice_coll, room_uuid: UUID, original_room_id: str) -> list[tuple[UUID | None, str, str]]:  # type: ignore[no-untyped-def]
+    """Возвращает список всех доступных voice транскриптов для комнаты.
+
+    Каждый элемент: (user_id|None, text, key) где key нужен для последующего pop.
+    Собираем:
+      1. Общий транскрипт по ключу room_uuid / original_room_id (совместимость со старым форматом)
+      2. Персональные транскрипты по ключам f"{room_uuid}:{user_id}" для известных участников.
+    Дубликаты (если общий == конкатенация персональных) сейчас НЕ фильтруем, но помечаем разными ключами.
+    """
+    results: list[tuple[UUID | None, str, str]] = []
+    # 1. Общий ключ (старый формат)
+    with contextlib.suppress(Exception):
+        v_global = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(original_room_id)
+        if v_global and getattr(v_global, 'text', None) and v_global.text.strip() and not v_global.text.startswith('(no audio'):
+            results.append((None, v_global.text.strip(), str(room_uuid)))
+    # 2. Персональные ключи
+    participants = _room_participant_users.get(room_uuid, set())
+    for uid in list(participants):
+        key = f"{room_uuid}:{uid}"
+        with contextlib.suppress(Exception):
+            v_user = await voice_coll.get_transcript(key)
+            if v_user and getattr(v_user, 'text', None) and v_user.text.strip() and not v_user.text.startswith('(no audio'):
+                results.append((uid, v_user.text.strip(), key))
+    return results
+
+
 async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, reason: str, *,
                                      ai_provider, collector, voice_coll, session: AsyncSession | None = None,
                                      initiator_user_id: UUID | None = None) -> None:  # type: ignore[no-untyped-def]
@@ -89,29 +115,31 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
             with contextlib.suppress(Exception):
                 ctrs = orchestrator.get_counters()
                 print(f"[summary] Orchestrator counters snapshot room={original_room_id} user={initiator_user_id} counters={ctrs}")
-            # Оппортунистическое прикрепление ТОЛЬКО персонального транскрипта (без fallback на общий ключ)
+            # Оппортунистическое прикрепление ВСЕХ доступных транскриптов участников комнаты
             with contextlib.suppress(Exception):
-                v_cur = await voice_coll.get_transcript(f"{room_uuid}:{initiator_user_id}")
-                if v_cur and getattr(v_cur, 'text', None):
-                    raw_txt = v_cur.text.strip()
-                    if raw_txt and not raw_txt.startswith('(no audio'):
-                        # Извлекаем captureTs если уже есть мета
-                        capture_ts = None
-                        if raw_txt.startswith('[meta ') and 'captureTs=' in raw_txt:
-                            m = re.search(r'captureTs=(\d+)', raw_txt)
-                            if m:
-                                with contextlib.suppress(Exception):
-                                    capture_ts = int(m.group(1))
-                        if capture_ts is None:
-                            capture_ts = int(time.time()*1000)
-                            raw_txt = f"[meta captureTs={capture_ts}] " + raw_txt
-                        start_ms = _room_agent_start.get((room_uuid, initiator_user_id))
-                        fresh = start_ms is None or capture_ts >= (start_ms - 150)
-                        if fresh:
-                            orchestrator.add_voice_transcript(str(room_uuid), raw_txt, user_id=str(initiator_user_id))
-                            print(f"[summary] opportunistic_attach accepted room={original_room_id} user={initiator_user_id} captureTs={capture_ts} start_ms={start_ms}")
-                        else:
-                            print(f"[summary] opportunistic_attach rejected(stale) room={original_room_id} user={initiator_user_id} captureTs={capture_ts} start_ms={start_ms}")
+                all_voice = await _collect_all_voice_transcripts(voice_coll, room_uuid, original_room_id)
+                for v_user_id, raw_txt, _key in all_voice:
+                    if not raw_txt:
+                        continue
+                    capture_ts = None
+                    if raw_txt.startswith('[meta ') and 'captureTs=' in raw_txt:
+                        m = re.search(r'captureTs=(\d+)', raw_txt)
+                        if m:
+                            with contextlib.suppress(Exception):
+                                capture_ts = int(m.group(1))
+                    if capture_ts is None:
+                        capture_ts = int(time.time()*1000)
+                        raw_txt = f"[meta captureTs={capture_ts}] " + raw_txt
+                    # fresh проверяем относительно owner окна если это инициатор или сам пользователь v_user_id
+                    base_uid = v_user_id or initiator_user_id
+                    start_ms = _room_agent_start.get((room_uuid, base_uid)) if base_uid else None
+                    fresh = start_ms is None or capture_ts >= (start_ms - 150)
+                    target_uid_str = str(v_user_id) if v_user_id else str(initiator_user_id)
+                    if fresh:
+                        orchestrator.add_voice_transcript(str(room_uuid), raw_txt, user_id=target_uid_str)
+                        print(f"[summary] opportunistic_attach accepted room={original_room_id} user={target_uid_str} captureTs={capture_ts} start_ms={start_ms}")
+                    else:
+                        print(f"[summary] opportunistic_attach rejected(stale) room={original_room_id} user={target_uid_str} captureTs={capture_ts} start_ms={start_ms}")
             # Первая попытка построить персональное summary
             cutoff_ms = int(__import__('time').time()*1000)
             personal = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session, cutoff_ms=cutoff_ms)
@@ -159,8 +187,12 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                             pass
             # Очистим использованный персональный транскрипт если мы что-то реально собрали
             if personal.message_count > 0:
+                # Удаляем все персональные транскрипты, которые использовали (инициатор и остальные)
                 with contextlib.suppress(Exception):
-                    await voice_coll.pop_transcript(f"{room_uuid}:{initiator_user_id}")
+                    all_voice_keys = [k for _uid, _txt, k in await _collect_all_voice_transcripts(voice_coll, room_uuid, original_room_id)]
+                    for k in all_voice_keys:
+                        with contextlib.suppress(Exception):
+                            await voice_coll.pop_transcript(k)
             # Подготовка и отправка в Telegram с расширенным логированием причин пропуска
             try:
                 used_voice = getattr(personal, 'used_voice', False)
@@ -318,18 +350,20 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                         print(f"[summary] Cached summary send failed user={uid} room={original_room_id} err={e}")
             return
     # settings уже инициализирован выше
-    v = None
-    # Ожидаем до ~6с появления транскрипта (poll каждые 300мс)
+    # Собираем все доступные транскрипты (ждём появления хотя бы одного до 6с)
+    collected_voice: list[tuple[UUID | None, str, str]] = []
     for attempt in range(20):
         with contextlib.suppress(Exception):
-            v = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(original_room_id)
-        if v:  # готов
+            collected_voice = await _collect_all_voice_transcripts(voice_coll, room_uuid, original_room_id)
+        if collected_voice:
             break
         await asyncio.sleep(0.3)
-    # Если получили – извлекаем (pop) чтобы не использовать повторно
-    if v:
+    # Pop каждого ключа чтобы не использовать повторно в будущем (если что-то нашли)
+    if collected_voice:
         with contextlib.suppress(Exception):
-            v = await voice_coll.pop_transcript(str(room_uuid)) or await voice_coll.pop_transcript(original_room_id)
+            for _uid, _text, key in collected_voice:
+                with contextlib.suppress(Exception):
+                    await voice_coll.pop_transcript(key)
     from ...infrastructure.services.summary import SummaryCollector
     summary = None
     # Получаем кастомный system prompt (только если пользователь инициатор известен)
@@ -339,27 +373,30 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
             custom_prompt = await get_user_system_prompt(session, initiator_user_id)
 
     from ...infrastructure.services.summary import summarize_messages as _sm
-    if v and v.text and not v.text.startswith('(no audio'):
-        print(f"[summary] Using voice transcript for room {original_room_id} chars={len(v.text)} reason={reason}")
+    if collected_voice:
+        # Формируем ChatMessage по каждому транскрипту, разбивая на предложения
+        print(f"[summary] Using multi-voice transcripts for room {original_room_id} count={len(collected_voice)} reason={reason}")
         import re, time as _t
-        # Разбиваем транскрипт на предложения, формируем временный список ChatMessage без очистки collector
-        sentences: list[str] = []
-        text_v = v.text or ''
-        if text_v.strip():
-            norm = re.sub(r"\s+", " ", text_v.strip())
-            parts = re.split(r'(?<=[.!?])\s+', norm)
-            sentences = [p.strip() for p in parts if p.strip()]
-        if not sentences and text_v.strip():
-            sentences = [text_v.strip()]
         voice_msgs = []
         try:
             from ...infrastructure.services.summary import ChatMessage as _CM
             now_ms = int(_t.time()*1000)
-            for s in sentences:
-                voice_msgs.append(_CM(room_id=str(room_uuid), author_id=None, author_name='voice', content=s, ts=now_ms))
+            for user_id, text_v, _key in collected_voice:
+                if not text_v:
+                    continue
+                sentences: list[str] = []
+                norm_src = text_v.strip()
+                if norm_src:
+                    norm = re.sub(r"\s+", " ", norm_src)
+                    parts = re.split(r'(?<=[.!?])\s+', norm)
+                    sentences = [p.strip() for p in parts if p.strip()]
+                if not sentences and norm_src:
+                    sentences = [norm_src]
+                author_name = _display_names.get(user_id) if user_id else 'voice'
+                for s in sentences:
+                    voice_msgs.append(_CM(room_id=str(room_uuid), author_id=str(user_id) if user_id else None, author_name=author_name, content=s, ts=now_ms))
         except Exception:
             pass
-        # Берём snapshot текущего collector и добавляем voice предложения (не destructive)
         base_snap = []
         with contextlib.suppress(Exception):
             base_snap = await collector.get_messages_snapshot(str(room_uuid))  # type: ignore[attr-defined]
@@ -384,12 +421,14 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
         try:
             base_snap2 = await collector.get_messages_snapshot(str(room_uuid))  # type: ignore[attr-defined]
             merged2 = base_snap2
-            if v and v.text and not v.text.startswith('(no audio'):
-                # Добавим неразбитый текст если вдруг разбиение не сработало
+            if collected_voice:
                 from ...infrastructure.services.summary import ChatMessage as _CM
                 import time as _t
                 merged2 = list(base_snap2)
-                merged2.append(_CM(room_id=str(room_uuid), author_id=None, author_name='voice', content=v.text.strip(), ts=int(_t.time()*1000)))
+                for uid_voice, txt_voice, _key in collected_voice:
+                    if not txt_voice:
+                        continue
+                    merged2.append(_CM(room_id=str(room_uuid), author_id=str(uid_voice) if uid_voice else None, author_name=_display_names.get(uid_voice) if uid_voice else 'voice', content=txt_voice.strip(), ts=int(_t.time()*1000)))
             if merged2:
                 summary = await _sm(merged2, ai_provider, system_prompt=custom_prompt)
                 print(f"[summary] Second-chance merge snapshot used room={original_room_id} count={len(merged2)}")
@@ -426,7 +465,7 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                         print(f"[summary] Skip send personal user={initiator_user_id} room={original_room_id}: no chat_id")
                         continue
                     text = (
-                        f"Room {summary.room_id} завершена (trigger={reason}). Источник: {'voice' if (v and v.text and not v.text.startswith('(no audio')) else 'chat'}. Сообщений: {summary.message_count}.\n--- Summary ---\n{summary.summary_text}"
+                        f"Room {summary.room_id} завершена (trigger={reason}). Источник: {'voice' if collected_voice else 'chat'}. Сообщений: {summary.message_count}.\n--- Summary ---\n{summary.summary_text}"
                     )
                     await tg_send_message(text, chat_ids=[chat_id], session=session)
                     _room_summary_served[room_uuid].add(uid)
