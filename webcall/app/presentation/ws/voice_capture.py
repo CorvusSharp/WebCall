@@ -50,7 +50,10 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
         canonical_key = f"{base_room_key}:{user_id}"
     else:
         canonical_key = base_room_key
+    # Сессионные параметры (client → server)
     started = False
+    session_id: int | None = None  # порядковый номер сессии (клиентский)
+    client_start_ts: int | None = None  # ts из control frame start (клиент)
     start_control_ts: int | None = None  # когда получили start (control или implicit)
     first_chunk_ts: int | None = None
     last_chunk_ts: int | None = None
@@ -102,7 +105,9 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                     import time as _t
                     start_control_ts = int(_t.time()*1000)
                     control_start_count += 1
-                    logger.debug("VOICE_CAPTURE control start room=%s user=%s", room_id, user_id)
+                    session_id = data.get('session') if isinstance(data.get('session'), int) else None
+                    client_start_ts = data.get('ts') if isinstance(data.get('ts'), int) else None
+                    logger.debug("VOICE_CAPTURE control start room=%s user=%s session_id=%s client_ts=%s", room_id, user_id, session_id, client_start_ts)
                 elif t == 'stop':
                     # Защита: если ещё нет чанков и старт был совсем недавно — игнорируем одиночный stop (например клиент мгновенно пересоздал MediaRecorder)
                     import time as _t
@@ -124,7 +129,7 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                     started = True
                     import time as _t
                     start_control_ts = int(_t.time()*1000)
-                    logger.debug("VOICE_CAPTURE implicit start room=%s user=%s (binary before explicit start)", room_id, user_id)
+                    logger.debug("VOICE_CAPTURE implicit start room=%s user=%s (binary before explicit start) session_id=%s", room_id, user_id, session_id)
                 chunk = msg['bytes']
                 total_bytes += len(chunk)
                 binary_frames += 1
@@ -162,7 +167,17 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                         if technical:
                             logger.debug("VOICE_CAPTURE skip technical transcript attach room=%s user=%s raw=%r", room_id, user_id, cleaned[:80])
                         else:
-                            orch.add_voice_transcript(base_room_key, cleaned, user_id=user_id)
+                            # Встраиваем метаданные в префикс чтобы orchestrator мог игнорировать чужие предыдущие сессии
+                            # Формат: [meta session=ID startTs=CLIENT_TS captureTs=SERVER_START]
+                            meta_prefix_parts = []
+                            if session_id is not None:
+                                meta_prefix_parts.append(f"session={session_id}")
+                            if client_start_ts is not None:
+                                meta_prefix_parts.append(f"clientTs={client_start_ts}")
+                            if start_control_ts is not None:
+                                meta_prefix_parts.append(f"captureTs={start_control_ts}")
+                            meta_prefix = "[meta " + " ".join(meta_prefix_parts) + "] " if meta_prefix_parts else ""
+                            orch.add_voice_transcript(base_room_key, meta_prefix + cleaned, user_id=user_id)
                 except Exception:
                     pass
             else:

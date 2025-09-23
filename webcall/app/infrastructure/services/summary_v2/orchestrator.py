@@ -75,6 +75,28 @@ class SummaryOrchestrator:
         low = transcript.lower()
         if low.startswith('(no audio') or low.startswith('(asr failed') or low.startswith('(asr exception') or low.startswith('(asr disabled'):
             technical = True
+        # Парсинг мета-префикса (если мы его добавили в voice_capture)
+        meta_start = None
+        meta_capture_ts = None
+        try:
+            if transcript.startswith('[meta '):
+                end = transcript.find(']')
+                if end != -1:
+                    meta_block = transcript[6:end].strip()  # внутри без закрывающей скобки
+                    body = transcript[end+1:].lstrip()
+                    parts = meta_block.split()
+                    for p in parts:
+                        if p.startswith('captureTs='):
+                            try: meta_capture_ts = int(p.split('=',1)[1])
+                            except: pass
+                    transcript_body = body
+                    # Если сессия уже имеет start_ts и meta_capture_ts < sess.start_ts - 150 → считаем это транскрипт предыдущего запуска и игнорируем
+                    if meta_capture_ts is not None and meta_capture_ts < (sess.start_ts - 150):
+                        logger.debug("summary_v2: ignore stale voice transcript by captureTs room=%s user=%s captureTs=%s start_ts=%s", room_id, user_id, meta_capture_ts, sess.start_ts)
+                        return
+                    transcript = transcript_body
+        except Exception:
+            pass
         sess.add_voice_transcript(transcript)
         logger.info("summary_v2: add_voice_transcript room=%s user=%s chars=%s technical=%s head=%r", room_id, user_id, len(transcript), technical, transcript[:60])
 
