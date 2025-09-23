@@ -147,13 +147,27 @@ class SummaryOrchestrator:
         key = (room_id, user_id)
         # перезапуск должен сбросить старую сессию
         old = self._sessions.get(key)
+        preserved_voice: list[str] | None = None
         if old:
-            # мягко помечаем остановку старой, но не удаляем мгновенно (на случай параллельного запроса summary)
+            try:
+                # Если в старой сессии уже есть voice сегменты и нет чат сообщений – НЕ теряем их
+                if getattr(old, '_voice_segments', None) and not getattr(old, '_messages', None):  # type: ignore[attr-defined]
+                    preserved_voice = list(getattr(old, '_voice_segments'))  # type: ignore[attr-defined]
+            except Exception:
+                preserved_voice = None
+            # мягко помечаем остановку старой
             old.stop()
-            # удалим из индекса комнаты
             with contextlib.suppress(ValueError):
                 self._room_sessions.get(room_id, []).remove(old)
         sess = UserAgentSession(room_id=room_id, user_id=user_id)
+        # Восстановим voice если оно было и мы иначе бы его потеряли
+        if preserved_voice:
+            for vseg in preserved_voice:
+                try:
+                    sess.add_voice_transcript(vseg)
+                except Exception:
+                    pass
+            logger.debug("summary_v2: restored voice segments on restart room=%s user=%s count=%s", room_id, user_id, len(preserved_voice))
         self._sessions[key] = sess
         self._room_sessions.setdefault(room_id, []).append(sess)
         # Не удаляем транскрипт из коллектора при рестарте: если запись ещё финализируется, она прикрепится лениво.
@@ -317,6 +331,15 @@ class SummaryOrchestrator:
             with contextlib.suppress(Exception):
                 system_prompt = await get_user_system_prompt(db_session, user_id)
         result = await sess.build_summary(ai_provider=ai_provider, system_prompt=system_prompt)
+        # Диагностика: если результат пуст, но в сессии есть voice сегменты — логируем их длину
+        try:
+            if result.message_count == 0:
+                vseg = getattr(sess, '_voice_segments', [])  # type: ignore[attr-defined]
+                if vseg:
+                    lens = [len(x) for x in vseg]
+                    logger.warning("summary_v2: empty result but voice_segments present room=%s user=%s segments=%s lens=%s", room_id, user_id, len(vseg), lens)
+        except Exception:
+            pass
         # Pending ожидание голоса: если окно пустое, нет voice сегментов и нет сообщений — подождём немного появление транскрипта
         if result.message_count == 0 and not getattr(result, 'used_voice', False):
             try:
@@ -369,6 +392,28 @@ class SummaryOrchestrator:
             )
         except Exception:
             pass
+        # Fallback: если всё равно пусто, но есть voice сегменты — синтезируем минимальное summary без AI
+        if result.message_count == 0 and not getattr(result, 'used_voice', False):
+            try:
+                vseg2 = getattr(sess, '_voice_segments', [])  # type: ignore[attr-defined]
+                meaningful = [s for s in vseg2 if s and len(s.strip()) > 10]
+                if meaningful:
+                    import re, time as _t
+                    merged_voice = " ".join(meaningful)
+                    norm = re.sub(r"\s+", " ", merged_voice.strip())
+                    parts = re.split(r'(?<=[.!?])\s+', norm)
+                    parts = [p.strip() for p in parts if p.strip()]
+                    head_parts = parts[:5] if parts else [norm]
+                    # Формируем псевдо‑сообщения
+                    now_ms = int(_t.time()*1000)
+                    from .models import ChatMessage, SummaryResult
+                    pseudo = [ChatMessage(room_id=room_id, author_id=None, author_name='voice', content=p, ts=now_ms) for p in head_parts]
+                    # Заполняем простой текст
+                    text = "Краткая выжимка по голосу (fallback):\n" + " \n".join(head_parts)
+                    result = SummaryResult(room_id=room_id, message_count=len(pseudo), generated_at=now_ms, summary_text=text, sources=pseudo, used_voice=True, participants=[])
+                    logger.warning("summary_v2: synthesized fallback voice summary room=%s user=%s parts=%s", room_id, user_id, len(pseudo))
+            except Exception:
+                pass
         return result
 
 # singleton accessor
