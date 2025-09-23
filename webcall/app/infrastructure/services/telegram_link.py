@@ -51,6 +51,20 @@ async def confirm_link(session: AsyncSession, token: str, chat_id: str) -> bool:
         # истёк
         link.status = 'expired'
         return False
+    # ВАЖНО: если ранее пользователь делал revoke, старая запись со статусом 'revoked' всё ещё содержит chat_id
+    # и блокирует уникальный индекс (user_id, chat_id). Очищаем такие записи перед установкой chat_id на pending.
+    try:
+        await session.execute(
+            update(TelegramLinks)
+            .where(
+                TelegramLinks.user_id == link.user_id,
+                TelegramLinks.chat_id == chat_id,
+                TelegramLinks.status == 'revoked'
+            )
+            .values(chat_id=None)
+        )
+    except Exception:  # pragma: no cover - защита от любых неожиданных ошибок
+        pass
     link.chat_id = chat_id
     link.status = 'confirmed'
     link.confirmed_at = now
@@ -74,10 +88,12 @@ async def revoke_user_links(session: AsyncSession, user_id) -> int:
     Возвращает количество обновлённых строк. Pending / expired не трогаем.
     """
     now = datetime.utcnow()
+    # Чтобы при последующей повторной привязке не получать конфликт уникального индекса (user_id, chat_id)
+    # освобождаем chat_id (ставим NULL). UNIQUE допускает несколько NULL в Postgres.
     stmt = (
         update(TelegramLinks)
         .where(TelegramLinks.user_id == user_id, TelegramLinks.status == 'confirmed')
-        .values(status='revoked')
+        .values(status='revoked', chat_id=None)
     )
     res = await session.execute(stmt)
     # Возврат количества обновлённых строк (rowcount может быть None у некоторых драйверов)

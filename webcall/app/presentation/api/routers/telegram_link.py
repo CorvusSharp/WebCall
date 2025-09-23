@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+import contextlib
 import logging
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -115,6 +116,9 @@ async def webhook(data: WebhookIn, session: AsyncSession = Depends(get_db_sessio
                     # Возможный дубликат уникального индекса (user_id, chat_id) при повторной привязке
                     await session.rollback()
                     log.info("IntegrityError on commit (likely duplicate chat). Treat as success: %s", ie.__class__.__name__)
+                    from ....infrastructure.services.telegram import send_message  # локальный импорт
+                    with contextlib.suppress(Exception):
+                        await send_message("Привязка Telegram подтверждена (повтор).", chat_ids=[chat_id])
                     return {"ok": True, "linked": True, "dup": True}
                 # Отправляем подтверждающее сообщение (не критично при ошибке)
                 from ....infrastructure.services.telegram import send_message  # локальный импорт
@@ -123,6 +127,18 @@ async def webhook(data: WebhookIn, session: AsyncSession = Depends(get_db_sessio
                 except Exception as e:  # pragma: no cover
                     log.warning("Failed to send confirmation message chat_id=%s err=%s", chat_id, e.__class__.__name__)
                 return {"ok": True, "linked": True}
+            else:
+                log.info("Confirm failed token=%s chat_id=%s (maybe expired/invalid)", token_candidate, chat_id)
+                # Мягко уведомим пользователя (без разглашения деталей)
+                from ....infrastructure.services.telegram import send_message  # локальный импорт
+                with contextlib.suppress(Exception):
+                    await send_message("Токен недействителен или истёк. Сгенерируйте новый в настройках.", chat_ids=[chat_id])
+                return {"ok": True, "linked": False}
+        if text.startswith('/start') and not token_candidate and chat_id:
+            # Пользователь ввёл /start без токена — подскажем что делать
+            from ....infrastructure.services.telegram import send_message  # локальный импорт
+            with contextlib.suppress(Exception):
+                await send_message("Отправьте /start <токен>. Получить новый токен можно в настройках приложения.", chat_ids=[chat_id])
         return {"ok": True}
     except Exception as e:  # pragma: no cover
         # Логируем подробно и возвращаем 200 чтобы Telegram не ретраил до бесконечности

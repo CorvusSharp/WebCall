@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import List, Optional
-from .models import ChatMessage, SummaryResult, is_technical
+from .models import ChatMessage, SummaryResult, is_technical, ParticipantSummary
 from ...config import get_settings
 import time
 
@@ -16,6 +16,34 @@ class BaseStrategy:
         lines = [m.to_plain() for m in tail]
         body = "\n".join(lines)
         return (prefix + "\n" if prefix else "") + "Краткая выжимка:\n" + body
+
+
+def _build_participant_breakdown(msgs: List[ChatMessage]) -> List[ParticipantSummary]:
+    """Группирует сообщения по (author_id, author_name) и формирует короткую выборку.
+
+    Правила:
+    - Игнорируем технические сообщения.
+    - Для каждого участника берём последние до 5 сообщений как sample.
+    - Сортировка по убыванию количества сообщений, затем по имени.
+    """
+    buckets: dict[tuple[str | None, str | None], List[ChatMessage]] = {}
+    for m in msgs:
+        if is_technical(m):
+            continue
+        key = (m.author_id, m.author_name)
+        buckets.setdefault(key, []).append(m)
+    parts: List[ParticipantSummary] = []
+    for (pid, pname), group in buckets.items():
+        # последние 5 сообщений участника
+        tail = group[-5:]
+        parts.append(ParticipantSummary(
+            participant_id=pid,
+            participant_name=pname,
+            message_count=len(group),
+            sample_messages=[g.content for g in tail]
+        ))
+    parts.sort(key=lambda p: (-p.message_count, (p.participant_name or p.participant_id or "")))
+    return parts
 
 
 class ChatStrategy(BaseStrategy):
@@ -46,7 +74,15 @@ class ChatStrategy(BaseStrategy):
         tail_src = user_msgs[-5:]
         if tail_src:
             summary_text = summary_text.rstrip() + "\n\nИсточники (последние):\n" + "\n".join(m.content for m in tail_src)
-        return SummaryResult(room_id=user_msgs[0].room_id, message_count=len(user_msgs), generated_at=int(time.time()*1000), summary_text=summary_text, sources=tail_src)
+        # Participant breakdown (если включено через настройки)
+        participants = None
+        try:
+            from ...config import get_settings  # локальный импорт чтобы избежать циклов
+            if get_settings().AI_SUMMARY_PARTICIPANT_BREAKDOWN:
+                participants = _build_participant_breakdown(user_msgs)
+        except Exception:
+            participants = None
+        return SummaryResult(room_id=user_msgs[0].room_id, message_count=len(user_msgs), generated_at=int(time.time()*1000), summary_text=summary_text, sources=tail_src, participants=participants)
 
 
 class CombinedVoiceChatStrategy(BaseStrategy):
@@ -77,4 +113,11 @@ class CombinedVoiceChatStrategy(BaseStrategy):
         tail_src = chat_part[-5:]
         if tail_src:
             summary_text = summary_text.rstrip() + "\n\nИсточники (последние):\n" + "\n".join(m.content for m in tail_src)
-        return SummaryResult(room_id=chat_part[0].room_id, message_count=len(chat_part), generated_at=int(time.time()*1000), summary_text=summary_text, sources=tail_src, used_voice=True)
+        participants = None
+        try:
+            from ...config import get_settings
+            if get_settings().AI_SUMMARY_PARTICIPANT_BREAKDOWN:
+                participants = _build_participant_breakdown(chat_part)
+        except Exception:
+            participants = None
+        return SummaryResult(room_id=chat_part[0].room_id, message_count=len(chat_part), generated_at=int(time.time()*1000), summary_text=summary_text, sources=tail_src, used_voice=True, participants=participants)

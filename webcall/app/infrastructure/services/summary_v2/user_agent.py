@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional
 import time, re
-from .models import ChatMessage, SummaryResult, TECHNICAL_PATTERNS
+from .models import ChatMessage, SummaryResult, TECHNICAL_PATTERNS, ParticipantSummary
 import logging
 
 logger = logging.getLogger(__name__)
@@ -112,6 +112,7 @@ class UserAgentSession:
                 now_ms = int(time.time()*1000)
                 voice_msgs = [ChatMessage(room_id=self.room_id, author_id=None, author_name='voice', content=s, ts=now_ms) for s in sentences]
                 logger.info("summary_v2: voice-only summary room=%s user=%s parts=%s", self.room_id, self.user_id, len(voice_msgs))
+                # Стратегия уже добавит breakdown (она использует CombinedVoiceChatStrategy -> strategies)
                 return await self._combined_strategy.build(voice_msgs, ai_provider=ai_provider, system_prompt=system_prompt)
             # Только технический или слишком короткий voice
             if voice_text and _is_technical_text(voice_text):

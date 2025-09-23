@@ -17,6 +17,15 @@ class ChatMessage:
 
 
 @dataclass(slots=True)
+class ParticipantSummary:
+    participant_id: str | None
+    participant_name: str | None
+    message_count: int
+    # Краткая выжимка (эвристика) вклада участника — список последних сообщений участника (до 5)
+    sample_messages: List[str]
+
+
+@dataclass(slots=True)
 class SummaryResult:
     room_id: str
     message_count: int
@@ -25,10 +34,12 @@ class SummaryResult:
     sources: List[ChatMessage]
     used_voice: bool = False
     truncated: bool = False
+    # Новый блок: разбивка по участникам (может быть пустым если отключено)
+    participants: List[ParticipantSummary] | None = None
 
     @classmethod
     def empty(cls, room_id: str) -> 'SummaryResult':
-        return cls(room_id=room_id, message_count=0, generated_at=int(time.time()*1000), summary_text="Нет сообщений для суммаризации.", sources=[], used_voice=False)
+        return cls(room_id=room_id, message_count=0, generated_at=int(time.time()*1000), summary_text="Нет сообщений для суммаризации.", sources=[], used_voice=False, participants=[])
 
 
 TECHNICAL_PATTERNS = [
