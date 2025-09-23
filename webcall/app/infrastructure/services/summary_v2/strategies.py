@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import List, Optional
 from .models import ChatMessage, SummaryResult, is_technical, ParticipantSummary
-from ...config import get_settings
+from ...config import get_settings  # модульный импорт: использовать везде без локального переимпорта
 import time
 
 
@@ -91,8 +91,8 @@ class ChatStrategy(BaseStrategy):
             summary_text = summary_text.rstrip() + "\n\nИсточники (последние):\n" + "\n".join(m.content for m in tail_src)
         # Participant breakdown (если включено через настройки)
         participants = None
+        # Используем модульный импорт get_settings (уже импортирован выше) — избегаем локального затенения
         try:
-            from ...config import get_settings  # локальный импорт чтобы избежать циклов
             if get_settings().AI_SUMMARY_PARTICIPANT_BREAKDOWN:
                 participants = _build_participant_breakdown(user_msgs)
         except Exception:
@@ -144,8 +144,8 @@ class CombinedVoiceChatStrategy(BaseStrategy):
         if tail_src:
             summary_text = summary_text.rstrip() + "\n\nИсточники (последние):\n" + "\n".join(m.content for m in tail_src)
         participants = None
+        # Используем ранее импортированный get_settings вместо повторного локального импорта
         try:
-            from ...config import get_settings
             if get_settings().AI_SUMMARY_PARTICIPANT_BREAKDOWN:
                 participants = _build_participant_breakdown(chat_part)
         except Exception:
