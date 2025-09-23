@@ -99,7 +99,7 @@ class UserAgentSession:
 
     async def build_summary(self, *, ai_provider, system_prompt: str | None) -> SummaryResult:
         # Отфильтруем по end_ts если окно завершено (теоретически могли добавить позже)
-    msgs = [m for m in self._messages if (self.end_ts is None or m.ts <= self.end_ts)]
+        msgs = [m for m in self._messages if (self.end_ts is None or m.ts <= self.end_ts)]
         voice_text = self.merged_voice_text()
         # Если чат пуст, но есть валидный voice
         if not msgs:
