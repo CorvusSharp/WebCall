@@ -74,7 +74,7 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
         if use_v2:
             orchestrator = get_summary_orchestrator()
             print(f"[summary] Personal summary start room={original_room_id} user={initiator_user_id} reason={reason} use_v2=1")
-                # Оппортунистическое прикрепление ТОЛЬКО персонального транскрипта (без fallback на общий ключ)
+            # Оппортунистическое прикрепление ТОЛЬКО персонального транскрипта (без fallback на общий ключ)
             with contextlib.suppress(Exception):
                 v_cur = await voice_coll.get_transcript(f"{room_uuid}:{initiator_user_id}")
                 if v_cur and getattr(v_cur, 'text', None):
@@ -100,12 +100,17 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
             # Первая попытка построить персональное summary
             cutoff_ms = int(__import__('time').time()*1000)
             personal = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session, cutoff_ms=cutoff_ms)
+            try:
+                print(f"[summary] Personal summary first-build room={original_room_id} user={initiator_user_id} msg_count={personal.message_count} used_voice={getattr(personal,'used_voice', False)} text_len={len(getattr(personal,'summary_text','') or '')}")
+            except Exception:
+                pass
             # Polling если пусто (возможна гонка: транскрипт ещё в пути / задержка ASR)
             if personal.message_count == 0:
-                max_wait_ms = 8000  # увеличено с 2500 чтобы дождаться медленной транскрипции
-                step_ms = 400
+                # Дополнительное ожидание только если нет ни одного сообщения и не использован voice
+                max_wait_ms = 6000
+                step_ms = 500
                 waited = 0
-                while waited < max_wait_ms:
+                while waited < max_wait_ms and personal.message_count == 0 and not getattr(personal, 'used_voice', False):
                     await asyncio.sleep(step_ms / 1000)
                     waited += step_ms
                     personal2 = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session, cutoff_ms=cutoff_ms)
@@ -113,20 +118,26 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                         personal = personal2
                         print(f"[summary] Personal summary filled after wait={waited}ms room={original_room_id} user={initiator_user_id}")
                         break
+                    if getattr(personal2, 'used_voice', False) and personal2.message_count == 0:
+                        # Аномалия: voice использован, но count 0 — логируем и выходим из цикла
+                        print(f"[summary] Anomaly: used_voice true but msg_count=0 room={original_room_id} user={initiator_user_id} waited={waited}")
+                        personal = personal2
+                        break
                 else:
-                    # Финальный повторный захват транскрипта и ре-генерация если voice появился но не прикрепился
-                    try:
-                        v_cur2 = None
-                        with contextlib.suppress(Exception):
-                            v_cur2 = await voice_coll.get_transcript(f"{room_uuid}:{initiator_user_id}")
-                        if v_cur2 and getattr(v_cur2, 'text', None) and len(v_cur2.text.strip()) > 10 and not v_cur2.text.startswith('(no audio'):
-                            orchestrator.add_voice_transcript(str(room_uuid), v_cur2.text.strip(), user_id=str(initiator_user_id))
-                            personal3 = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session, cutoff_ms=cutoff_ms)
-                            if personal3.message_count > 0:
-                                personal = personal3
-                                print(f"[summary] Personal summary recovered after final voice attach room={original_room_id} user={initiator_user_id}")
-                    except Exception:
-                        pass
+                    if personal.message_count == 0:
+                        # Финальная попытка ре-прикрепить voice напрямую (если появился вне окна)
+                        try:
+                            v_cur2 = None
+                            with contextlib.suppress(Exception):
+                                v_cur2 = await voice_coll.get_transcript(f"{room_uuid}:{initiator_user_id}")
+                            if v_cur2 and getattr(v_cur2, 'text', None) and len(v_cur2.text.strip()) > 10 and not v_cur2.text.startswith('(no audio'):
+                                orchestrator.add_voice_transcript(str(room_uuid), v_cur2.text.strip(), user_id=str(initiator_user_id))
+                                personal3 = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session, cutoff_ms=cutoff_ms)
+                                if personal3.message_count > 0:
+                                    personal = personal3
+                                    print(f"[summary] Personal summary recovered after final voice attach room={original_room_id} user={initiator_user_id}")
+                        except Exception:
+                            pass
             # Очистим использованный персональный транскрипт если мы что-то реально собрали
             if personal.message_count > 0:
                 with contextlib.suppress(Exception):
@@ -149,7 +160,13 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                     chat_id = None
                     print(f"[summary] Telegram error: get_confirmed_chat_id failed room={original_room_id} user={initiator_user_id} err={e}")
                 if not chat_id:
-                    print(f"[summary] Telegram skip: no confirmed chat_id room={original_room_id} user={initiator_user_id}")
+                    # Попробуем fallback к глобальному TELEGRAM_CHAT_ID (устаревшее, но как спасение)
+                    if settings.TELEGRAM_CHAT_ID:
+                        chat_id = settings.TELEGRAM_CHAT_ID
+                        print(f"[summary] Telegram fallback to global chat_id room={original_room_id} user={initiator_user_id}")
+                    else:
+                        print(f"[summary] Telegram skip: no confirmed chat_id room={original_room_id} user={initiator_user_id}")
+                        chat_id = None
                 else:
                     if personal.message_count == 0:
                         body = (
