@@ -62,9 +62,32 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
     loop_iterations = 0
     import time as _t
     accept_ts = int(_t.time()*1000)
+    GRACE_AFTER_STOP_MS = 1800  # максимум ждём после stop первый бинарный чанк
+    NO_AUDIO_WARN_MS = 2500     # после старта если нет бинарных — шлём предупреждение
+    last_warn_sent = False
+    stop_requested_ts: int | None = None
+    import asyncio
     try:
         while True:
-            msg = await ws.receive()
+            # Если был stop и ещё нет чанков — ждём ограниченный grace
+            if stop_requested_ts and total_bytes == 0:
+                now_ms = int(_t.time()*1000)
+                if now_ms - stop_requested_ts > GRACE_AFTER_STOP_MS:
+                    logger.debug("VOICE_CAPTURE grace timeout after stop room=%s", room_id)
+                    break
+            # Таймаут чтения чтобы можно было слать no-audio уведомление
+            try:
+                msg = await asyncio.wait_for(ws.receive(), timeout=1.0)
+            except asyncio.TimeoutError:
+                # периодический тик
+                now_ms = int(_t.time()*1000)
+                if started and first_chunk_ts is None and not last_warn_sent and start_control_ts and (now_ms - start_control_ts) > NO_AUDIO_WARN_MS:
+                    # Отправим диагностическое сообщение клиенту
+                    with contextlib.suppress(Exception):
+                        await ws.send_json({"type": "no-audio", "message": "Нет аудиоданных: проверьте доступ к микрофону"})
+                    last_warn_sent = True
+                    logger.debug("VOICE_CAPTURE warn no-audio room=%s user=%s", room_id, user_id)
+                continue
             loop_iterations += 1
             if 'text' in msg and msg['text'] is not None:
                 # control frame
@@ -90,6 +113,10 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                         continue
                     control_stop_count += 1
                     logger.debug("VOICE_CAPTURE control stop room=%s user=%s bytes=%s", room_id, user_id, total_bytes)
+                    # Не выходим сразу: ждём grace, если ещё нет чанков
+                    if total_bytes == 0:
+                        stop_requested_ts = now_ms
+                        continue
                     break
             elif 'bytes' in msg and msg['bytes'] is not None:
                 if not started:
@@ -146,7 +173,7 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                     now_ms = int(_t.time()*1000)
                     delta_start = (now_ms - start_control_ts) if start_control_ts else None
                     logger.info(
-                        "VOICE_CAPTURE finalize empty room=%s reason=no_chunks delta_start=%s started=%s ctrl_start=%s ctrl_stop=%s bin_frames=%s ignored_stops=%s loops=%s lifetime_ms=%s",
+                        "VOICE_CAPTURE finalize empty room=%s reason=no_chunks delta_start=%s started=%s ctrl_start=%s ctrl_stop=%s bin_frames=%s ignored_stops=%s loops=%s lifetime_ms=%s grace_after_stop_ms=%s warn_sent=%s",
                         room_id,
                         delta_start,
                         started,
@@ -156,6 +183,8 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                         ignored_early_stops,
                         loop_iterations,
                         now_ms - accept_ts,
+                        (now_ms - stop_requested_ts) if stop_requested_ts else None,
+                        last_warn_sent,
                     )
                 except Exception:
                     logger.info("VOICE_CAPTURE finalize empty room=%s reason=no_chunks", room_id)
