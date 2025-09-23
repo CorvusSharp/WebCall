@@ -74,6 +74,10 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
         if use_v2:
             orchestrator = get_summary_orchestrator()
             print(f"[summary] Personal summary start room={original_room_id} user={initiator_user_id} reason={reason} use_v2=1")
+            # Диагностика: текущие internal counters оркестратора (редко, только при старте генерации)
+            with contextlib.suppress(Exception):
+                ctrs = orchestrator.get_counters()
+                print(f"[summary] Orchestrator counters snapshot room={original_room_id} user={initiator_user_id} counters={ctrs}")
             # Оппортунистическое прикрепление ТОЛЬКО персонального транскрипта (без fallback на общий ключ)
             with contextlib.suppress(Exception):
                 v_cur = await voice_coll.get_transcript(f"{room_uuid}:{initiator_user_id}")
@@ -114,6 +118,10 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                     await asyncio.sleep(step_ms / 1000)
                     waited += step_ms
                     personal2 = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session, cutoff_ms=cutoff_ms)
+                    try:
+                        print(f"[summary] Personal summary retry room={original_room_id} user={initiator_user_id} waited={waited} msg_count={personal2.message_count} used_voice={getattr(personal2,'used_voice', False)}")
+                    except Exception:
+                        pass
                     if personal2.message_count > 0:
                         personal = personal2
                         print(f"[summary] Personal summary filled after wait={waited}ms room={original_room_id} user={initiator_user_id}")
@@ -148,6 +156,12 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                 print(f"[summary] Personal summary pre-telegram room={original_room_id} user={initiator_user_id} msg_count={personal.message_count} used_voice={used_voice} summary_len={len(personal.summary_text or '') if hasattr(personal,'summary_text') else 'n/a'}")
             except Exception:
                 pass
+            # Если по какой-то причине message_count=0, но есть осмысленный текст > 40 символов - отправим как есть (голос мог не засчитаться в count)
+            if personal.message_count == 0 and getattr(personal, 'summary_text', None) and len(getattr(personal,'summary_text')) > 40:
+                try:
+                    print(f"[summary] Personal summary force-send override room={original_room_id} user={initiator_user_id} text_len={len(personal.summary_text)}")
+                except Exception:
+                    pass
             if not settings.TELEGRAM_BOT_TOKEN:
                 print(f"[summary] Telegram skip: no TELEGRAM_BOT_TOKEN room={original_room_id} user={initiator_user_id}")
             elif session is None:

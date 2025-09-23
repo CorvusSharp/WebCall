@@ -201,7 +201,14 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                                 except Exception:
                                     pass
                                 if u_uuid:
-                                    await _generate_and_send_summary(canonical_uuid2, room_id, "auto-voice", ai_provider=_gap(), collector=coll2, voice_coll=vc2, session=None, initiator_user_id=u_uuid)
+                                    # Попытка открыть краткий DB session чтобы разрешить chat_id при авто-отправке
+                                    try:
+                                        from ...infrastructure.db.session import AsyncSessionLocal
+                                        async with AsyncSessionLocal() as auto_session:  # type: ignore
+                                            await _generate_and_send_summary(canonical_uuid2, room_id, "auto-voice", ai_provider=_gap(), collector=coll2, voice_coll=vc2, session=auto_session, initiator_user_id=u_uuid)
+                                    except Exception:
+                                        # fallback без сессии (только глобальный TELEGRAM_CHAT_ID сработает)
+                                        await _generate_and_send_summary(canonical_uuid2, room_id, "auto-voice", ai_provider=_gap(), collector=coll2, voice_coll=vc2, session=None, initiator_user_id=u_uuid)
                             except Exception:
                                 logger.debug("VOICE_CAPTURE auto-summary trigger failed room=%s", room_id, exc_info=True)
                         _ = _aio.create_task(_delayed_trigger())
