@@ -91,6 +91,10 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                     last_warn_sent = True
                     logger.debug("VOICE_CAPTURE warn no-audio room=%s user=%s", room_id, user_id)
                 continue
+            except RuntimeError:
+                # Клиент уже отключился (disconnect получен) — выходим из цикла без stacktrace
+                logger.debug("VOICE_CAPTURE receive after disconnect room=%s user=%s", room_id, user_id)
+                break
             loop_iterations += 1
             if 'text' in msg and msg['text'] is not None:
                 # control frame
