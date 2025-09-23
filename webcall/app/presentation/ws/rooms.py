@@ -1,19 +1,14 @@
-import os, asyncio, contextlib, time, re
 from __future__ import annotations
 
-import asyncio
-import json
-import os
+import os, asyncio, contextlib, time, re, json
 from typing import Any
 from collections import defaultdict
-import contextlib
 from uuid import UUID, uuid5, NAMESPACE_URL
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from ...infrastructure.config import get_settings
-from ...infrastructure.services.summary import get_summary_collector
-from ...infrastructure.services.summary import SummaryCollector, SummaryResult
+from ...infrastructure.services.summary import get_summary_collector, SummaryCollector, SummaryResult
 from ...infrastructure.services.voice_transcript import get_voice_collector
 from ...infrastructure.services.ai_provider import get_ai_provider, get_user_system_prompt
 from ...infrastructure.services.summary_v2.orchestrator import get_summary_orchestrator
