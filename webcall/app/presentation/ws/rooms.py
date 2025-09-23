@@ -753,6 +753,75 @@ async def ws_room(
                 except Exception as e:  # pragma: no cover
                     await websocket.send_json({"type": "agent_summary_ack", "status": "error", "error": str(e)})
                 continue
+            elif data.get("type") == "voice_transcript_proxy":
+                # Добавление транскрипта для ДРУГОГО участника (multi-speaker proxy)
+                # Ожидаемый формат:
+                # {
+                #   "type": "voice_transcript_proxy",
+                #   "targetUserId": "<uuid пользователя>",
+                #   "text": "распознанный текст",
+                #   "captureTs": 1758649999999 (опционально, ms epoch)
+                # }
+                # Безопасность: разрешаем только агентскому подключению в комнате
+                if not is_agent:
+                    await websocket.send_json({"type": "error", "message": "voice_transcript_proxy denied: not agent"})
+                    continue
+                target_user_raw = data.get("targetUserId")
+                proxy_text = data.get("text") or ""
+                capture_ts = data.get("captureTs")
+                # Валидации
+                if not target_user_raw or not proxy_text.strip():
+                    await websocket.send_json({"type": "error", "message": "voice_transcript_proxy invalid payload"})
+                    continue
+                # UUID целевого пользователя
+                try:
+                    target_uuid = UUID(str(target_user_raw))
+                except Exception:
+                    await websocket.send_json({"type": "error", "message": "voice_transcript_proxy invalid targetUserId"})
+                    continue
+                clean_text = proxy_text.strip()
+                low = clean_text.lower()
+                # Фильтр технических строк
+                if low.startswith('(no audio') or low.startswith('(asr failed') or low.startswith('(asr exception') or low.startswith('(asr disabled'):
+                    await websocket.send_json({"type": "voice_transcript_proxy_ack", "status": "ignored", "reason": "technical"})
+                    continue
+                # Формируем meta префикс если нет
+                if not clean_text.startswith('[meta '):
+                    import time as _t
+                    ts_meta = int(capture_ts) if isinstance(capture_ts, int) else int(_t.time()*1000)
+                    clean_text = f"[meta captureTs={ts_meta}] " + clean_text
+                # Определяем отображаемое имя: уже может быть в _display_names
+                target_name = _display_names.get(target_uuid)
+                # Регистрируем окно с именем (если агент для владельца ещё не стартовал, это создаст / перезапустит)
+                try:
+                    orchestrator = get_summary_orchestrator()
+                    # Проверка: если окно ещё не запущено (нет стартового таймштампа)
+                    if (room_uuid, target_uuid) not in _room_agent_start:
+                        import time as _t
+                        _room_agent_start[(room_uuid, target_uuid)] = int(_t.time()*1000)
+                        await orchestrator.start_user_window(str(room_uuid), str(target_uuid), user_name=target_name)
+                except Exception:
+                    pass
+                # Добавляем транскрипт непосредственно
+                attached = False
+                try:
+                    orchestrator = get_summary_orchestrator()
+                    orchestrator.add_voice_transcript(str(room_uuid), clean_text, user_id=str(target_uuid))
+                    attached = True
+                except Exception:
+                    attached = False
+                # Ответ клиенту
+                await websocket.send_json({
+                    "type": "voice_transcript_proxy_ack",
+                    "status": "ok" if attached else "error",
+                    "targetUserId": str(target_uuid)
+                })
+                # Лог для диагностики
+                try:
+                    print(f"[summary] Voice proxy {'attached' if attached else 'failed'} room={room_id} target={target_uuid} chars={len(clean_text)}")
+                except Exception:
+                    pass
+                continue
             else:
                 await websocket.send_json({"type": "error", "message": "Unknown message"})
     except WebSocketDisconnect:
