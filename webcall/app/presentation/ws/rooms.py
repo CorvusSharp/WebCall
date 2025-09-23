@@ -13,6 +13,7 @@ from ...infrastructure.services.voice_transcript import get_voice_collector
 from ...infrastructure.services.ai_provider import get_ai_provider, get_user_system_prompt
 from ...infrastructure.services.summary_v2.orchestrator import get_summary_orchestrator
 from ...infrastructure.services.telegram import send_message as tg_send_message
+from ...infrastructure.services.telegram_dispatcher import get_dispatcher
 from sqlalchemy.ext.asyncio import AsyncSession
 from ...infrastructure.db.session import get_db_session
 from ...infrastructure.services.telegram_link import get_confirmed_chat_id
@@ -184,14 +185,14 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                     # Telegram API всё равно обрежет до ~4096; подрежем чуть раньше (4000) чтобы не потерять окончание
                     if len(text) > 4000:
                         text = text[:3990] + "…(truncated)"
-                    sent = False
+                    # Отправку делегируем диспетчеру (асинхронная очередь + ретраи)
+                    dispatch_text = text  # уже ограничен по длине
                     try:
-                        sent = await tg_send_message(text, chat_ids=[chat_id], session=session)
+                        dispatcher = get_dispatcher()
+                        queued = await dispatcher.queue_summary(str(initiator_user_id), dispatch_text, reason=reason)
+                        print(f"[summary] Personal summary (v2) queued_for_dispatch queued={queued} user={initiator_user_id} room={original_room_id} empty={personal.message_count==0}")
                     except Exception as e:
-                        print(f"[summary] Telegram send exception room={original_room_id} user={initiator_user_id} err={e}")
-                    if personal.message_count > 0 and not sent:
-                        print(f"[summary] Telegram NOT SENT despite message_count>0 room={original_room_id} user={initiator_user_id} chat_id={chat_id}")
-                    print(f"[summary] Personal summary (v2) send_result={sent} user={initiator_user_id} room={original_room_id} empty={personal.message_count==0}")
+                        print(f"[summary] Dispatcher queue exception room={original_room_id} user={initiator_user_id} err={e}")
             return
         else:
             # Fallback: старая логика snapshot + summarize_messages (без orchestrator)
