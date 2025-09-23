@@ -419,20 +419,30 @@ class SummaryOrchestrator:
                     now_ms = int(_t.time()*1000)
                     from .models import ChatMessage, SummaryResult as _SR
                     pseudo = [ChatMessage(room_id=room_id, author_id=None, author_name='voice', content=p, ts=now_ms) for p in head_parts]
-                    # Попытка вызвать стратегию как voice-only (CombinedVoiceChatStrategy) чтобы применить AI и system_prompt
-                    try:
-                        combined_strategy = self._combined_strategy
-                        ai_attempt = await combined_strategy.build(pseudo, ai_provider=ai_provider, system_prompt=system_prompt if 'system_prompt' in locals() else None)  # type: ignore
-                        if ai_attempt and ai_attempt.message_count > 0:
-                            logger.warning("summary_v2: synthesized voice fallback upgraded via AI strategy room=%s user=%s parts=%s", room_id, user_id, len(pseudo))
-                            result = ai_attempt
-                        else:
-                            raise RuntimeError("AI strategy returned empty; fallback to plain")
-                    except Exception as e_ai:
-                        # Plain non-AI fallback
+                    # Прямая попытка AI генерации (без стратегии) чтобы исключить повторные NameError внутри strategy
+                    ai_used = False
+                    if ai_provider is not None:
+                        try:
+                            from ...config import get_settings as _gs
+                            _settings = _gs()
+                            # Учитываем те же эвристики: всегда пробуем, т.к. это уже последний шанс
+                            plain = [m.to_plain() for m in pseudo]
+                            sp = system_prompt if 'system_prompt' in locals() else None
+                            summary_text = await ai_provider.generate_summary(plain, sp)  # type: ignore
+                            if summary_text and summary_text.strip():
+                                # Добавим источники как в стратегиях
+                                summary_text = summary_text.rstrip() + "\n\nИсточники (голос):\n" + "\n".join(m.content for m in pseudo)
+                                result = _SR(room_id=room_id, message_count=len(pseudo), generated_at=now_ms, summary_text=summary_text, sources=pseudo, used_voice=True, participants=[])
+                                ai_used = True
+                                logger.warning("summary_v2: synthesized voice fallback upgraded via direct AI room=%s user=%s parts=%s", room_id, user_id, len(pseudo))
+                            else:
+                                logger.debug("summary_v2: direct AI returned empty content in voice fallback room=%s user=%s", room_id, user_id)
+                        except Exception as e_ai:
+                            logger.warning("summary_v2: direct AI attempt failed in voice fallback room=%s user=%s err=%s", room_id, user_id, e_ai)
+                    if not ai_used:
                         text = "Краткая выжимка по голосу (fallback):\n" + "\n".join(head_parts)
                         result = _SR(room_id=room_id, message_count=len(pseudo), generated_at=now_ms, summary_text=text, sources=pseudo, used_voice=True, participants=[])
-                        logger.warning("summary_v2: synthesized fallback voice summary room=%s user=%s parts=%s ai_error=%s", room_id, user_id, len(pseudo), e_ai)
+                        logger.warning("summary_v2: synthesized fallback voice summary room=%s user=%s parts=%s", room_id, user_id, len(pseudo))
                     # Диагностика: если в исходных сегментах был meta, отметим это
                     try:
                         if any(seg.strip().startswith('[meta ') for seg in vseg2):
