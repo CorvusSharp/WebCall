@@ -74,8 +74,20 @@ PENDING_INVITES = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # here we could init DB/Redis connections if needed globally
-    yield
+    # Инициализация диспетчера Telegram (lazy start при первой очереди, но можно прогреть)
+    try:
+        from ..infrastructure.services.telegram_dispatcher import get_dispatcher
+        dispatcher = get_dispatcher()
+        dispatcher.start()
+    except Exception as e:
+        logging.getLogger("app.startup").warning("Failed to start telegram dispatcher: %s", e)
+    try:
+        yield
+    finally:
+        with contextlib.suppress(Exception):  # type: ignore[name-defined]
+            from ..infrastructure.services.telegram_dispatcher import get_dispatcher as _gd
+            d = _gd()
+            await d.shutdown()
 
 
 def create_app() -> FastAPI:

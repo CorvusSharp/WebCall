@@ -64,7 +64,7 @@ class TelegramDispatcher:
         if not text or not text.strip():
             logger.debug("dispatcher: skip empty text user=%s", user_id)
             return False
-        key = self._dedupe_key(user_id, text, reason)
+        key, h = self._dedupe_key(user_id, text, reason)
         now = time.time()
         # Очистка старых ключей из _seen (ленивая)
         if len(self._seen) > 5000:
@@ -72,19 +72,19 @@ class TelegramDispatcher:
             for k in drop:
                 self._seen.pop(k, None)
         if key in self._seen:
-            logger.debug("dispatcher: duplicate suppressed user=%s reason=%s", user_id, reason)
+            logger.info("dispatcher: duplicate suppressed user=%s reason=%s hash=%s", user_id, reason, h)
             return False
         self._seen[key] = now
         task = PendingTask(user_id=user_id, text=text, reason=reason)
         self._queue.append(task)
         if not self._started:
             self.start()
-        logger.info("dispatcher: queued summary user=%s reason=%s len=%s", user_id, reason, len(text))
+        logger.info("dispatcher: enqueue user=%s reason=%s hash=%s len=%s qsize=%s", user_id, reason, h, len(text), len(self._queue))
         return True
 
-    def _dedupe_key(self, user_id: str, text: str, reason: str) -> str:
+    def _dedupe_key(self, user_id: str, text: str, reason: str):
         h = hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
-        return f"{user_id}:{reason}:{h}"
+        return f"{user_id}:{reason}:{h}", h
 
     async def _worker(self) -> None:
         settings = get_settings()
@@ -106,10 +106,10 @@ class TelegramDispatcher:
                 except Exception as e:
                     logger.warning("dispatcher: chat_id fetch error user=%s err=%s", task.user_id, e)
                 if not settings.TELEGRAM_BOT_TOKEN:
-                    logger.debug("dispatcher: skip (no bot token)")
+                    logger.info("dispatcher: skip no_token user=%s reason=%s", task.user_id, task.reason)
                     continue
                 if not chat_id:
-                    logger.debug("dispatcher: skip (no confirmed chat_id) user=%s", task.user_id)
+                    logger.info("dispatcher: skip no_chat_id user=%s reason=%s", task.user_id, task.reason)
                     continue
                 # Попытка отправки с ретраями
                 try:
@@ -118,17 +118,17 @@ class TelegramDispatcher:
                     logger.error("dispatcher: low-level exception user=%s err=%s", task.user_id, e)
                     sent = False
                 if sent:
-                    logger.info("dispatcher: sent user=%s reason=%s attempts=%s", task.user_id, task.reason, task.attempts+1)
+                    logger.info("dispatcher: sent user=%s reason=%s attempts=%s qsize=%s", task.user_id, task.reason, task.attempts+1, len(self._queue))
                     continue
                 # Если не отправлено — ретрай при временной ошибке
                 task.attempts += 1
                 if task.attempts < 3:
                     delay = BACKOFF_BASE * (2 ** (task.attempts - 1))
-                    logger.info("dispatcher: retry in %.2fs user=%s reason=%s", delay, task.user_id, task.reason)
+                    logger.info("dispatcher: retry user=%s reason=%s attempt=%s delay=%.2f", task.user_id, task.reason, task.attempts, delay)
                     await asyncio.sleep(delay)
                     self._queue.append(task)
                 else:
-                    logger.warning("dispatcher: drop after max attempts user=%s reason=%s", task.user_id, task.reason)
+                    logger.warning("dispatcher: drop user=%s reason=%s attempts=%s", task.user_id, task.reason, task.attempts)
             except asyncio.CancelledError:  # pragma: no cover
                 break
             except Exception as e:  # pragma: no cover

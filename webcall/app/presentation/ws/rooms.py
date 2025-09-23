@@ -189,8 +189,9 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                     dispatch_text = text  # уже ограничен по длине
                     try:
                         dispatcher = get_dispatcher()
-                        queued = await dispatcher.queue_summary(str(initiator_user_id), dispatch_text, reason=reason)
-                        print(f"[summary] Personal summary (v2) queued_for_dispatch queued={queued} user={initiator_user_id} room={original_room_id} empty={personal.message_count==0}")
+                        reason_with_room = f"{reason}:room:{room_uuid}" if room_uuid else reason
+                        queued = await dispatcher.queue_summary(str(initiator_user_id), dispatch_text, reason=reason_with_room)
+                        print(f"[summary] Personal summary (v2) queued_for_dispatch queued={queued} user={initiator_user_id} room={original_room_id} reason={reason_with_room} empty={personal.message_count==0}")
                     except Exception as e:
                         print(f"[summary] Dispatcher queue exception room={original_room_id} user={initiator_user_id} err={e}")
             return
