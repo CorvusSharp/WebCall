@@ -165,6 +165,48 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                     logger.info("VOICE_CAPTURE transcript room=%s preview=%r", room_id, preview)
                 except Exception:
                     pass
+                # Авто-триггер персонального summary (v2) если есть user_id и включён флаг USE_SUMMARY_V2
+                try:
+                    import os, asyncio as _aio
+                    use_v2 = os.getenv("USE_SUMMARY_V2", "1").lower() not in {"0","false","no"}
+                    if user_id and use_v2 and cleaned and not cleaned.startswith('(no audio') and not cleaned.startswith('(asr '):
+                        # Отложим чуть, чтобы orchestrator успел прикрепить сегмент
+                        async def _delayed_trigger():
+                            try:
+                                from .rooms import _generate_and_send_summary  # type: ignore
+                                from ...infrastructure.services.summary import get_summary_collector
+                                from ...infrastructure.services.voice_transcript import get_voice_collector as _gvc
+                                from ...infrastructure.services.ai_provider import get_ai_provider as _gap
+                                from sqlalchemy.ext.asyncio import AsyncSession
+                                # Попытка получить активный db session невозможна отсюда напрямую — авто-режим без session
+                                await _aio.sleep(0.4)
+                                try:
+                                    coll2 = get_summary_collector()
+                                except Exception:
+                                    coll2 = None
+                                try:
+                                    vc2 = _gvc()
+                                except Exception:
+                                    vc2 = None
+                                ai_p = _gap()
+                                # Определяем канонический UUID как в rooms.py
+                                try:
+                                    canonical_uuid2 = UUID(room_id)
+                                except Exception:
+                                    canonical_uuid2 = uuid5(NAMESPACE_URL, f"webcall:{room_id}")
+                                # initiator_user_id как UUID
+                                u_uuid = None
+                                try:
+                                    u_uuid = UUID(user_id)
+                                except Exception:
+                                    pass
+                                if u_uuid:
+                                    await _generate_and_send_summary(canonical_uuid2, room_id, "auto-voice", ai_provider=_gap(), collector=coll2, voice_coll=vc2, session=None, initiator_user_id=u_uuid)
+                            except Exception:
+                                logger.debug("VOICE_CAPTURE auto-summary trigger failed room=%s", room_id, exc_info=True)
+                        _ = _aio.create_task(_delayed_trigger())
+                except Exception:
+                    logger.debug("VOICE_CAPTURE auto-summary scheduling failed room=%s", room_id, exc_info=True)
             else:
                 cleaned = "(no audio chunks)"
                 try:
