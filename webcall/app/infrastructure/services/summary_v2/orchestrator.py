@@ -48,13 +48,19 @@ class SummaryOrchestrator:
             'session_auto_created_on_voice': 0,
             'session_recovered_from_voice': 0,
             'session_auto_resumed': 0,
+            'voice_broadcast_add_total': 0,
+            'voice_broadcast_reject_stale': 0,
         }
-        # Диагностика значения AI_SUMMARY_VOICE_SCOPE при инициализации
+        # Room-wide (broadcast) voice сегменты: room_id -> list[ (capture_ts|None, text) ]
+        self._room_broadcast_voice: Dict[str, List[Tuple[int | None, str]]] = {}
+        # Кэш настроек (ленивое обновление при изменении окружения)
+        self._settings_cache = None
         try:
-            scope = getattr(_get_settings(), 'AI_SUMMARY_VOICE_SCOPE', 'n/a')
+            self._settings_cache = _get_settings()
+            scope = getattr(self._settings_cache, 'AI_SUMMARY_VOICE_SCOPE', 'n/a')
             logger.debug("summary_v2: orchestrator init AI_SUMMARY_VOICE_SCOPE=%s", scope)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("summary_v2: settings init failed err=%s", e)
 
     # Публичное read-only получение счётчиков (для диагностики / последующей экспозиции)
     def get_counters(self) -> Dict[str, int]:
@@ -81,15 +87,40 @@ class SummaryOrchestrator:
                 sess.add_chat(msg)
 
     def add_voice_transcript(self, room_id: str, transcript: str, user_id: str | None = None) -> None:
-        """Сохраняет голосовую транскрипцию в персональную сессию пользователя.
+        """Добавление транскрипта.
 
-        Если сессия ещё не создана (агент стартовал после транскрипта) — создаём её со start_ts=сейчас
-        чтобы пользователь всё равно получил свою расшифровку.
+        Поведение:
+        - user_id указан  -> персональная сессия пользователя (как раньше).
+        - user_id отсутствует (None) -> сохраняем в room-wide broadcast буфер; позже он будет "подтянут" в любые персональные окна при генерации summary если у них нет собственных voice сегментов.
         """
-        if not transcript or not user_id:
+        if not transcript:
             return
         transcript = transcript.strip()
         if not transcript:
+            return
+        # Ветка broadcast (глобальный транскрипт)
+        if user_id is None:
+            capture_ts = None
+            raw = transcript
+            # Извлекаем captureTs если есть meta
+            try:
+                if raw.startswith('[meta ') and 'captureTs=' in raw:
+                    end = raw.find(']')
+                    if end != -1:
+                        meta_block = raw[6:end].strip()
+                        for p in meta_block.split():
+                            if p.startswith('captureTs='):
+                                with contextlib.suppress(Exception):
+                                    capture_ts = int(p.split('=',1)[1])
+                        raw_body = raw[end+1:].lstrip()
+                        raw = raw_body or raw
+            except Exception:
+                pass
+            # Сохраняем без фильтров stale (пользовательские окна сами проверят свежесть относительно start_ts)
+            bucket = self._room_broadcast_voice.setdefault(room_id, [])
+            bucket.append((capture_ts, raw))
+            self._bump('voice_broadcast_add_total')
+            logger.info("summary_v2: broadcast voice added room=%s captureTs=%s chars=%s", room_id, capture_ts, len(raw))
             return
         key = (room_id, user_id)
         sess = self._sessions.get(key)
@@ -315,8 +346,7 @@ class SummaryOrchestrator:
                             self._bump('session_auto_resumed')
             except Exception:
                 pass
-        # Если в сессии нет voice, попробуем подтянуть (лениво) готовую транскрипцию, чтобы не было окна, когда агент стартовал чуть позже окончания речи
-        # Ленивая подгрузка: если пока нет ни одного voice сегмента, попробуем взять существующий транскрипт.
+        # Если в сессии нет voice, пробуем (1) персональный транскрипт, (2) broadcast транскрипты комнаты.
         if not getattr(sess, '_voice_segments', None):  # type: ignore[attr-defined]
             try:
                 vc = get_voice_collector()
@@ -334,6 +364,25 @@ class SummaryOrchestrator:
                         else:
                             logger.debug("summary_v2: skip voice transcript placeholder/technical room=%s user=%s raw=%r", room_id, user_id, txt[:80] if txt else txt)
                             self._bump('voice_lazy_skipped_placeholder')
+            except Exception:
+                pass
+            # Попытка импортировать broadcast сегменты
+            try:
+                bkt = self._room_broadcast_voice.get(room_id, [])
+                if bkt:
+                    imported = 0
+                    for capture_ts, raw in bkt[-50:]:  # ограничим хвост
+                        # фильтр устаревания: если capture_ts задан и явно до start_ts > 10s — пропустить
+                        if capture_ts is not None and capture_ts < (sess.start_ts - 10_000):
+                            self._bump('voice_broadcast_reject_stale')
+                            continue
+                        try:
+                            sess.add_voice_transcript(raw)
+                            imported += 1
+                        except Exception:
+                            pass
+                    if imported:
+                        logger.info("summary_v2: imported broadcast voice into session room=%s user=%s count=%s", room_id, user_id, imported)
             except Exception:
                 pass
         # Получаем персональный system prompt
@@ -429,14 +478,10 @@ class SummaryOrchestrator:
                     ai_used = False
                     if ai_provider is not None:
                         try:
-                            from ...config import get_settings as _gs
-                            _settings = _gs()
-                            # Учитываем те же эвристики: всегда пробуем, т.к. это уже последний шанс
                             plain = [m.to_plain() for m in pseudo]
                             sp = system_prompt if 'system_prompt' in locals() else None
                             summary_text = await ai_provider.generate_summary(plain, sp)  # type: ignore
                             if summary_text and summary_text.strip():
-                                # Добавим источники как в стратегиях
                                 summary_text = summary_text.rstrip() + "\n\nИсточники (голос):\n" + "\n".join(m.content for m in pseudo)
                                 result = _SR(room_id=room_id, message_count=len(pseudo), generated_at=now_ms, summary_text=summary_text, sources=pseudo, used_voice=True, participants=[])
                                 ai_used = True
@@ -460,7 +505,8 @@ class SummaryOrchestrator:
 
         # Дополнительный режим: агрегирование голосов всех участников (AI_SUMMARY_VOICE_SCOPE=room)
         try:
-            settings = _get_settings()
+            settings = self._settings_cache or _get_settings()
+            self._settings_cache = settings
             if getattr(settings, 'AI_SUMMARY_VOICE_SCOPE', 'self').lower() == 'room':
                 # Собираем голосовые сегменты всех текущих активных сессий данной комнаты
                 room_sess = [s for (r, _u) , s in self._sessions.items() if r == room_id]
@@ -526,7 +572,7 @@ class SummaryOrchestrator:
                             else:
                                 logger.debug("summary_v2: room-voice aggregation produced empty summary room=%s user=%s", room_id, user_id)
                         except Exception as e_aggr:
-                            logger.warning("summary_v2: room-voice aggregation failed room=%s user=%s err=%s", room_id, user_id, e_aggr)
+                            logger.warning("summary_v2: room-voice aggregation failed room=%s user=%s err=%s", room_id, user_id, e_aggr, exc_info=True)
                 else:
                     logger.debug("summary_v2: room-voice aggregation skipped (no voice buckets) room=%s user=%s", room_id, user_id)
         except Exception:

@@ -118,7 +118,6 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
             # Оппортунистическое прикрепление ВСЕХ доступных транскриптов участников комнаты
             with contextlib.suppress(Exception):
                 all_voice = await _collect_all_voice_transcripts(voice_coll, room_uuid, original_room_id)
-                participants_all = list(_room_participant_users.get(room_uuid, set()))
                 for v_user_id, raw_txt, _key in all_voice:
                     if not raw_txt:
                         continue
@@ -129,32 +128,14 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                             with contextlib.suppress(Exception):
                                 capture_ts = int(m.group(1))
                     if capture_ts is None:
-                        base_start = _room_agent_start.get((room_uuid, initiator_user_id)) if initiator_user_id else None
-                        capture_ts = base_start or int(time.time()*1000)
+                        capture_ts = int(time.time()*1000)
                         raw_txt = f"[meta captureTs={capture_ts}] " + raw_txt
-                    # Если транскрипт глобальный (v_user_id=None) — размножаем на всех участников (включая инициатора) чтобы агент 'слышал' всех
-                    target_users: list[UUID] = []
-                    if v_user_id is None:
-                        # берём всех известных участников; если пусто — только инициатора
-                        if participants_all:
-                            target_users = participants_all
-                        elif initiator_user_id:
-                            target_users = [initiator_user_id]
-                    else:
-                        target_users = [v_user_id]
-                    # Прикрепляем по каждому пользователю отдельно
-                    for tu in target_users:
-                        start_ms = _room_agent_start.get((room_uuid, tu))
-                        fresh = start_ms is None or capture_ts >= (start_ms - 2000)  # расширили окно свежести
-                        tu_str = str(tu)
-                        if fresh:
-                            try:
-                                orchestrator.add_voice_transcript(str(room_uuid), raw_txt, user_id=tu_str)
-                                print(f"[summary] opportunistic_attach accepted room={original_room_id} user={tu_str} captureTs={capture_ts} start_ms={start_ms}")
-                            except Exception as e:
-                                print(f"[summary] opportunistic_attach error room={original_room_id} user={tu_str} err={e}")
-                        else:
-                            print(f"[summary] opportunistic_attach rejected(stale) room={original_room_id} user={tu_str} captureTs={capture_ts} start_ms={start_ms}")
+                    # Если транскрипт персональный – пробуем прикрепить в окно пользователя; если глобальный (v_user_id=None) – отправляем как broadcast
+                    try:
+                        orchestrator.add_voice_transcript(str(room_uuid), raw_txt, user_id=str(v_user_id) if v_user_id else None)
+                        print(f"[summary] opportunistic_attach accepted room={original_room_id} user={v_user_id} captureTs={capture_ts} broadcast={v_user_id is None}")
+                    except Exception as e:
+                        print(f"[summary] opportunistic_attach error room={original_room_id} user={v_user_id} err={e}")
             # Первая попытка построить персональное summary
             cutoff_ms = int(__import__('time').time()*1000)
             personal = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session, cutoff_ms=cutoff_ms)
@@ -400,9 +381,6 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
         try:
             from ...infrastructure.services.summary import ChatMessage as _CM
             now_ms = int(_t.time()*1000)
-            # Если есть только один глобальный транскрипт (user_id is None) и известны участники — синтетически размножим
-            only_global = all(u is None for u, _t2, _k2 in collected_voice) and len(collected_voice) == 1
-            participants_all = list(_room_participant_users.get(room_uuid, set())) if only_global else []
             for user_id, text_v, _key in collected_voice:
                 if not text_v:
                     continue
@@ -414,16 +392,9 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                     sentences = [p.strip() for p in parts if p.strip()]
                 if not sentences and norm_src:
                     sentences = [norm_src]
-                # Если global и размножаем — для каждого участника отдельные сообщения
-                if only_global and user_id is None and participants_all:
-                    for pu in participants_all:
-                        author_name = _display_names.get(pu) or f'user:{str(pu)[:8]}'
-                        for s in sentences:
-                            voice_msgs.append(_CM(room_id=str(room_uuid), author_id=str(pu), author_name=author_name, content=s, ts=now_ms))
-                else:
-                    author_name = _display_names.get(user_id) if user_id else 'voice'
-                    for s in sentences:
-                        voice_msgs.append(_CM(room_id=str(room_uuid), author_id=str(user_id) if user_id else None, author_name=author_name, content=s, ts=now_ms))
+                author_name = _display_names.get(user_id) if user_id else 'voice'
+                for s in sentences:
+                    voice_msgs.append(_CM(room_id=str(room_uuid), author_id=str(user_id) if user_id else None, author_name=author_name, content=s, ts=now_ms))
         except Exception:
             pass
         base_snap = []
