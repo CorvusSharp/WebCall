@@ -53,10 +53,19 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
     started = False
     start_control_ts: int | None = None  # когда получили start (control или implicit)
     first_chunk_ts: int | None = None
+    last_chunk_ts: int | None = None
     total_bytes = 0
+    control_start_count = 0
+    control_stop_count = 0
+    binary_frames = 0
+    ignored_early_stops = 0
+    loop_iterations = 0
+    import time as _t
+    accept_ts = int(_t.time()*1000)
     try:
         while True:
             msg = await ws.receive()
+            loop_iterations += 1
             if 'text' in msg and msg['text'] is not None:
                 # control frame
                 import json
@@ -69,14 +78,17 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                     started = True
                     import time as _t
                     start_control_ts = int(_t.time()*1000)
+                    control_start_count += 1
                     logger.debug("VOICE_CAPTURE control start room=%s user=%s", room_id, user_id)
                 elif t == 'stop':
                     # Защита: если ещё нет чанков и старт был совсем недавно — игнорируем одиночный stop (например клиент мгновенно пересоздал MediaRecorder)
                     import time as _t
                     now_ms = int(_t.time()*1000)
                     if total_bytes == 0 and started and start_control_ts and (now_ms - start_control_ts) < 800:
+                        ignored_early_stops += 1
                         logger.debug("VOICE_CAPTURE ignore early stop (no chunks) room=%s delta_ms=%s", room_id, now_ms - start_control_ts)
                         continue
+                    control_stop_count += 1
                     logger.debug("VOICE_CAPTURE control stop room=%s user=%s bytes=%s", room_id, user_id, total_bytes)
                     break
             elif 'bytes' in msg and msg['bytes'] is not None:
@@ -88,10 +100,13 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                     logger.debug("VOICE_CAPTURE implicit start room=%s user=%s (binary before explicit start)", room_id, user_id)
                 chunk = msg['bytes']
                 total_bytes += len(chunk)
+                binary_frames += 1
                 if first_chunk_ts is None:
                     import time as _t
                     first_chunk_ts = int(_t.time()*1000)
                     logger.debug("VOICE_CAPTURE first chunk room=%s user=%s size=%s", room_id, user_id, len(chunk))
+                import time as _t
+                last_chunk_ts = int(_t.time()*1000)
                 if total_bytes > settings.VOICE_MAX_TOTAL_MB * 1024 * 1024:
                     # превышение лимита
                     break
@@ -130,7 +145,18 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                     import time as _t
                     now_ms = int(_t.time()*1000)
                     delta_start = (now_ms - start_control_ts) if start_control_ts else None
-                    logger.info("VOICE_CAPTURE finalize empty room=%s reason=no_chunks delta_start=%s started=%s", room_id, delta_start, started)
+                    logger.info(
+                        "VOICE_CAPTURE finalize empty room=%s reason=no_chunks delta_start=%s started=%s ctrl_start=%s ctrl_stop=%s bin_frames=%s ignored_stops=%s loops=%s lifetime_ms=%s",
+                        room_id,
+                        delta_start,
+                        started,
+                        control_start_count,
+                        control_stop_count,
+                        binary_frames,
+                        ignored_early_stops,
+                        loop_iterations,
+                        now_ms - accept_ts,
+                    )
                 except Exception:
                     logger.info("VOICE_CAPTURE finalize empty room=%s reason=no_chunks", room_id)
             await coll.store_transcript(canonical_key, text)
