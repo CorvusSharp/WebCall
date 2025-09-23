@@ -152,7 +152,12 @@ class SummaryOrchestrator:
             try:
                 # Если в старой сессии уже есть voice сегменты и нет чат сообщений – НЕ теряем их
                 if getattr(old, '_voice_segments', None) and not getattr(old, '_messages', None):  # type: ignore[attr-defined]
-                    preserved_voice = list(getattr(old, '_voice_segments'))  # type: ignore[attr-defined]
+                    preserved_voice = []
+                    import re as _re
+                    for _seg in list(getattr(old, '_voice_segments')):  # type: ignore[attr-defined]
+                        # На всякий случай удалим meta, если вдруг просочилась
+                        cleaned = _re.sub(r'^\[meta [^]]*\]\s*', '', _seg.strip()) if isinstance(_seg, str) else _seg
+                        preserved_voice.append(cleaned)
             except Exception:
                 preserved_voice = None
             # мягко помечаем остановку старой
@@ -398,6 +403,11 @@ class SummaryOrchestrator:
                 vseg2 = getattr(sess, '_voice_segments', [])  # type: ignore[attr-defined]
                 meaningful = [s for s in vseg2 if s and len(s.strip()) > 10]
                 if meaningful:
+                    import re as _re
+                    # Удаляем meta префиксы из сегментов (если есть)
+                    meaningful = [_re.sub(r'^\[meta [^]]*\]\s*', '', s.strip()) for s in meaningful]
+                    # Если вдруг после чистки остались пустые — отфильтровать
+                    meaningful = [s for s in meaningful if s]
                     import re, time as _t
                     merged_voice = " ".join(meaningful)
                     norm = re.sub(r"\s+", " ", merged_voice.strip())
@@ -409,9 +419,15 @@ class SummaryOrchestrator:
                     from .models import ChatMessage, SummaryResult
                     pseudo = [ChatMessage(room_id=room_id, author_id=None, author_name='voice', content=p, ts=now_ms) for p in head_parts]
                     # Заполняем простой текст
-                    text = "Краткая выжимка по голосу (fallback):\n" + " \n".join(head_parts)
+                    text = "Краткая выжимка по голосу (fallback):\n" + "\n".join(head_parts)
                     result = SummaryResult(room_id=room_id, message_count=len(pseudo), generated_at=now_ms, summary_text=text, sources=pseudo, used_voice=True, participants=[])
                     logger.warning("summary_v2: synthesized fallback voice summary room=%s user=%s parts=%s", room_id, user_id, len(pseudo))
+                    # Диагностика: если в исходных сегментах был meta, отметим это
+                    try:
+                        if any(seg.strip().startswith('[meta ') for seg in vseg2):
+                            logger.debug("summary_v2: meta prefixes were present in voice_segments and stripped room=%s user=%s", room_id, user_id)
+                    except Exception:
+                        pass
             except Exception:
                 pass
         return result
