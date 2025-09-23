@@ -626,7 +626,8 @@ async def ws_room(
                         # Регистрируем окно для новой архитектуры orchestrator
                         try:
                             orchestrator = get_summary_orchestrator()
-                            await orchestrator.start_user_window(str(room_uuid), str(account_uid))
+                            # Передаём user_name для последующего multi‑speaker voice aggregation
+                            await orchestrator.start_user_window(str(room_uuid), str(account_uid), user_name=real_name or uname)
                         except Exception:
                             pass
                 # broadcast presence list to room (with id->name map)

@@ -5,7 +5,7 @@ from .message_log import MessageLog
 from .models import SummaryResult, ChatMessage, TECHNICAL_PATTERNS
 from .strategies import ChatStrategy, CombinedVoiceChatStrategy
 from .user_agent import UserAgentSession
-from ...config import get_settings
+from ...config import get_settings as _get_settings
 from ..ai_provider import get_user_system_prompt
 from ..voice_transcript import get_voice_collector
 import logging
@@ -49,6 +49,12 @@ class SummaryOrchestrator:
             'session_recovered_from_voice': 0,
             'session_auto_resumed': 0,
         }
+        # Диагностика значения AI_SUMMARY_VOICE_SCOPE при инициализации
+        try:
+            scope = getattr(_get_settings(), 'AI_SUMMARY_VOICE_SCOPE', 'n/a')
+            logger.debug("summary_v2: orchestrator init AI_SUMMARY_VOICE_SCOPE=%s", scope)
+        except Exception:
+            pass
 
     # Публичное read-only получение счётчиков (для диагностики / последующей экспозиции)
     def get_counters(self) -> Dict[str, int]:
@@ -454,7 +460,7 @@ class SummaryOrchestrator:
 
         # Дополнительный режим: агрегирование голосов всех участников (AI_SUMMARY_VOICE_SCOPE=room)
         try:
-            settings = get_settings()
+            settings = _get_settings()
             if getattr(settings, 'AI_SUMMARY_VOICE_SCOPE', 'self').lower() == 'room':
                 # Собираем голосовые сегменты всех текущих активных сессий данной комнаты
                 room_sess = [s for (r, _u) , s in self._sessions.items() if r == room_id]
@@ -478,6 +484,11 @@ class SummaryOrchestrator:
                     if clean:
                         voice_buckets.append((getattr(s, 'user_name', None) or getattr(s, 'user_id', None), clean))
                 if voice_buckets and sum(len(v) for _n, v in voice_buckets) > 0:
+                    if len(voice_buckets) == 1:
+                        try:
+                            logger.debug("summary_v2: room-voice aggregation only one speaker present room=%s user=%s speaker=%s -> multi-speaker effect limited", room_id, user_id, voice_buckets[0][0])
+                        except Exception:
+                            pass
                     # Строим псевдо‑сообщения диалога: участник как author_name
                     from .models import ChatMessage
                     combined_voice_msgs: list[ChatMessage] = []
