@@ -72,6 +72,7 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
         use_v2 = os.getenv("USE_SUMMARY_V2", "1").lower() not in {"0", "false", "no"}
         if use_v2:
             orchestrator = get_summary_orchestrator()
+            print(f"[summary] Personal summary start room={original_room_id} user={initiator_user_id} reason={reason} use_v2=1")
                 # Оппортунистическое прикрепление ТОЛЬКО персонального транскрипта (без fallback на общий ключ)
             with contextlib.suppress(Exception):
                 v_cur = await voice_coll.get_transcript(f"{room_uuid}:{initiator_user_id}")
@@ -129,22 +130,58 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
             if personal.message_count > 0:
                 with contextlib.suppress(Exception):
                     await voice_coll.pop_transcript(f"{room_uuid}:{initiator_user_id}")
-            if settings.TELEGRAM_BOT_TOKEN and session is not None:
-                with contextlib.suppress(Exception):
+            # Подготовка и отправка в Telegram с расширенным логированием причин пропуска
+            if not settings.TELEGRAM_BOT_TOKEN:
+                print(f"[summary] Telegram skip: no TELEGRAM_BOT_TOKEN room={original_room_id} user={initiator_user_id}")
+            elif session is None:
+                print(f"[summary] Telegram skip: no DB session room={original_room_id} user={initiator_user_id}")
+            else:
+                try:
                     chat_id = await get_confirmed_chat_id(session, initiator_user_id)
-                    if chat_id:
-                        if personal.message_count == 0:
-                            body = (
-                                "Персональное резюме пока пусто: сообщений ещё нет или продолжается обработка голоса. "
-                                "Попробуйте запросить ещё раз через несколько секунд."
-                            )
-                        else:
-                            body = personal.summary_text
-                        text = (
-                            f"Room {personal.room_id} персональное summary (trigger={reason}). Сообщений: {personal.message_count}.\n--- Summary ---\n{body}"
+                except Exception as e:
+                    chat_id = None
+                    print(f"[summary] Telegram error: get_confirmed_chat_id failed room={original_room_id} user={initiator_user_id} err={e}")
+                if not chat_id:
+                    print(f"[summary] Telegram skip: no confirmed chat_id room={original_room_id} user={initiator_user_id}")
+                else:
+                    if personal.message_count == 0:
+                        body = (
+                            "Персональное резюме пока пусто: сообщений ещё нет или продолжается обработка голоса. "
+                            "Попробуйте запросить ещё раз через несколько секунд."
                         )
-                        await tg_send_message(text, chat_ids=[chat_id], session=session)
-                        print(f"[summary] Personal summary (v2) sent user={initiator_user_id} room={original_room_id} empty={personal.message_count==0}")
+                    else:
+                        body = personal.summary_text
+                    # Participant breakdown форматирование (если присутствует)
+                    participants_block = ""
+                    try:
+                        parts = getattr(personal, 'participants', None)
+                        if parts:
+                            lines = []
+                            for p in parts[:5]:  # ограничим до 5 участников
+                                sample_tail = p.sample_messages[-2:] if p.sample_messages else []
+                                sample_txt = "; ".join(sample_tail)
+                                who = p.participant_name or p.participant_id or "anon"
+                                line = f"- {who}: {p.message_count} msg. {sample_txt}".strip()
+                                # Усечение строки если длинная
+                                if len(line) > 180:
+                                    line = line[:177] + "…"
+                                lines.append(line)
+                            participants_block = "\n\nУчастники:\n" + "\n".join(lines)
+                    except Exception as e:
+                        print(f"[summary] Participants format error room={original_room_id} user={initiator_user_id} err={e}")
+                        participants_block = ""
+                    text = (
+                        f"Room {personal.room_id} персональное summary (trigger={reason}). Сообщений: {personal.message_count}.\n--- Summary ---\n{body}{participants_block}"
+                    )
+                    # Telegram API всё равно обрежет до ~4096; подрежем чуть раньше (4000) чтобы не потерять окончание
+                    if len(text) > 4000:
+                        text = text[:3990] + "…(truncated)"
+                    sent = False
+                    try:
+                        sent = await tg_send_message(text, chat_ids=[chat_id], session=session)
+                    except Exception as e:
+                        print(f"[summary] Telegram send exception room={original_room_id} user={initiator_user_id} err={e}")
+                    print(f"[summary] Personal summary (v2) send_result={sent} user={initiator_user_id} room={original_room_id} empty={personal.message_count==0}")
             return
         else:
             # Fallback: старая логика snapshot + summarize_messages (без orchestrator)
