@@ -958,6 +958,9 @@ function setupUI(){
       // Подключаем
       try {
         const token = localStorage.getItem('wc_token');
+        if (!token){
+          log('VoiceCapture: отсутствует токен — голосовой поток не будет запущен (frontend gate)');
+        }
         // Детерминированный UUID агента на стороне клиента, синхронно с серверной формулой (uuid5 по namespace URL недоступен тут, поэтому просто локально генерируем и кешируем на комнату)
         // Сервер всё равно переопределит на свой стабильный UUID для room+agent
         const agentId = (()=>{
@@ -984,59 +987,73 @@ function setupUI(){
               log('VoiceCapture: отменено отложенное закрытие предыдущей сессии');
             }
 
-          if (!appState.voiceMixer){
-            appState.voiceMixer = new VoiceCaptureMixer({
-              getPeers: ()=> appState.rtc?.peers,
-              getLocalStream: ()=> appState.rtc?.localStream,
-              chunkMs: 5000,
-              onLog: (m)=> log(m),
-              onChunk: (bytes)=>{
-                try {
-                  if (appState._voiceWs && appState._voiceWs.readyState === WebSocket.OPEN){
-                    appState._voiceWs.send(bytes);
-                    appState._voiceChunkCount = (appState._voiceChunkCount||0)+1;
-                    if ((appState._voiceChunkCount % 5) === 0){ log(`VoiceCapture: отправлено чанков=${appState._voiceChunkCount}`); }
-                  }
-                } catch {}
-              }
-            });
+          if (token){
+            if (!appState.voiceMixer){
+              appState.voiceMixer = new VoiceCaptureMixer({
+                getPeers: ()=> appState.rtc?.peers,
+                getLocalStream: ()=> appState.rtc?.localStream,
+                chunkMs: 5000,
+                onLog: (m)=> log(m),
+                onChunk: (bytes)=>{
+                  try {
+                    if (appState._voiceWs && appState._voiceWs.readyState === WebSocket.OPEN){
+                      appState._voiceWs.send(bytes);
+                      appState._voiceChunkCount = (appState._voiceChunkCount||0)+1;
+                      if ((appState._voiceChunkCount % 5) === 0){ log(`VoiceCapture: отправлено чанков=${appState._voiceChunkCount}`); }
+                    }
+                  } catch {}
+                }
+              });
+            }
+          } else {
+            log('AI Agent: voice mixer и WS не создаются без токена');
           }
 
           // Функция запуска новой сессии (отправляет start даже при reuse WS)
           const startVoiceSession = () => {
+            if (!token){
+              log('VoiceCapture: попытка запустить session без токена — отклонено');
+              return;
+            }
             appState._voiceSessionSeq = (appState._voiceSessionSeq||0) + 1;
             appState._voiceChunkCount = 0;
             const sid = appState._voiceSessionSeq;
-            log(`VoiceCapture: start session #${sid}`);
+            const accId = getAccountId();
+            const canonicalKey = `${appState.currentRoomId}:${accId||'unknown'}`;
+            log(`VoiceCapture: start session #${sid} canonicalKey=${canonicalKey}`);
             try {
               appState._voiceWs?.send(JSON.stringify({ type:'start', roomId: appState.currentRoomId, ts: Date.now(), session: sid }));
             } catch {}
             try { appState.voiceMixer.start(); } catch {}
           };
 
-          const needNew = !appState._voiceWs || [WebSocket.CLOSING, WebSocket.CLOSED].includes(appState._voiceWs.readyState);
-          if (needNew){
-            if (appState._voiceWs && appState._voiceWs.readyState === WebSocket.CLOSING){
-              try { appState._voiceWs.close(); } catch {}
-            }
-            const base = location.origin.replace('http','ws');
-            const url = `${base}/ws/voice_capture/${encodeURIComponent(appState.currentRoomId)}?token=${encodeURIComponent(token||'')}`;
-            appState._voiceWs = new WebSocket(url);
-            appState._voiceWs.binaryType = 'arraybuffer';
-            appState._voiceWs.onopen = () => {
-              log('VoiceCapture WS открыт (new)');
+          if (token){
+            const needNew = !appState._voiceWs || [WebSocket.CLOSING, WebSocket.CLOSED].includes(appState._voiceWs.readyState);
+            if (needNew){
+              if (appState._voiceWs && appState._voiceWs.readyState === WebSocket.CLOSING){
+                try { appState._voiceWs.close(); } catch {}
+              }
+              const base = location.origin.replace('http','ws');
+              const url = `${base}/ws/voice_capture/${encodeURIComponent(appState.currentRoomId)}?token=${encodeURIComponent(token||'')}`;
+              appState._voiceWs = new WebSocket(url);
+              appState._voiceWs.binaryType = 'arraybuffer';
+              appState._voiceWs.onopen = () => {
+                log('VoiceCapture WS открыт (new)');
+                startVoiceSession();
+              };
+              appState._voiceWs.onclose = () => { log('VoiceCapture WS закрыт'); try { appState.voiceMixer?.stop(); } catch {}; appState._voiceWs = null; };
+              appState._voiceWs.onerror = () => { log('VoiceCapture WS ошибка'); };
+            } else if (appState._voiceWs.readyState === WebSocket.CONNECTING){
+              log('VoiceCapture: reuse CONNECTING WS – session будет запущена после onopen');
+              try {
+                appState._voiceWs.addEventListener('open', ()=> startVoiceSession(), { once:true });
+              } catch {}
+            } else if (appState._voiceWs.readyState === WebSocket.OPEN){
+              log('VoiceCapture: reuse OPEN WS');
               startVoiceSession();
-            };
-            appState._voiceWs.onclose = () => { log('VoiceCapture WS закрыт'); try { appState.voiceMixer?.stop(); } catch {}; appState._voiceWs = null; };
-            appState._voiceWs.onerror = () => { log('VoiceCapture WS ошибка'); };
-          } else if (appState._voiceWs.readyState === WebSocket.CONNECTING){
-            log('VoiceCapture: reuse CONNECTING WS – session будет запущена после onopen');
-            try {
-              appState._voiceWs.addEventListener('open', ()=> startVoiceSession(), { once:true });
-            } catch {}
-          } else if (appState._voiceWs.readyState === WebSocket.OPEN){
-            log('VoiceCapture: reuse OPEN WS');
-            startVoiceSession();
+            }
+          } else {
+            log('VoiceCapture: пропуск создания WS (нет токена)');
           }
         } catch(e){ log(`VoiceMixer init/restart error: ${e}`); }
         ws.onopen = () => {

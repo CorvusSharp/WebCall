@@ -153,43 +153,22 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
         # Финализируем: транскрипция и сохранение. Если нет чанков — пропускаем.
         with contextlib.suppress(Exception):
             chunks = await coll.get_and_clear_chunks(canonical_key)
-            if chunks:
+            finalize_ts = int(__import__('time').time()*1000)
+            text: str
+            had_chunks = bool(chunks)
+            if had_chunks:
                 logger.info("VOICE_CAPTURE finalize room=%s chunks=%s bytes=%s", room_id, len(chunks), sum(len(c.data) for c in chunks))
-                text = await transcribe_chunks(canonical_key, chunks)
+                raw_text = await transcribe_chunks(canonical_key, chunks)
+                cleaned = (raw_text or '').strip()
                 try:
-                    preview = (text or '')[:120].replace('\n',' ')
+                    preview = cleaned[:120].replace('\n',' ')
                     logger.info("VOICE_CAPTURE transcript room=%s preview=%r", room_id, preview)
                 except Exception:
                     pass
-                # Передаём транскрипт в orchestrator (summary_v2)
-                try:
-                    orch = get_summary_orchestrator()
-                    cleaned = (text or '').strip()
-                    low = cleaned.lower()
-                    technical = (not cleaned) or low.startswith('(no audio') or low.startswith('(asr failed') or low.startswith('(asr exception') or low.startswith('(asr disabled')
-                    if user_id and cleaned:
-                        if technical:
-                            logger.debug("VOICE_CAPTURE skip technical transcript attach room=%s user=%s raw=%r", room_id, user_id, cleaned[:80])
-                        else:
-                            # Встраиваем метаданные в префикс чтобы orchestrator мог игнорировать чужие предыдущие сессии
-                            # Формат: [meta session=ID startTs=CLIENT_TS captureTs=SERVER_START]
-                            meta_prefix_parts = []
-                            if session_id is not None:
-                                meta_prefix_parts.append(f"session={session_id}")
-                            if client_start_ts is not None:
-                                meta_prefix_parts.append(f"clientTs={client_start_ts}")
-                            if start_control_ts is not None:
-                                meta_prefix_parts.append(f"captureTs={start_control_ts}")
-                            meta_prefix = "[meta " + " ".join(meta_prefix_parts) + "] " if meta_prefix_parts else ""
-                            orch.add_voice_transcript(base_room_key, meta_prefix + cleaned, user_id=user_id)
-                except Exception:
-                    pass
             else:
-                text = "(no audio chunks)"
-                # добавим диагностику времени между start и финализацией
+                cleaned = "(no audio chunks)"
                 try:
-                    import time as _t
-                    now_ms = int(_t.time()*1000)
+                    now_ms = finalize_ts
                     delta_start = (now_ms - start_control_ts) if start_control_ts else None
                     logger.info(
                         "VOICE_CAPTURE finalize empty room=%s reason=no_chunks delta_start=%s started=%s ctrl_start=%s ctrl_stop=%s bin_frames=%s ignored_stops=%s loops=%s lifetime_ms=%s grace_after_stop_ms=%s warn_sent=%s",
@@ -207,6 +186,25 @@ async def ws_voice_capture(ws: WebSocket, room_id: str, tokens: TokenProvider = 
                     )
                 except Exception:
                     logger.info("VOICE_CAPTURE finalize empty room=%s reason=no_chunks", room_id)
-            await coll.store_transcript(canonical_key, text)
+            # Формируем мету (всегда)
+            meta_parts = [f"captureTs={finalize_ts}"]
+            if session_id is not None:
+                meta_parts.append(f"session={session_id}")
+            if client_start_ts is not None:
+                meta_parts.append(f"clientTs={client_start_ts}")
+            if start_control_ts is not None:
+                meta_parts.append(f"startCtrlTs={start_control_ts}")
+            meta_prefix = "[meta " + " ".join(meta_parts) + "] "
+            text = meta_prefix + cleaned
+            # Сохраняем ТОЛЬКО персонально если есть user_id, иначе под room (групповая логика) — мета уже есть
+            store_key = canonical_key
+            await coll.store_transcript(store_key, text)
+            # Немедленно прикрепляем в orchestrator если есть содержательный текст
+            try:
+                if user_id and cleaned and not cleaned.startswith('(no audio') and not cleaned.startswith('(asr '):
+                    orch = get_summary_orchestrator()
+                    orch.add_voice_transcript(base_room_key, text, user_id=user_id)
+            except Exception:
+                logger.debug("VOICE_CAPTURE orchestrator attach failed room=%s", room_id, exc_info=True)
         with contextlib.suppress(Exception):
             await ws.close(code=1000)

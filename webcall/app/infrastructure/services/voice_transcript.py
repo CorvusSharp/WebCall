@@ -31,29 +31,55 @@ class VoiceTranscriptCollector:
         self._chunks: Dict[str, list[VoiceChunk]] = {}
         self._transcripts: Dict[str, VoiceTranscript] = {}
         self._lock = Lock()
+        # TTL (мс) для готовых транскриптов и сырых чанков (если вдруг не финализировали) — предотвращает накопление старых данных.
+        self._transcript_ttl_ms = 5 * 60 * 1000  # 5 минут
+        self._chunk_ttl_ms = 5 * 60 * 1000
+
+    def _purge_expired_unlocked(self, now_ms: int) -> None:
+        # Очистка транскриптов
+        to_del = [k for k, v in self._transcripts.items() if (now_ms - v.generated_at) > self._transcript_ttl_ms]
+        for k in to_del:
+            self._transcripts.pop(k, None)
+        # Очистка сырых чанков (по таймстемпу первого чанка)
+        stale_chunks = []
+        for k, lst in self._chunks.items():
+            if lst and (now_ms - lst[0].ts) > self._chunk_ttl_ms:
+                stale_chunks.append(k)
+        for k in stale_chunks:
+            self._chunks.pop(k, None)
 
     async def add_chunk(self, room_key: str, data: bytes) -> None:
         async with self._lock:
-            self._chunks.setdefault(room_key, []).append(VoiceChunk(ts=int(time.time()*1000), data=data))
+            now_ms = int(time.time()*1000)
+            self._purge_expired_unlocked(now_ms)
+            self._chunks.setdefault(room_key, []).append(VoiceChunk(ts=now_ms, data=data))
 
     async def get_and_clear_chunks(self, room_key: str) -> list[VoiceChunk]:
         async with self._lock:
+            now_ms = int(time.time()*1000)
+            self._purge_expired_unlocked(now_ms)
             chunks = self._chunks.pop(room_key, [])
             return chunks
 
     async def store_transcript(self, room_key: str, text: str) -> VoiceTranscript:
         vt = VoiceTranscript(room_id=room_key, text=text, generated_at=int(time.time()*1000))
         async with self._lock:
+            now_ms = vt.generated_at
+            self._purge_expired_unlocked(now_ms)
             self._transcripts[room_key] = vt
         return vt
 
     async def pop_transcript(self, room_key: str) -> VoiceTranscript | None:
         async with self._lock:
+            now_ms = int(time.time()*1000)
+            self._purge_expired_unlocked(now_ms)
             return self._transcripts.pop(room_key, None)
 
     async def get_transcript(self, room_key: str) -> VoiceTranscript | None:
         """Вернёт транскрипт без удаления (для повторной проверки готовности)."""
         async with self._lock:
+            now_ms = int(time.time()*1000)
+            self._purge_expired_unlocked(now_ms)
             return self._transcripts.get(room_key)
 
 

@@ -34,6 +34,31 @@ class SummaryOrchestrator:
         # Стратегии (для fallback путей — вероятно не нужны, но оставим)
         self._chat_strategy = ChatStrategy()
         self._combined_strategy = CombinedVoiceChatStrategy()
+        # Unified counters (in-memory) — не критично к перезапуску
+        self._counters: Dict[str, int] = {
+            'voice_add_total': 0,
+            'voice_reject_stale': 0,
+            'voice_reject_no_meta': 0,
+            'voice_fallback_attached': 0,
+            'voice_fallback_stale': 0,
+            'voice_lazy_attached': 0,
+            'voice_lazy_skipped_placeholder': 0,
+            'voice_pending_attached': 0,
+            'voice_second_chance_attached': 0,
+            'session_auto_created_on_voice': 0,
+            'session_recovered_from_voice': 0,
+            'session_auto_resumed': 0,
+        }
+
+    # Публичное read-only получение счётчиков (для диагностики / последующей экспозиции)
+    def get_counters(self) -> Dict[str, int]:
+        return dict(self._counters)
+
+    def _bump(self, key: str) -> None:
+        try:
+            self._counters[key] = self._counters.get(key, 0) + 1
+        except Exception:
+            pass
 
     def add_chat(self, room_id: str, author_id: str | None, author_name: str | None, content: str) -> None:
         """Регистрация нового чат сообщения.
@@ -71,34 +96,51 @@ class SummaryOrchestrator:
             self._sessions[key] = sess
             self._room_sessions.setdefault(room_id, []).append(sess)
             logger.debug("summary_v2: auto-created session on voice transcript room=%s user=%s", room_id, user_id)
+            self._bump('session_auto_created_on_voice')
         technical = False
         low = transcript.lower()
         if low.startswith('(no audio') or low.startswith('(asr failed') or low.startswith('(asr exception') or low.startswith('(asr disabled'):
             technical = True
         # Парсинг мета-префикса (если мы его добавили в voice_capture)
-        meta_start = None
         meta_capture_ts = None
+        has_meta = False
         try:
             if transcript.startswith('[meta '):
                 end = transcript.find(']')
                 if end != -1:
-                    meta_block = transcript[6:end].strip()  # внутри без закрывающей скобки
+                    meta_block = transcript[6:end].strip()
                     body = transcript[end+1:].lstrip()
                     parts = meta_block.split()
                     for p in parts:
                         if p.startswith('captureTs='):
-                            try: meta_capture_ts = int(p.split('=',1)[1])
-                            except: pass
-                    transcript_body = body
-                    # Если сессия уже имеет start_ts и meta_capture_ts < sess.start_ts - 150 → считаем это транскрипт предыдущего запуска и игнорируем
+                            try:
+                                meta_capture_ts = int(p.split('=',1)[1])
+                            except Exception:
+                                pass
+                    has_meta = True
+                    # Проверка на устаревание относительно старта текущей сессии
                     if meta_capture_ts is not None and meta_capture_ts < (sess.start_ts - 150):
                         logger.debug("summary_v2: ignore stale voice transcript by captureTs room=%s user=%s captureTs=%s start_ts=%s", room_id, user_id, meta_capture_ts, sess.start_ts)
+                        self._bump('voice_reject_stale')
                         return
-                    transcript = transcript_body
+                    transcript = body
         except Exception:
             pass
+        # Если меты нет – применяем строгий фильтр: окно <=10s от старта и отсутствие предыдущих voice сегментов
+        if not has_meta:
+            now_ms = int(time.time()*1000)
+            voice_already = bool(getattr(sess, '_voice_segments', None))  # type: ignore[attr-defined]
+            age = now_ms - sess.start_ts
+            if age > 10_000 or voice_already:
+                logger.debug("summary_v2: reject voice(no-meta) room=%s user=%s age_ms=%s has_voice=%s", room_id, user_id, age, voice_already)
+                self._bump('voice_reject_no_meta')
+                return
         sess.add_voice_transcript(transcript)
-        logger.info("summary_v2: add_voice_transcript room=%s user=%s chars=%s technical=%s head=%r", room_id, user_id, len(transcript), technical, transcript[:60])
+        self._bump('voice_add_total')
+        logger.info(
+            "summary_v2: add_voice_transcript room=%s user=%s chars=%s technical=%s meta=%s captureTs=%s head=%r",
+            room_id, user_id, len(transcript), technical, has_meta, meta_capture_ts, transcript[:60]
+        )
 
     async def start_user_window(self, room_id: str, user_id: str) -> None:
         """Старт (или перезапуск) персонального окна пользователя."""
@@ -148,6 +190,7 @@ class SummaryOrchestrator:
                             self._sessions[key] = sess
                             self._room_sessions.setdefault(room_id, []).append(sess)
                             logger.warning("summary_v2: recovered session from voice transcript room=%s user=%s len=%s", room_id, user_id, len(txt))
+                            self._bump('session_recovered_from_voice')
             except Exception:
                 pass
             if not sess:
@@ -159,6 +202,51 @@ class SummaryOrchestrator:
             logger.debug(
                 "summary_v2: pre-build state room=%s user=%s msgs=%s voice_segments=%s ended=%s", room_id, user_id, len(getattr(sess, '_messages', [])), len(voice_segments), getattr(sess, 'end_ts', None)
             )
+        except Exception:
+            pass
+
+        # ФОЛБЭК: если окно абсолютно пустое (ни сообщений, ни voice), пробуем единожды подтянуть персональный записанный транскрипт из коллектора.
+        try:
+            msgs_now = getattr(sess, '_messages', [])
+            voice_now = getattr(sess, '_voice_segments', [])  # type: ignore[attr-defined]
+            if not msgs_now and not voice_now:
+                vc_fb = get_voice_collector()
+                vt_fb = await vc_fb.get_transcript(f"{room_id}:{user_id}")
+                if vt_fb and getattr(vt_fb, 'text', None):
+                    raw_fb = vt_fb.text.strip()
+                    if raw_fb and not raw_fb.lower().startswith('(no audio'):
+                        # Парсим мету чтобы достать captureTs (может отсутствовать — тогда считаем свежим)
+                        capture_ts_fb = None
+                        if raw_fb.startswith('[meta ') and 'captureTs=' in raw_fb:
+                            end_br = raw_fb.find(']')
+                            if end_br != -1:
+                                meta_block = raw_fb[6:end_br].strip()
+                                for part in meta_block.split():
+                                    if part.startswith('captureTs='):
+                                        with contextlib.suppress(Exception):
+                                            capture_ts_fb = int(part.split('=',1)[1])
+                        fresh_ok = True
+                        if capture_ts_fb is not None and capture_ts_fb < (sess.start_ts - 150):
+                            fresh_ok = False
+                        if fresh_ok:
+                            # Удаляем мета префикс при добавлении во внутренние сегменты, оставляем чистый текст
+                            if raw_fb.startswith('[meta ') and ']' in raw_fb:
+                                body_pos = raw_fb.find(']')
+                                if body_pos != -1:
+                                    raw_clean = raw_fb[body_pos+1:].lstrip()
+                                else:
+                                    raw_clean = raw_fb
+                            else:
+                                raw_clean = raw_fb
+                            sess.add_voice_transcript(raw_clean)
+                            logger.info("summary_v2: fallback attached stored transcript room=%s user=%s len=%s captureTs=%s start_ts=%s", room_id, user_id, len(raw_clean), capture_ts_fb, sess.start_ts)
+                            self._bump('voice_fallback_attached')
+                            # Попробуем удалить чтобы не переиспользовать
+                            with contextlib.suppress(Exception):
+                                await vc_fb.pop_transcript(f"{room_id}:{user_id}")
+                        else:
+                            logger.debug("summary_v2: fallback transcript stale room=%s user=%s captureTs=%s start_ts=%s", room_id, user_id, capture_ts_fb, sess.start_ts)
+                            self._bump('voice_fallback_stale')
         except Exception:
             pass
 
@@ -198,7 +286,8 @@ class SummaryOrchestrator:
                         with contextlib.suppress(Exception):
                             if vt2 and vt2.text:
                                 sess.add_voice_transcript(vt2.text.strip())
-                    logger.info("summary_v2: auto-resumed session room=%s user=%s new_chat=%s fresh_voice=%s", room_id, user_id, new_chat, fresh_voice)
+                            logger.info("summary_v2: auto-resumed session room=%s user=%s new_chat=%s fresh_voice=%s", room_id, user_id, new_chat, fresh_voice)
+                            self._bump('session_auto_resumed')
             except Exception:
                 pass
         # Если в сессии нет voice, попробуем подтянуть (лениво) готовую транскрипцию, чтобы не было окна, когда агент стартовал чуть позже окончания речи
@@ -216,8 +305,10 @@ class SummaryOrchestrator:
                         if txt and not (low.startswith('(no audio chunks') or low.startswith('(asr failed') or low.startswith('(asr exception') or low.startswith('(asr disabled')) and vt.generated_at >= (sess.start_ts - 100):
                             sess.add_voice_transcript(txt)
                             logger.info("summary_v2: lazy attach voice transcript room=%s user=%s len=%s gen_at=%s start_ts=%s", room_id, user_id, len(txt), vt.generated_at, sess.start_ts)
+                            self._bump('voice_lazy_attached')
                         else:
                             logger.debug("summary_v2: skip voice transcript placeholder/technical room=%s user=%s raw=%r", room_id, user_id, txt[:80] if txt else txt)
+                            self._bump('voice_lazy_skipped_placeholder')
             except Exception:
                 pass
         # Получаем персональный system prompt
@@ -249,6 +340,7 @@ class SummaryOrchestrator:
                                 if txtw and not (loww.startswith('(no audio') or loww.startswith('(asr failed') or loww.startswith('(asr exception') or loww.startswith('(asr disabled')):
                                     sess.add_voice_transcript(txtw)
                                     logger.info("summary_v2: pending wait attached voice room=%s user=%s len=%s waited_ms=%s", room_id, user_id, len(txtw), wait_total)
+                                    self._bump('voice_pending_attached')
                                     result = await sess.build_summary(ai_provider=ai_provider, system_prompt=system_prompt)
                                     break
                     else:
@@ -267,6 +359,7 @@ class SummaryOrchestrator:
                         if txt2 and not (low2.startswith('(no audio') or low2.startswith('(asr failed') or low2.startswith('(asr exception') or low2.startswith('(asr disabled')) and vt_retry.generated_at >= (sess.start_ts - 100):
                             sess.add_voice_transcript(txt2)
                             logger.info("summary_v2: second-chance attach voice transcript room=%s user=%s len=%s", room_id, user_id, len(txt2))
+                            self._bump('voice_second_chance_attached')
                             result = await sess.build_summary(ai_provider=ai_provider, system_prompt=system_prompt)
             except Exception:
                 pass

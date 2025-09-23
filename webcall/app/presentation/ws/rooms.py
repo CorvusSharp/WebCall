@@ -1,3 +1,4 @@
+import os, asyncio, contextlib, time, re
 from __future__ import annotations
 
 import asyncio
@@ -71,23 +72,34 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
     # 3) отправить agent_summary и проверить одноразовую отправку.
     settings = get_settings()
     # Персональный режим: если инициатор указан — генерируем snapshot-based summary индивидуально
-    if initiator_user_id:
+    if initiator_user_id: 
         # Feature flag: отключить новую архитектуру, установить USE_SUMMARY_V2=0
         use_v2 = os.getenv("USE_SUMMARY_V2", "1").lower() not in {"0", "false", "no"}
         if use_v2:
             orchestrator = get_summary_orchestrator()
-            # Оппортунистически зарегистрируем последний voice транскрипт (не разрушая для групповой логики)
+                # Оппортунистическое прикрепление ТОЛЬКО персонального транскрипта (без fallback на общий ключ)
             with contextlib.suppress(Exception):
-                # Пытаемся взять персональный транскрипт (room:user)
-                v_cur = None
-                if initiator_user_id:
-                    with contextlib.suppress(Exception):
-                        v_cur = await voice_coll.get_transcript(f"{room_uuid}:{initiator_user_id}")
-                if not v_cur:  # fallback legacy (общий)
-                    with contextlib.suppress(Exception):
-                        v_cur = await voice_coll.get_transcript(str(room_uuid)) or await voice_coll.get_transcript(original_room_id)
-                if v_cur and getattr(v_cur, 'text', None) and len(v_cur.text.strip()) > 10 and not v_cur.text.startswith('(no audio') and initiator_user_id:
-                    orchestrator.add_voice_transcript(str(room_uuid), v_cur.text.strip(), user_id=str(initiator_user_id))
+                v_cur = await voice_coll.get_transcript(f"{room_uuid}:{initiator_user_id}")
+                if v_cur and getattr(v_cur, 'text', None):
+                    raw_txt = v_cur.text.strip()
+                    if raw_txt and not raw_txt.startswith('(no audio'):
+                        # Извлекаем captureTs если уже есть мета
+                        capture_ts = None
+                        if raw_txt.startswith('[meta ') and 'captureTs=' in raw_txt:
+                            m = re.search(r'captureTs=(\d+)', raw_txt)
+                            if m:
+                                with contextlib.suppress(Exception):
+                                    capture_ts = int(m.group(1))
+                        if capture_ts is None:
+                            capture_ts = int(time.time()*1000)
+                            raw_txt = f"[meta captureTs={capture_ts}] " + raw_txt
+                        start_ms = _room_agent_start.get((room_uuid, initiator_user_id))
+                        fresh = start_ms is None or capture_ts >= (start_ms - 150)
+                        if fresh:
+                            orchestrator.add_voice_transcript(str(room_uuid), raw_txt, user_id=str(initiator_user_id))
+                            print(f"[summary] opportunistic_attach accepted room={original_room_id} user={initiator_user_id} captureTs={capture_ts} start_ms={start_ms}")
+                        else:
+                            print(f"[summary] opportunistic_attach rejected(stale) room={original_room_id} user={initiator_user_id} captureTs={capture_ts} start_ms={start_ms}")
             # Первая попытка построить персональное summary
             cutoff_ms = int(__import__('time').time()*1000)
             personal = await orchestrator.build_personal_summary(room_id=str(room_uuid), user_id=str(initiator_user_id), ai_provider=ai_provider, db_session=session, cutoff_ms=cutoff_ms)
@@ -118,6 +130,10 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                                 print(f"[summary] Personal summary recovered after final voice attach room={original_room_id} user={initiator_user_id}")
                     except Exception:
                         pass
+            # Очистим использованный персональный транскрипт если мы что-то реально собрали
+            if personal.message_count > 0:
+                with contextlib.suppress(Exception):
+                    await voice_coll.pop_transcript(f"{room_uuid}:{initiator_user_id}")
             if settings.TELEGRAM_BOT_TOKEN and session is not None:
                 with contextlib.suppress(Exception):
                     chat_id = await get_confirmed_chat_id(session, initiator_user_id)
