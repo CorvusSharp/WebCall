@@ -8,6 +8,7 @@ export class VoiceCaptureMixer {
     this.onChunk = opts.onChunk; // (Uint8Array, meta) => void
     this.onLog = opts.onLog || (()=>{});
     this.chunkMs = opts.chunkMs || 5000;
+    this.initialChunkMs = Math.min(2000, this.chunkMs); // более быстрый первый чанк для снижения латентности
     this.enabled = false;
     this._rec = null;
     this._ctx = null;
@@ -16,32 +17,72 @@ export class VoiceCaptureMixer {
     this._rebuildInterval = null;
     this._sources = [];
     this._closing = false;
+    this._startTs = 0;
+    this._initialTimer = null;
+    this._waitingForTrack = false;
   }
 
   start(){
     if (this.enabled) return;
     this.enabled = true;
     this.onLog('VoiceMixer: start');
+    this._startTs = Date.now();
     this._ensureContext();
-    this._rebuildGraph();
-    this._rec = new MediaRecorder(this._dest.stream, { mimeType: 'audio/webm;codecs=opus' });
-    this._rec.ondataavailable = (ev)=>{
-      if (!ev.data || !ev.data.size) return;
-      ev.data.arrayBuffer().then(buf => {
-        if (!this.enabled) return; 
-        this.onChunk(new Uint8Array(buf), { ts: Date.now() });
-      }).catch(()=>{});
+    // Отложенный запуск, если ещё нет ни одного активного трека (частая причина пустой первой сессии)
+    const hasAnyLiveTrack = () => {
+      try {
+        const local = this.getLocalStream?.();
+        if (local && local.getAudioTracks().some(t=> t.readyState==='live' && t.enabled)) return true;
+        const peers = this.getPeers?.();
+        if (peers){
+          for (const [, st] of peers.entries()){
+            const ms = st.remoteStream; if (ms && ms.getAudioTracks().some(t=> t.readyState==='live' && t.enabled)) return true;
+          }
+        }
+      } catch {}
+      return false;
     };
-    this._rec.start(this.chunkMs);
-    this._rebuildInterval = setInterval(()=>{ try { this._rebuildGraph(); } catch {} }, 4000);
+    if (!hasAnyLiveTrack()){
+      this._waitingForTrack = true;
+      let attempts = 0;
+      const maxAttempts = 20; // ~2s (20 * 100ms)
+      const poll = () => {
+        if (!this.enabled) return;
+        if (hasAnyLiveTrack()){
+          this._waitingForTrack = false;
+          this.onLog(`VoiceMixer: обнаружен первый трек спустя ${Date.now()-this._startTs}ms`);
+          this._finishStart();
+          return;
+        }
+        attempts++;
+        if (attempts >= maxAttempts){
+          this._waitingForTrack = false;
+          this.onLog('VoiceMixer: нет треков через 2s — стартуем пустой поток (может быть тишина)');
+          this._finishStart();
+          return;
+        }
+        setTimeout(poll, 100);
+      };
+      poll();
+    } else {
+      this._finishStart();
+    }
   }
 
   stop(){
     this.enabled = false;
     this.onLog('VoiceMixer: stop');
+    try { if (this._initialTimer){ clearTimeout(this._initialTimer); } } catch {}
+    this._initialTimer = null;
     try { if (this._rebuildInterval) clearInterval(this._rebuildInterval); } catch {}
     this._rebuildInterval = null;
-    try { this._rec && this._rec.state !== 'inactive' && this._rec.stop(); } catch {}
+    try {
+      if (this._rec && this._rec.state === 'recording'){
+        // Принудительно запрашиваем финальный буфер до stop для более надёжного последнего чанка
+        try { this._rec.requestData(); } catch {}
+        this._rec.stop();
+      }
+    } catch {}
     this._rec = null;
     // Отвязываем источники
     try { this._sources.forEach(src=>{ try { src.disconnect(); } catch {} }); } catch {}
@@ -60,6 +101,36 @@ export class VoiceCaptureMixer {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     this._ctx = new Ctx();
     this._dest = this._ctx.createMediaStreamDestination();
+  }
+
+  _finishStart(){
+    if (!this.enabled) return;
+    this._rebuildGraph();
+    try {
+      this._rec = new MediaRecorder(this._dest.stream, { mimeType: 'audio/webm;codecs=opus' });
+    } catch(e){
+      this.onLog('VoiceMixer: MediaRecorder error '+e);
+      return;
+    }
+    this._rec.ondataavailable = (ev)=>{
+      if (!ev.data || !ev.data.size) return;
+      ev.data.arrayBuffer().then(buf => {
+        if (!this.enabled) return; 
+        this.onChunk(new Uint8Array(buf), { ts: Date.now() });
+      }).catch(()=>{});
+    };
+    // Первый чанк ускоренно
+    try { this._rec.start(this.chunkMs); } catch(e){ this.onLog('VoiceMixer: start error '+e); }
+    if (this.initialChunkMs < this.chunkMs){
+      this._initialTimer = setTimeout(()=>{
+        try {
+          if (!this.enabled || !this._rec || this._rec.state !== 'recording') return;
+          this.onLog('VoiceMixer: early requestData (initial)');
+          this._rec.requestData();
+        } catch {}
+      }, this.initialChunkMs);
+    }
+    this._rebuildInterval = setInterval(()=>{ try { this._rebuildGraph(); } catch {} }, 4000);
   }
 
   _rebuildGraph(){

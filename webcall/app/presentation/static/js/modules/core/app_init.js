@@ -975,18 +975,22 @@ function setupUI(){
         const ws = new WebSocket(url.toString());
         appState._aiAgent = { ws, id: agentId, active: true };
         log(`AI Agent: подключение (id=${agentId})...`);
-        // Инициализируем голосовой захват если включено
+        // Инициализируем / перезапускаем голосовой захват (важно корректно работать при повторных запусках)
         try {
+          // Отмена отложенного закрытия, если пользователь быстро перезапускает агента
+            if (appState._voiceCloseTimer){
+              clearTimeout(appState._voiceCloseTimer);
+              appState._voiceCloseTimer = null;
+              log('VoiceCapture: отменено отложенное закрытие предыдущей сессии');
+            }
+
           if (!appState.voiceMixer){
             appState.voiceMixer = new VoiceCaptureMixer({
               getPeers: ()=> appState.rtc?.peers,
               getLocalStream: ()=> appState.rtc?.localStream,
               chunkMs: 5000,
               onLog: (m)=> log(m),
-              onChunk: (bytes, meta)=>{
-                // Отправим в будущем во второй WS voice_capture (пока заглушка лог)
-                // TODO: интеграция с voice capture WS
-                // log(`Voice chunk ${bytes.length}b`);
+              onChunk: (bytes)=>{
                 try {
                   if (appState._voiceWs && appState._voiceWs.readyState === WebSocket.OPEN){
                     appState._voiceWs.send(bytes);
@@ -997,23 +1001,44 @@ function setupUI(){
               }
             });
           }
-          // Открываем WS для потоковой передачи аудио (MVP один канал)
-          if (!appState._voiceWs){
+
+          // Функция запуска новой сессии (отправляет start даже при reuse WS)
+          const startVoiceSession = () => {
+            appState._voiceSessionSeq = (appState._voiceSessionSeq||0) + 1;
+            appState._voiceChunkCount = 0;
+            const sid = appState._voiceSessionSeq;
+            log(`VoiceCapture: start session #${sid}`);
+            try {
+              appState._voiceWs?.send(JSON.stringify({ type:'start', roomId: appState.currentRoomId, ts: Date.now(), session: sid }));
+            } catch {}
+            try { appState.voiceMixer.start(); } catch {}
+          };
+
+          const needNew = !appState._voiceWs || [WebSocket.CLOSING, WebSocket.CLOSED].includes(appState._voiceWs.readyState);
+          if (needNew){
+            if (appState._voiceWs && appState._voiceWs.readyState === WebSocket.CLOSING){
+              try { appState._voiceWs.close(); } catch {}
+            }
             const base = location.origin.replace('http','ws');
             const url = `${base}/ws/voice_capture/${encodeURIComponent(appState.currentRoomId)}?token=${encodeURIComponent(token||'')}`;
             appState._voiceWs = new WebSocket(url);
             appState._voiceWs.binaryType = 'arraybuffer';
             appState._voiceWs.onopen = () => {
-              log('VoiceCapture WS открыт');
-              try { appState._voiceWs.send(JSON.stringify({ type:'start', roomId: appState.currentRoomId, ts: Date.now() })); } catch {}
-              try { appState.voiceMixer.start(); } catch {}
+              log('VoiceCapture WS открыт (new)');
+              startVoiceSession();
             };
             appState._voiceWs.onclose = () => { log('VoiceCapture WS закрыт'); try { appState.voiceMixer?.stop(); } catch {}; appState._voiceWs = null; };
             appState._voiceWs.onerror = () => { log('VoiceCapture WS ошибка'); };
-          } else {
-            try { appState.voiceMixer.start(); } catch {}
+          } else if (appState._voiceWs.readyState === WebSocket.CONNECTING){
+            log('VoiceCapture: reuse CONNECTING WS – session будет запущена после onopen');
+            try {
+              appState._voiceWs.addEventListener('open', ()=> startVoiceSession(), { once:true });
+            } catch {}
+          } else if (appState._voiceWs.readyState === WebSocket.OPEN){
+            log('VoiceCapture: reuse OPEN WS');
+            startVoiceSession();
           }
-        } catch(e){ log(`VoiceMixer init error: ${e}`); }
+        } catch(e){ log(`VoiceMixer init/restart error: ${e}`); }
         ws.onopen = () => {
           log('AI Agent: WS открыт');
           try { ws.send(JSON.stringify({ type:'join', fromUserId: agentId, username: 'AI AGENT' })); } catch {}
