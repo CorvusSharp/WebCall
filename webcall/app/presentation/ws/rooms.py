@@ -136,6 +136,7 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
             elif session is None:
                 print(f"[summary] Telegram skip: no DB session room={original_room_id} user={initiator_user_id}")
             else:
+                print(f"[summary] Telegram dispatch entering room={original_room_id} user={initiator_user_id} msg_count={personal.message_count}")
                 try:
                     chat_id = await get_confirmed_chat_id(session, initiator_user_id)
                 except Exception as e:
@@ -151,10 +152,12 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                         )
                     else:
                         body = personal.summary_text
+                    print(f"[summary] Telegram preparing body_len={len(body)} room={original_room_id} user={initiator_user_id}")
                     # Participant breakdown форматирование (если присутствует)
                     participants_block = ""
                     try:
                         parts = getattr(personal, 'participants', None)
+                        print(f"[summary] Telegram participants_count={len(parts) if parts else 0} room={original_room_id} user={initiator_user_id}")
                         if parts:
                             lines = []
                             for p in parts[:5]:  # ограничим до 5 участников
@@ -181,6 +184,8 @@ async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, rea
                         sent = await tg_send_message(text, chat_ids=[chat_id], session=session)
                     except Exception as e:
                         print(f"[summary] Telegram send exception room={original_room_id} user={initiator_user_id} err={e}")
+                    if personal.message_count > 0 and not sent:
+                        print(f"[summary] Telegram NOT SENT despite message_count>0 room={original_room_id} user={initiator_user_id} chat_id={chat_id}")
                     print(f"[summary] Personal summary (v2) send_result={sent} user={initiator_user_id} room={original_room_id} empty={personal.message_count==0}")
             return
         else:
