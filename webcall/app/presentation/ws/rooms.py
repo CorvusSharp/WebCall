@@ -16,6 +16,7 @@ from ...infrastructure.services.telegram import send_message as tg_send_message
 from ...infrastructure.services.telegram_dispatcher import get_dispatcher
 from sqlalchemy.ext.asyncio import AsyncSession
 from ...infrastructure.db.session import get_db_session
+from prometheus_client import Counter
 from ...infrastructure.services.telegram_link import get_confirmed_chat_id
 
 from ...core.domain.models import Signal
@@ -53,6 +54,16 @@ _room_messages_archive: dict[UUID, list] = {}
 _room_message_log: dict[UUID, list] = defaultdict(list)
 # Время старта персонального агента для пользователя в комнате (ms epoch)
 _room_agent_start: dict[tuple[UUID, UUID], int] = {}
+# Rate limiting + buffering state for proxy voice
+_voice_proxy_last_ts: dict[tuple[UUID, UUID], list[int]] = {}  # (room, targetUser) -> list of recent event ms (sliding window 1s)
+_voice_proxy_buffer: dict[tuple[UUID, UUID], list[str]] = {}   # короткие сегменты для объединения
+
+# Prometheus metrics
+summary_voice_proxy_segments_total = Counter(
+    'summary_voice_proxy_segments_total',
+    'Count of voice transcript proxy segments processed',
+    ['status', 'trimmed']
+)
 
 
 async def _generate_and_send_summary(room_uuid: UUID, original_room_id: str, reason: str, *,
@@ -769,22 +780,79 @@ async def ws_room(
                 target_user_raw = data.get("targetUserId")
                 proxy_text = data.get("text") or ""
                 capture_ts = data.get("captureTs")
+                original_len = len(proxy_text)
                 # Валидации
                 if not target_user_raw or not proxy_text.strip():
-                    await websocket.send_json({"type": "error", "message": "voice_transcript_proxy invalid payload"})
+                    await websocket.send_json({"type": "voice_transcript_proxy_ack", "status": "error", "error": "invalid-payload"})
+                    try:
+                        summary_voice_proxy_segments_total.labels(status='invalid', trimmed='no').inc()
+                    except Exception:
+                        pass
                     continue
                 # UUID целевого пользователя
                 try:
                     target_uuid = UUID(str(target_user_raw))
                 except Exception:
-                    await websocket.send_json({"type": "error", "message": "voice_transcript_proxy invalid targetUserId"})
+                    await websocket.send_json({"type": "voice_transcript_proxy_ack", "status": "error", "error": "invalid-target"})
+                    try:
+                        summary_voice_proxy_segments_total.labels(status='invalid_target', trimmed='no').inc()
+                    except Exception:
+                        pass
                     continue
                 clean_text = proxy_text.strip()
                 low = clean_text.lower()
                 # Фильтр технических строк
                 if low.startswith('(no audio') or low.startswith('(asr failed') or low.startswith('(asr exception') or low.startswith('(asr disabled'):
                     await websocket.send_json({"type": "voice_transcript_proxy_ack", "status": "ignored", "reason": "technical"})
+                    try:
+                        summary_voice_proxy_segments_total.labels(status='technical', trimmed='no').inc()
+                    except Exception:
+                        pass
                     continue
+                # Rate limiting: max 5 accepted attaches / sec / target
+                import time as _t
+                now_ms_rl = int(_t.time()*1000)
+                rl_key = (room_uuid, target_uuid)
+                hist = _voice_proxy_last_ts.get(rl_key, [])
+                # retain only last 1000ms
+                hist = [ts for ts in hist if now_ms_rl - ts < 1000]
+                if len(hist) >= 5:
+                    await websocket.send_json({"type": "voice_transcript_proxy_ack", "status": "rate_limited", "retryInMs": 300})
+                    _voice_proxy_last_ts[rl_key] = hist
+                    try:
+                        summary_voice_proxy_segments_total.labels(status='rate_limited', trimmed='no').inc()
+                    except Exception:
+                        pass
+                    continue
+                # Buffering of short segments (<12 chars) — accumulate until total >= 25 or ends with punctuation
+                buffered = False
+                trimmed_flag = 'no'
+                if len(clean_text) < 12 and not clean_text.endswith(('.', '!', '?')):
+                    buf_list = _voice_proxy_buffer.setdefault(rl_key, [])
+                    buf_list.append(clean_text)
+                    total_buf = sum(len(x) for x in buf_list) + (len(buf_list) - 1)
+                    # If not enough yet, acknowledge buffered only
+                    if total_buf < 25:
+                        await websocket.send_json({
+                            "type": "voice_transcript_proxy_ack",
+                            "status": "buffered",
+                            "targetUserId": str(target_uuid),
+                            "bufferedCount": len(buf_list),
+                            "bufferedLength": total_buf
+                        })
+                        try:
+                            summary_voice_proxy_segments_total.labels(status='buffered', trimmed='no').inc()
+                        except Exception:
+                            pass
+                        continue
+                    # merge buffer now
+                    clean_text = ' '.join(buf_list)
+                    _voice_proxy_buffer[rl_key] = []
+                    buffered = True
+                # Trim overly long single segment to protect token usage (hard cap 800 chars)
+                if len(clean_text) > 800:
+                    clean_text = clean_text[:800]
+                    trimmed_flag = 'yes'
                 # Формируем meta префикс если нет
                 if not clean_text.startswith('[meta '):
                     import time as _t
@@ -810,12 +878,23 @@ async def ws_room(
                     attached = True
                 except Exception:
                     attached = False
-                # Ответ клиенту
+                hist.append(now_ms_rl)
+                _voice_proxy_last_ts[rl_key] = hist
+                # Ответ клиенту (расширенный ACK)
                 await websocket.send_json({
                     "type": "voice_transcript_proxy_ack",
                     "status": "ok" if attached else "error",
-                    "targetUserId": str(target_uuid)
+                    "targetUserId": str(target_uuid),
+                    "acceptedLength": len(clean_text),
+                    "originalLength": original_len,
+                    "trimmed": trimmed_flag,
+                    "buffered": buffered,
+                    "remainingPerSec": max(0, 5 - len(hist))
                 })
+                try:
+                    summary_voice_proxy_segments_total.labels(status='ok' if attached else 'attach_error', trimmed=trimmed_flag).inc()
+                except Exception:
+                    pass
                 # Лог для диагностики
                 try:
                     print(f"[summary] Voice proxy {'attached' if attached else 'failed'} room={room_id} target={target_uuid} chars={len(clean_text)}")
