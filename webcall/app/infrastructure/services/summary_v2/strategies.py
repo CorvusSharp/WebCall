@@ -78,6 +78,13 @@ class ChatStrategy(BaseStrategy):
             else:
                 prefix = "AI отключён."
             summary_text = self._fallback(user_msgs, prefix=prefix)
+        try:
+            import logging; logging.getLogger(__name__).debug(
+                "summary_v2: chat_strategy decision provider=%s ai_enabled=%s total_chars=%s min_chars=%s force_ai=%s used_ai=%s", 
+                getattr(ai_provider, '__class__', type('x',(object,),{})).__name__, settings.AI_SUMMARY_ENABLED, total_chars, min_chars, small_dialog_force_ai, 'Да' if (ai_provider and settings.AI_SUMMARY_ENABLED and (total_chars >= min_chars or small_dialog_force_ai)) else 'Нет'
+            )
+        except Exception:
+            pass
         # append sources (последние user сообщения без тех)
         tail_src = user_msgs[-5:]
         if tail_src:
@@ -126,6 +133,13 @@ class CombinedVoiceChatStrategy(BaseStrategy):
             else:
                 prefix = "AI отключён."
             summary_text = self._fallback(chat_part, prefix=prefix)
+        try:
+            import logging; logging.getLogger(__name__).debug(
+                "summary_v2: combined_strategy decision provider=%s ai_enabled=%s total_chars=%s min_chars=%s force_ai=%s used_ai=%s", 
+                getattr(ai_provider, '__class__', type('x',(object,),{})).__name__, settings.AI_SUMMARY_ENABLED, total_chars, min_chars, small_dialog_force_ai, 'Да' if (ai_provider and settings.AI_SUMMARY_ENABLED and (total_chars >= min_chars or small_dialog_force_ai)) else 'Нет'
+            )
+        except Exception:
+            pass
         tail_src = chat_part[-5:]
         if tail_src:
             summary_text = summary_text.rstrip() + "\n\nИсточники (последние):\n" + "\n".join(m.content for m in tail_src)

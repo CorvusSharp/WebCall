@@ -122,9 +122,27 @@ def get_ai_provider() -> AISummaryProvider:
     if api_key and model_field.startswith("openai:"):
         model = model_field.split(":", 1)[1] or "gpt-4o-mini"
         _provider_singleton = OpenAIAIProvider(api_key=api_key, model=model, fallback=settings.AI_MODEL_FALLBACK)
+        try:
+            import logging; logging.getLogger(__name__).info(
+                "summary_v2: AI provider=OpenAI model=%s fallback=%s", model, settings.AI_MODEL_FALLBACK
+            )
+        except Exception:
+            pass
     else:
         _provider_singleton = HeuristicAIProvider()
+        try:
+            import logging; logging.getLogger(__name__).info(
+                "summary_v2: AI provider=Heuristic (api_key_present=%s model_field=%r)", bool(api_key), model_field
+            )
+        except Exception:
+            pass
     return _provider_singleton
+
+
+def reset_ai_provider() -> None:
+    """Сбрасывает singleton чтобы после изменения переменных окружения можно было пересоздать провайдера без рестарта процесса."""
+    global _provider_singleton
+    _provider_singleton = None
 
 
 async def get_user_system_prompt(session: AsyncSession, user_id) -> str | None:
