@@ -55,8 +55,16 @@ class ChatStrategy(BaseStrategy):
         plain = [m.to_plain() for m in user_msgs]
         total_chars = sum(len(m.content) for m in user_msgs)
         min_chars = getattr(settings, 'AI_SUMMARY_MIN_CHARS', 0) or 0
+        # Адаптивный порог: если сообщений мало (<=5) и суммарно >= 10 символов, разрешаем AI даже если не достигнут глобальный min_chars
+        small_dialog_force_ai = (len(user_msgs) <= 5 and total_chars >= 10)
+        try:
+            import logging; logging.getLogger(__name__).debug(
+                "summary_v2: chat_strategy stats msgs=%s total_chars=%s min_chars=%s force_ai=%s", len(user_msgs), total_chars, min_chars, small_dialog_force_ai
+            )
+        except Exception:
+            pass
         summary_text: str
-        if ai_provider and settings.AI_SUMMARY_ENABLED and (total_chars >= min_chars):
+        if ai_provider and settings.AI_SUMMARY_ENABLED and (total_chars >= min_chars or small_dialog_force_ai):
             try:
                 try:
                     summary_text = await ai_provider.generate_summary(plain, system_prompt)  # type: ignore
@@ -95,8 +103,16 @@ class CombinedVoiceChatStrategy(BaseStrategy):
         plain = [m.to_plain() for m in chat_part]
         total_chars = sum(len(m.content) for m in chat_part)
         min_chars = getattr(settings, 'AI_SUMMARY_MIN_CHARS', 0) or 0
+        # Аналог адаптивного режима для коротких голосовых / смешанных отрывков
+        small_dialog_force_ai = (len(chat_part) <= 8 and total_chars >= 10)
+        try:
+            import logging; logging.getLogger(__name__).debug(
+                "summary_v2: combined_strategy stats msgs=%s total_chars=%s min_chars=%s force_ai=%s", len(chat_part), total_chars, min_chars, small_dialog_force_ai
+            )
+        except Exception:
+            pass
         summary_text: str
-        if ai_provider and settings.AI_SUMMARY_ENABLED and total_chars >= min_chars:
+        if ai_provider and settings.AI_SUMMARY_ENABLED and (total_chars >= min_chars or small_dialog_force_ai):
             try:
                 try:
                     summary_text = await ai_provider.generate_summary(plain, system_prompt)  # type: ignore
